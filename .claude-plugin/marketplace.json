@@ -1,0 +1,17 @@
+{
+  "name": "waaagh",
+  "metadata": {
+    "description": "Multi-agent delivery-loop orchestration for Claude Code."
+  },
+  "owner": {
+    "name": "Jason Pearson",
+    "url": "https://github.com/kaeawc"
+  },
+  "plugins": [
+    {
+      "name": "waaagh",
+      "source": "./",
+      "description": "Plan from the issue tracker, implement in isolated Codex lanes, review with Claude subagents, merge through guarded scripts, and verify what merged."
+    }
+  ]
+}
