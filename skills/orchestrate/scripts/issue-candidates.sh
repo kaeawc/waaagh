@@ -15,7 +15,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 
 cmd=${1:-}
-[[ -n "$cmd" ]] && shift || true
+if [[ -n "$cmd" ]]; then shift; fi
 repo="" days=14 min=0.5
 while (($#)); do
   case "$1" in

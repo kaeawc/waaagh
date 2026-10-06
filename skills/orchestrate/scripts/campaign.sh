@@ -21,7 +21,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 
 cmd=${1:-}
-[[ -n "$cmd" ]] && shift || true
+if [[ -n "$cmd" ]]; then shift; fi
 repo="" bots=working verify=idle sha=""
 lanes=${ORCHESTRATE_LANES:-16,12,4}
 every=${ORCHESTRATE_VERIFY_EVERY:-16}

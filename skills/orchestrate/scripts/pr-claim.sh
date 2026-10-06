@@ -15,7 +15,7 @@
 set -euo pipefail
 
 cmd=${1:-}
-[[ -n "$cmd" ]] && shift || true
+if [[ -n "$cmd" ]]; then shift; fi
 repo="" pr="" ttl=1800
 owner=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 while (($#)); do
