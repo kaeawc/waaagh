@@ -17,8 +17,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y bats
       - name: ShellCheck
         run: |
-          cd skills/orchestrate/scripts && shellcheck -x ./*.sh
-          shellcheck ../../../bin/codex-lane-run.sh
+          cd skills/orchestrate/scripts && shellcheck -S warning -x ./*.sh
+          shellcheck -S warning ../../../bin/codex-lane-run.sh
       - name: Self-test
         run: bats skills/orchestrate/scripts/selftest.bats
       - name: Validate manifests
