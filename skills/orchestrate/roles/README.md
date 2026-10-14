@@ -32,7 +32,7 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 | Rebase bot | `rebase-bot.md` | `general-purpose`, `model: "sonnet"` | base merges into PR branches |
 | Hygiene bot | `hygiene-bot.md` | `general-purpose`, `model: "sonnet"` | labels, links, evidence-backed closes |
 | Verification | `verification.md` | `general-purpose`, `model: "sonnet"` | new issues for findings |
-| Implementation lane | `implementation-lane.md` | `waaagh:sol-implementer` | uncommitted diff in its worktree |
+| Implementation lane | `implementation-lane.md` | `waaagh:codex-implementer` (routine, Luna `medium`) or `waaagh:sol-implementer` (judgment) | uncommitted diff in its worktree |
 | PR doctor | `pr-doctor.md` | `waaagh:sol-implementer`, `REASONING: high` | commits on its own PR branches |
 | Conflict lane | `conflict-lane.md` | `waaagh:sol-implementer` | resolved markers, uncommitted |
-| Reviewer | `review.md` | `general-purpose`, `model: "sonnet"` (or `"opus"`) | findings file |
+| Reviewer | `review.md` | `general-purpose`, `model: "opus"` (one per lane) | findings file |
