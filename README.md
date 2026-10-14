@@ -3,7 +3,7 @@
 A Claude Code plugin that runs a repository's delivery loop with parallel agents: plan from the
 issue tracker, implement in isolated lanes, review, merge, and verify what merged.
 
-Codex lanes write the code. Claude subagents validate and review it. Merging, branch upkeep,
+Codex lanes write the code (GPT-6 Luna for routine work, GPT-6.1 Sol for judgment work). Claude is a budget: Sonnet drives each lane, Haiku scouts and validates, one Opus reviewer checks each lane. Merging, branch upkeep,
 tracker hygiene and post-merge verification run as single-pass roles built on small, tested `gh`
 scripts, so the expensive model reads verdict lines instead of raw API output.
 
@@ -29,7 +29,8 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `skills/orchestrate/SKILL.md` | The doctrine: roles and routing, isolation, briefs, evidence, the campaign loop, lane cap, merge policy, interrupts, PR lifecycle and takeover |
 | `skills/orchestrate/roles/` | Brief templates for the standing roles: merge bot, rebase bot, hygiene bot, verification, implementation lane, PR doctor, conflict lane, reviewer |
 | `skills/orchestrate/scripts/` | The scripts below, with a stubbed-`gh` self-test |
-| `agents/sol-implementer.md` | The implementation lane: wraps one supervised `codex exec` run and verifies it |
+| `agents/codex-implementer.md` | Routine implementation lane (GPT-6 Luna, `medium`): wraps one supervised `codex exec` run and verifies it |
+| `agents/sol-implementer.md` | Judgment implementation lane (GPT-6.1 Sol, `medium` or `high`): same runner and checks |
 | `bin/codex-lane-run.sh` | Lane runner: spec/worktree identity check, spec snapshot, stall and hard timeouts |
 
 ### Scripts
@@ -43,7 +44,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first |
 | `issue-candidates.sh` | Leads for already-fixed issues and duplicate titles |
 | `issue-close.sh` | Close an issue as fixed or duplicate, with required evidence, and log it |
-| `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware |
+| `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid` |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content; excerpt long logs |
 
@@ -51,7 +52,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 
 | Setting | Default | Override |
 |---|---|---|
-| Implementation lanes | 16 when the bots are idle, 12 while one works, 4 during verification | `ORCHESTRATE_LANES=16,12,4` |
+| Implementation lanes | 16 when the bots are idle, 12 while one works, 4 during verification; an explicit number from you wins | `ORCHESTRATE_LANES=16,12,4` |
 | Verification cadence | every 16 merged PRs | `ORCHESTRATE_VERIFY_EVERY` |
 | Merge mode | conservative; fast path above 20 open PRs | `ORCHESTRATE_FAST_PATH_OVER` |
 | Admin merges outside the fast path | refused | `ORCHESTRATE_ADMIN_MERGE=1` |
@@ -59,6 +60,8 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | PR author | the authenticated `gh` user | `ORCHESTRATE_AUTHOR`, `--author` |
 | State directory | `~/.claude/orchestrate/<owner>__<repo>/` | `ORCHESTRATE_STATE_DIR` |
 | Codex model for the Sol lane | `gpt-6.1-sol` | `CODEX_LANE_SOL_MODEL` |
+| Codex model for the routine lane | `gpt-6-luna` | none (fixed in `agents/codex-implementer.md`) |
+| Claude implementer fallback | none; a lane with no codex reports `implementer-unavailable` | opt in by telling the skill |
 
 Repository-specific rules (advisory checks, CI classifier, device rules, forbidden test suites) are
 not configured in this plugin. The skill reads them from your Claude memory for that repository
