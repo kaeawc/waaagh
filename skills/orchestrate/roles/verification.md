@@ -10,7 +10,8 @@ verify, and a regression surface to sweep.
 ## Rules
 1. Devices: {{DEVICES}}. Claim the device lock before touching one and release it on every exit
    path: `{{SCRIPTS}}/device-lock.sh claim --name verify-<batch> --pid <your long-lived shell PID>
-   <lock path flags from your prompt>`. Exit 3 means another agent holds it: stop and report.
+   <lock path flags from your prompt>` (or `--no-pid` from a short-lived shell). Keep the printed
+   token and release with `release --token <T>`. Exit 3 means another agent holds it: stop and report.
 2. Build and run from a fresh detached checkout of `origin/{{BASE}}` in your own worktree. Never
    use, restart or signal a daemon, server or app instance you did not start; isolate your own
    (own sockets, ports, data directory) as `lane-rules.md` describes.

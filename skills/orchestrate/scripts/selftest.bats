@@ -472,3 +472,94 @@ JSON
   ORCHESTRATE_NOW=1100 lock release --name verify
   [ "$(lock status)" = free ]
 }
+
+@test "device lock claim prints a token; release by token works for a dead-PID holder" {
+  L="$BATS_TEST_TMPDIR/device.lock"
+  lock() { "$SCRIPTS/device-lock.sh" "$@" --path "$L"; }
+  # claim from a subshell: its PID is gone by the time release runs
+  out=$( (lock claim --name lane1 --pid "$BASHPID") )
+  [ "$(echo "$out" | head -1)" = claimed ]
+  tok=$(echo "$out" | sed -n 's/^token //p')
+  [ -n "$tok" ]
+  run lock release --name other --token wrong
+  [[ "$output" == "token does not match the holder" ]]
+  [ -f "$L" ]
+  run lock release --token "$tok"
+  [[ "$output" == released ]]
+  [ "$(lock status)" = free ]
+}
+
+@test "device lock release by name works when the recorded holder PID is dead" {
+  L="$BATS_TEST_TMPDIR/device.lock"
+  lock() { "$SCRIPTS/device-lock.sh" "$@" --path "$L"; }
+  (lock claim --name lane2 --pid "$BASHPID" >/dev/null)
+  run lock status
+  [[ "$output" == *"name=lane2"*"live=no"* ]]
+  run lock release --name lane2
+  [[ "$output" == released ]]
+  [ "$(lock status)" = free ]
+}
+
+@test "device lock stale dead-PID holder is reclaimable by another name" {
+  L="$BATS_TEST_TMPDIR/device.lock"
+  lock() { "$SCRIPTS/device-lock.sh" "$@" --path "$L"; }
+  printf '999999 1000 finished-lane\n' >"$L"
+  ORCHESTRATE_NOW=1100 run lock claim --name next --pid $$
+  [ "$status" -eq 0 ]
+  [[ "$output" == claimed* ]]
+}
+
+@test "device lock treats a reused PID (start time mismatch) as stale but a matching one as live" {
+  L="$BATS_TEST_TMPDIR/device.lock"
+  lock() { "$SCRIPTS/device-lock.sh" "$@" --path "$L"; }
+  run lock claim --name holder --pid $$
+  [ "$status" -eq 0 ]
+  run lock claim --name rival --pid $$
+  [ "$status" -eq 3 ]
+  # simulate PID reuse: same live PID, different recorded start time
+  sed -i.bak 's/ start=.*/ start=Mon Jan 1 00:00:00 1990/' "$L"
+  run lock status
+  [[ "$output" == *"live=no"* ]]
+  run lock claim --name rival --pid $$
+  [ "$status" -eq 0 ]
+}
+
+@test "device lock legacy single-line format is still read as live while its PID runs" {
+  L="$BATS_TEST_TMPDIR/device.lock"
+  lock() { "$SCRIPTS/device-lock.sh" "$@" --path "$L"; }
+  printf '%s %s legacy\n' "$$" "$(date +%s)" >"$L"
+  run lock claim --name rival --pid $$
+  [ "$status" -eq 3 ]
+  run lock release --name legacy
+  [[ "$output" == released ]]
+}
+
+@test "device lock --no-pid holds by age only and stays exclusive" {
+  L="$BATS_TEST_TMPDIR/device.lock"
+  lock() { "$SCRIPTS/device-lock.sh" "$@" --path "$L"; }
+  ORCHESTRATE_NOW=1000 run lock claim --name sub --no-pid
+  [ "$status" -eq 0 ]
+  ORCHESTRATE_NOW=1100 run lock claim --name rival --pid $$
+  [ "$status" -eq 3 ]
+  ORCHESTRATE_NOW=$((1000 + 10 * 3600)) run lock claim --name rival --pid $$
+  [ "$status" -eq 0 ]
+}
+
+@test "device lock resolves its path from --state-dir or the env var outside any repo" {
+  D="$BATS_TEST_TMPDIR/sd"
+  cd "$BATS_TEST_TMPDIR"
+  run "$SCRIPTS/device-lock.sh" claim --name a --pid $$ --state-dir "$D"
+  [ "$status" -eq 0 ]
+  [ -f "$D/device.lock" ]
+  ORCHESTRATE_DEVICE_LOCK_DIR="$D" run "$SCRIPTS/device-lock.sh" status
+  [[ "$output" == "held name=a"* ]]
+  ORCHESTRATE_DEVICE_LOCK_DIR="$D" run "$SCRIPTS/device-lock.sh" claim --name b --pid $$
+  [ "$status" -eq 3 ]
+  # no repo, no dir: falls back to the global state dir without needing gh
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/sh\nexit 1\n' >"$BATS_TEST_TMPDIR/bin/gh"
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/st" run "$SCRIPTS/device-lock.sh" claim --name c --pid $$
+  [ "$status" -eq 0 ]
+  [ -f "$BATS_TEST_TMPDIR/st/device.lock" ]
+}
