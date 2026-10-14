@@ -15,7 +15,11 @@ verify, and a regression surface to sweep.
 2. Build and run from a fresh detached checkout of `origin/{{BASE}}` in your own worktree. Never
    use, restart or signal a daemon, server or app instance you did not start; isolate your own
    (own sockets, ports, data directory) as `lane-rules.md` describes.
-3. Leave every device as you found it (power, lock state, posture, settings, installed test apps
+3. Every device call names its device (or runs in a session you hold): a sessionless call can
+   auto-target the user's own device. Never read a device-listing resource that probes all attached
+   devices. Capture crash/ANR evidence (logs, screenshot) before dismissing a system dialog, and
+   choose "Wait", never "Close app", for a system-process dialog. One booted device per role.
+3a. Leave every device as you found it (power, lock state, posture, settings, installed test apps
    stopped).
 4. No code changes, commits, pushes or PR comments. You may create issues for findings.
 
