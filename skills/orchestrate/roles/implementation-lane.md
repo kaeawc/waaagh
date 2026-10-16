@@ -32,6 +32,9 @@ file path, the files in scope, files owned by other lanes, and `REASONING: mediu
    format, typecheck and lint gates.
 7. `REASONING: <effort>`.
 
+Record the PIDs of every process you start (suites, servers) and kill exactly those before you
+report. Commit and push nothing: the orchestrator holds that authority.
+
 ## After codex exits (no code edits by you)
 - The diff touches only the intended files, and codex's final message is about THIS issue. A
   mismatch or an empty diff is a refusal: report it.

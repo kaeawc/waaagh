@@ -28,7 +28,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 |---|---|
 | `skills/orchestrate/SKILL.md` | The doctrine: roles and routing, isolation, briefs, evidence, the campaign loop, lane cap, merge policy, interrupts, PR lifecycle and takeover |
 | `skills/orchestrate/roles/` | Brief templates for the standing roles: merge bot, rebase bot, hygiene bot, verification, implementation lane, PR doctor, conflict lane, reviewer |
-| `skills/orchestrate/scripts/` | The scripts below, with a stubbed-`gh` self-test |
+| `skills/orchestrate/scripts/` | The scripts below, with stubbed-`gh` self-tests |
 | `agents/codex-implementer.md` | Routine implementation lane (GPT-6 Luna, `medium`): wraps one supervised `codex exec` run and verifies it |
 | `agents/sol-implementer.md` | Judgment implementation lane (GPT-6.1 Sol, `medium` or `high`): same runner and checks |
 | `bin/codex-lane-run.sh` | Lane runner: spec/worktree identity check, spec snapshot, stall and hard timeouts |
@@ -39,6 +39,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 |---|---|
 | `pr-ready.sh` | One verdict per open PR: `READY`, `WAIT`, `BLOCK` (with reasons) or `SKIP` |
 | `pr-merge.sh` | Merge one PR after re-checking head, author, draft and fork state; honours the red-main hold; `--admin` only in the fast path and only with evidence |
+| `merge-queue.sh` | Serial local merge queue (`add`, `run-once`, `status`, `retry`): merge base in, run the check command, hand off to `pr-merge.sh`; records a per-item outcome and only `merged` satisfies dependents |
 | `main-health.sh` | Sets or clears the merge hold from the default branch's newest completed runs |
 | `campaign.sh` | Campaign ledger: merge mode, lane cap, merged-since-verification, pause label |
 | `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first |
@@ -80,7 +81,7 @@ and from `<state dir>/lane-rules.md`.
 ## Development
 
 ```
-bats skills/orchestrate/scripts/selftest.bats
+bats skills/orchestrate/scripts/selftest.bats skills/orchestrate/scripts/merge-queue.bats
 (cd skills/orchestrate/scripts && shellcheck -x ./*.sh)
 claude --plugin-dir .
 ```

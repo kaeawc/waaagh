@@ -20,7 +20,9 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    ({{GENERATED_FILES}}): take `{{BASE}}`'s side and regenerate. Anything else: resolve only when
    both sides' intent is unambiguous, otherwise abort and report.
 4. **CI failures.** Classify each with {{CI_CLASSIFIER}}: caused by the diff → fix; known flake or
-   infrastructure → rerun the failed jobs ONCE and record it; stale base → step 3. Never fix a
+   infrastructure → rerun the failed jobs ONCE and record it (an unnamed or anonymous failure on a
+   slow platform is usually setup or hook timeout headroom, not a regression; a run cancelled by a
+   concurrency group is a cancellation); stale base → step 3. Never fix a
    failure by weakening or skipping a test, raising a budget or growing a baseline.
 5. **Fix pass — at most ONE consolidated codex pass per PR**, combining every class-(a) item (when
    the policy is `fix-pass`) and every diff-caused CI failure. With the `follow-ups` policy, do not
