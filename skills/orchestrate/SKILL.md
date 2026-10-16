@@ -105,7 +105,12 @@ review on every poll or push.
   crash/ANR evidence; for a system-process ANR choose "Wait", never "Close app". On a loaded host,
   one booted device per role.
 - **Never kill what you did not start.** No `pkill`/`killall`/kill-by-pattern, by you or any role:
-  only a PID that agent launched and recorded.
+  only a PID that agent launched and recorded. Finished lanes can leave orphan test processes that
+  keep host load high, so every lane records the PIDs it starts and cleanup kills exactly those.
+- **Long lanes use named, persistent worktrees.** An isolated agent worktree may be removed
+  automatically if the agent returns before editing anything; create the lane's worktree yourself.
+- **Never edit a running shell script in place.** Bash reads scripts incrementally, so an in-place
+  edit corrupts the live run. Write the new version beside it and `mv` it into place.
 - **Check lane identity and artifacts, not the word "completed".** The lane's worktree must show
   changes only in its own files, and codex's final message must be about its own task. An empty
   diff with a clean exit, or a mismatched topic, is a refusal: re-run the lane. An agent that
@@ -130,7 +135,9 @@ pass's inputs in a short prompt.
    list (shared fakes and source-scan tests fail far from the edit), then the repo's gates.
 6. `REASONING: <medium|high>` — literal line (Luna: `medium`).
 
-Plus the expected artifact and the stop-and-report sentence. A spec you cannot finish writing means
+Plus the expected artifact and the stop-and-report sentence. **Merge authority:** a subagent
+refuses to push or merge on a coordinator's say-so. A brief that grants it must quote the user's
+grant verbatim; otherwise the role's contract is to hand back ready-to-run commands. A spec you cannot finish writing means
 the decision is not made — that is your work, not the lane's.
 
 **Validation brief** (Haiku): checkout path and fingerprint (`"$SCRIPTS/fingerprint.sh" --dir P`),
@@ -152,6 +159,9 @@ Act on it or surface the disagreement to the user.
   `"$SCRIPTS/fingerprint.sh" --key "<command>"`. Reuse a result only when its key matches exactly.
 - Never hand full logs, complete diffs or validation transcripts to yourself or a costly model.
   Save them, excerpt with `"$SCRIPTS/excerpt.sh" <log> [context] [max]`, and pass the path.
+- Label results `verified-local` or `verified-ci`. While CI is backlogged, "fixed" means
+  local-only until a post-merge run on the default branch completes. A run cancelled by a
+  concurrency group is a cancellation, not a failure.
 - Lane reports are claims. Read the diff and spot-check the quoted verification against the tree.
 
 ## Campaign state
@@ -164,6 +174,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `campaign.json` | `campaign.sh` | start time, last verification time and SHA |
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
+| `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
 | `hygiene-actions.log`, `hygiene/` | hygiene bot | closes made; plans and ranked lanes |
 | `briefs/`, `lane-rules.md` | you | filled role briefs; repository rules for every lane |
 | `lanes.tsv` | you | active lanes: worktree, branch, issues, files, agent, status |
@@ -250,8 +261,22 @@ authorized admin merges (`ORCHESTRATE_ADMIN_MERGE=1`, set only on their word, wh
 record), and always needs `--evidence`. It also refuses a moved head, a draft, a fork-head PR, an
 author you did not list, and any merge while `MAIN_RED` is set (except `--main-fix`).
 
+**Direct (ungated or admin) merging** is a deliberate mode, never a default. Pair it with a
+main-repair lane and post-merge review batches over the merged range, and keep the cheap
+structural gates (ratchets, typecheck) even when tests are skipped. A squash built from a stale
+tree can silently revert PRs that landed in between: the post-merge review diffs each squash
+against its PR's own changes.
+
 ### Merge queue lessons
 
+- **`"$SCRIPTS/merge-queue.sh"` is the local queue**: serial, one pass per `run-once`, no daemon.
+  Every item ends in an outcome (`merged`, `conflict`, `checkfail`, `error`); only `merged` is done
+  and satisfies dependents, and `retry <id>` re-arms the rest. Ids are never reused (`add`
+  refuses). Stacked `name-N` branches: the parent of `-2` is the bare name (`parent <branch>`).
+- **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
+  every stacked merge: take the default branch's copy and regenerate it, never hand-merge. A
+  change that marks a check intentional or allow-listed can hide a fail-open gate, so review such
+  edits by asking what they now let through.
 - **Run local pre-merge checks serially** (one slot) on a loaded host. Parallel checks cause
   timeout failures that look like regressions.
 - **A check that fails only by timeouts** is re-run alone, not used to fail the merge: re-run the
@@ -294,6 +319,9 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
 - Query structured status first (`gh pr view --json …`, `gh pr checks`, `pr-ready.sh`); fetch one
   failed job log only when needed, save it, excerpt it. Use the repository's CI classifier and
   known-flakes list before retrying or changing code.
+- A classifier that reads only PR workflows misses push and default-branch runs; feed it both.
+- On slow platforms, setup and hook timeouts often surface as unnamed or anonymous failures:
+  triage them as timeout headroom, not regression.
 - Treat a red non-required roll-up as blocking unless it is a classified known flake.
 - After a push, discard old-head conclusions and resnapshot.
 - **Polling.** In the Claude desktop app, bind the PR with the host PR tools and let its monitor

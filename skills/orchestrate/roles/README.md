@@ -9,7 +9,9 @@ Each file is a complete brief for one single-pass agent. To launch a role:
    guess: forbidden test suites, device and daemon rules, formatter quirks). Every brief tells its
    agent to read `_common.md` and that file first. Add a rule there when a lane trips on something
    — once, for every later lane.
-3. The agent's prompt is then short: the brief's path plus this pass's inputs (PR list, holds,
+3. Lane worktrees are named and persistent, created by you; an auto-created isolated worktree can
+   be removed if the agent returns before editing.
+4. The agent's prompt is then short: the brief's path plus this pass's inputs (PR list, holds,
    issue numbers, lane worktree, effort).
 
 | Placeholder | Meaning |
