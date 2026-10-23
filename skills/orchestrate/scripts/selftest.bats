@@ -79,6 +79,38 @@ fp() { "$SCRIPTS/fingerprint.sh" --dir "$REPO" "$@"; }
   [[ "$output" == *"(no failure lines matched)"* ]]
 }
 
+@test "excerpt survives a large matching log (no SIGPIPE) and stays bounded" {
+  log="$BATS_TEST_TMPDIR/big.log"
+  for i in $(seq 1 20000); do echo "test failed: long message for pipe buffering $i"; done >"$log"
+  run "$SCRIPTS/excerpt.sh" "$log" 0 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"truncated: showing 10 of 20000"* ]]
+  [[ "$output" == *"full log: $log (20000 lines)"* ]]
+}
+
+@test "excerpt keeps a megabyte single line within the byte budget" {
+  log="$BATS_TEST_TMPDIR/long.log"
+  { printf 'error '; head -c 1000000 /dev/zero | tr '\0' x; echo; } >"$log"
+  run "$SCRIPTS/excerpt.sh" "$log" 0 10
+  [ "$status" -eq 0 ]
+  [ "${#output}" -lt 8500 ]
+  [[ "$output" == *"[line cut]"* ]]
+  [[ "$output" == *"full log: $log (1 lines)"* ]]
+}
+
+@test "excerpt enforces MAX_BYTES and keeps the path for empty logs" {
+  log="$BATS_TEST_TMPDIR/bytes.log"
+  for i in $(seq 1 100); do echo "test $i failed"; done >"$log"
+  run "$SCRIPTS/excerpt.sh" "$log" 0 100 200
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"truncated: showing"* ]]
+  [ "${#output}" -lt 500 ]
+  : >"$BATS_TEST_TMPDIR/empty.log"
+  run "$SCRIPTS/excerpt.sh" "$BATS_TEST_TMPDIR/empty.log"
+  [[ "$output" == *"(no failure lines matched)"* ]]
+  [[ "$output" == *"full log: $BATS_TEST_TMPDIR/empty.log (0 lines)"* ]]
+}
+
 # --- PR takeover: claims and intake -------------------------------------------------------
 
 claim() { ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" "$SCRIPTS/pr-claim.sh" "$@" --repo o/r --pr 7; }
