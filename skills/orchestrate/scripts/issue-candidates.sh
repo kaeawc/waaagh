@@ -31,6 +31,7 @@ while (($#)); do
     *) echo "issue-candidates.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+for v in "$limit" "$per"; do [[ "$v" =~ ^[0-9]+$ ]] || { echo "issue-candidates.sh: --limit and --per-issue need a non-negative integer" >&2; exit 2; }; done
 case "$cmd" in fixed | dupes) ;; *) sed -n '2,15p' "$0" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 since=$(jq -rn --argjson now "$(orch_now)" --argjson d "$days" '$now - $d * 86400 | strftime("%Y-%m-%d")')
@@ -67,8 +68,9 @@ case "$cmd" in
     total=0
     [[ -z "$all" ]] || total=$(printf '%s\n' "$all" | wc -l | tr -d ' ')
     out=$(printf '%s\n' "$all" | awk -F'\t' -v limit="$limit" -v per="$per" '
+      function cut(t) { return length(t) > 100 ? substr(t, 1, 97) "..." : t }
       NF && n < limit && !(($6 SUBSEP $7) in grp) && pi[$2] < per && pi[$3] < per {
-        grp[$6, $7] = 1; pi[$2]++; pi[$3]++; n++; print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 }')
+        grp[$6, $7] = 1; pi[$2]++; pi[$3]++; n++; print $1 "\t" $2 "\t" $3 "\t" cut($4) "\t" cut($5) }')
     [[ -z "$out" ]] || printf '%s\n' "$out"
     shown=0
     [[ -z "$out" ]] || shown=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
