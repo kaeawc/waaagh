@@ -38,7 +38,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | Script | Purpose |
 |---|---|
 | `pr-ready.sh` | One verdict per open PR: `READY`, `WAIT`, `BLOCK` (with reasons) or `SKIP` |
-| `pr-merge.sh` | Merge one PR after re-checking head, author, draft and fork state; honours the red-main hold; `--admin` only in the fast path and only with evidence |
+| `pr-merge.sh` | Merge one PR after re-checking head, author, draft and fork state, binding the merge to the verified full head SHA (`--match-head-commit`); honours the red-main hold; `--admin` only in the fast path and only with evidence |
 | `merge-queue.sh` | Serial local merge queue (`add`, `run-once`, `status`, `retry`): merge base in, run the check command, hand off to `pr-merge.sh`; records a per-item outcome and only `merged` satisfies dependents |
 | `main-health.sh` | Sets or clears the merge hold from the default branch's newest completed runs |
 | `campaign.sh` | Campaign ledger: merge mode, lane cap, merged-since-verification, pause label |

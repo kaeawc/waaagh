@@ -4,7 +4,9 @@
 #
 # Usage: pr-merge.sh --pr N --head SHA [--repo OWNER/REPO] [--author LOGIN]...
 #                    [--method squash|merge|rebase] [--admin --evidence TEXT] [--main-fix]
-#   --head      the head SHA (any prefix >= 7) that pr-ready.sh judged; a moved head refuses
+#   --head      the head SHA (any prefix >= 7) that pr-ready.sh judged; a moved head refuses. The
+#               merge itself is bound to the full SHA fetched here (--match-head-commit), so a push
+#               between the check and the merge is refused by GitHub (exit 5), never merged.
 #   --admin     bypass branch protection. Allowed only in the fast path: more open PRs than
 #               ORCHESTRATE_FAST_PATH_OVER (default 20), or ORCHESTRATE_ADMIN_MERGE=1 when the
 #               user authorized it. Needs --evidence naming the classified flake or pending
@@ -30,16 +32,16 @@ while (($#)); do
     --admin) admin=yes; shift ;;
     --evidence) evidence=$2; shift 2 ;;
     --main-fix) main_fix=yes; shift ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,16p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,18p' "$0" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 state=$(orch_state_dir "$repo")
-log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "${head:0:9}" "$*" >>"$state/merges.log"; }
+log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "${full:-${head:0:9}}" "$*" >>"$state/merges.log"; }
 
 if [[ -f "$state/MAIN_RED" && "$main_fix" == no ]]; then
   echo "hold: default branch is red ($(head -1 "$state/MAIN_RED"))"; exit 4
@@ -67,7 +69,10 @@ if [[ "$ok" != true ]]; then
   exit 3
 fi
 
-args=("--$method")
+# Bind the server-side merge to the full head SHA that was just verified, so a push after the read
+# is refused by GitHub instead of merging an unreviewed head. Never retry without the guard.
+full=$(jq -r .headRefOid <<<"$info")
+args=("--$method" --match-head-commit "$full")
 [[ "$admin" == yes ]] && args+=(--admin)
 out=$(gh pr merge "$pr" --repo "$repo" "${args[@]}" 2>&1 | tail -1) || true
 final=$(gh pr view "$pr" --repo "$repo" --json state,mergeCommit | jq -r '"\(.state) \(.mergeCommit.oid // "-")"')
