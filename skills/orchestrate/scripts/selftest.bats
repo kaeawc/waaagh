@@ -477,6 +477,42 @@ JSON
   [[ "$output" == *$'\t10\t11\t'* ]]
 }
 
+@test "issue-candidates dupes bounds a repetitive cluster, keeps unrelated leads, and saves the full list" {
+  stub_gh_router
+  export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
+  jq -nc '[range(1; 101) | {number: ., title: "Fix shared device session recovery failure"}]
+          + [{number: 201, title: "tapOn hangs when the keyboard is open"},
+             {number: 202, title: "tapOn hangs when keyboard open on foldable"}]' >"$FX/issues.json"
+  run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -le 21 ]
+  [[ "$output" == *$'\t201\t202\t'* ]]
+  [[ "$output" == *"# omitted 4949 of 4951 pairs (full list: "* ]]
+  first=$output
+  run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r
+  [ "$output" = "$first" ]
+  full=$(printf '%s\n' "$output" | sed -n 's/.*full list: \(.*\))$/\1/p')
+  [ "$(wc -l <"$full" | tr -d ' ')" = 4951 ]
+}
+
+@test "issue-candidates dupes caps 400 identical long titles in bytes and rows, and validates limits" {
+  stub_gh_router
+  export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
+  jq -nc '[range(1; 401) | {number: ., title: ("Fix shared device session recovery failure " + ("x" * 300))}]' >"$FX/issues.json"
+  run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -le 21 ]
+  [ "${#output}" -lt 6000 ]
+  [[ "$output" == *"# omitted 79799 of 79800 pairs (full list: "* ]]
+  full=$(printf '%s\n' "$output" | sed -n 's/.*full list: \(.*\))$/\1/p')
+  [ "$(wc -l <"$full" | tr -d ' ')" = 79800 ]
+  grep -q 'x\{300\}' "$full"
+  run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r --limit abc
+  [ "$status" -eq 2 ]
+  run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r --per-issue -1
+  [ "$status" -eq 2 ]
+}
+
 @test "issue-close requires verified evidence and refuses protected or unverifiable closes" {
   stub_gh_router
   echo '{"state":"OPEN","labels":[]}' >"$FX/issue.json"

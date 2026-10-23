@@ -3,11 +3,15 @@
 # Read-only.
 #
 # Usage: issue-candidates.sh fixed [--repo OWNER/REPO] [--since-days N]
-#        issue-candidates.sh dupes [--repo OWNER/REPO] [--since-days N] [--min-score 0.5]
+#        issue-candidates.sh dupes [--repo OWNER/REPO] [--since-days N] [--min-score 0.5] [--limit 20]
+#                                  [--per-issue 2]
 #   fixed  open issues that a PR merged in the window says it closes, fixes or resolves.
 #          TSV: issue  pr  merged_at  how(linked|body)  issue_title
 #   dupes  pairs of open issues (updated in the window) whose titles share most of their words.
 #          TSV: score  issue_a  issue_b  title_a  title_b
+#          Bounded: at most --limit rows, --per-issue rows per issue, and one row per pair of
+#          identical-word titles, so a repetitive cluster cannot crowd out other leads. When rows are
+#          omitted a final "# omitted N of M ..." line names the file holding every pair.
 # Defaults: --since-days 14.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -16,16 +20,19 @@ source "$here/_lib.sh"
 
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
-repo="" days=14 min=0.5
+repo="" days=14 min=0.5 limit=20 per=2
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
     --since-days) days=$2; shift 2 ;;
     --min-score) min=$2; shift 2 ;;
+    --limit) limit=$2; shift 2 ;;
+    --per-issue) per=$2; shift 2 ;;
     *) echo "issue-candidates.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-case "$cmd" in fixed | dupes) ;; *) sed -n '2,11p' "$0" >&2; exit 2 ;; esac
+for v in "$limit" "$per"; do [[ "$v" =~ ^[0-9]+$ ]] || { echo "issue-candidates.sh: --limit and --per-issue need a non-negative integer" >&2; exit 2; }; done
+case "$cmd" in fixed | dupes) ;; *) sed -n '2,15p' "$0" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 since=$(jq -rn --argjson now "$(orch_now)" --argjson d "$days" '$now - $d * 86400 | strftime("%Y-%m-%d")')
 
@@ -44,7 +51,7 @@ case "$cmd" in
         | sort_by(.[0])[] | @tsv'
     ;;
   dupes)
-    gh issue list --repo "$repo" --state open --limit 400 --search "updated:>=$since sort:updated-desc" \
+    all=$(gh issue list --repo "$repo" --state open --limit 400 --search "updated:>=$since sort:updated-desc" \
       --json number,title |
       jq -r --argjson min "$min" '
         def words: ascii_downcase | [scan("[a-z0-9]+")]
@@ -56,7 +63,21 @@ case "$cmd" in
            | (($a.w - ($a.w - $b.w)) | length) as $both
            | (($a.w + $b.w | unique) | length) as $either
            | select($either > 0) | ($both / $either) as $score | select($score >= $min)
-           | [($score * 100 | round / 100), $a.number, $b.number, $a.title, $b.title]]
-        | sort_by(-.[0])[] | @tsv'
+           | [($score * 100 | round / 100), $a.number, $b.number, $a.title, $b.title, ($a.w | join(" ")), ($b.w | join(" "))]]
+        | sort_by([-.[0], .[1], .[2]])[] | @tsv')
+    total=0
+    [[ -z "$all" ]] || total=$(printf '%s\n' "$all" | wc -l | tr -d ' ')
+    out=$(printf '%s\n' "$all" | awk -F'\t' -v limit="$limit" -v per="$per" '
+      function cut(t) { return length(t) > 100 ? substr(t, 1, 97) "..." : t }
+      NF && n < limit && !(($6 SUBSEP $7) in grp) && pi[$2] < per && pi[$3] < per {
+        grp[$6, $7] = 1; pi[$2]++; pi[$3]++; n++; print $1 "\t" $2 "\t" $3 "\t" cut($4) "\t" cut($5) }')
+    [[ -z "$out" ]] || printf '%s\n' "$out"
+    shown=0
+    [[ -z "$out" ]] || shown=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+    if ((total > shown)); then
+      full="$(orch_state_dir "$repo")/dupes-$(orch_now).tsv"
+      printf '%s\n' "$all" | cut -f1-5 >"$full"
+      echo "# omitted $((total - shown)) of $total pairs (full list: $full)"
+    fi
     ;;
 esac
