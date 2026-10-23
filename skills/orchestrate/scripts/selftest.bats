@@ -3,11 +3,13 @@
 
 setup() {
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 # hermetic: ignore user signing/hooks config
   REPO="$BATS_TEST_TMPDIR/repo"
   mkdir -p "$REPO"
   git -C "$REPO" init -q
   git -C "$REPO" config user.email t@example.com
   git -C "$REPO" config user.name t
+  git -C "$REPO" config commit.gpgsign false
   echo one >"$REPO/a.txt"
   git -C "$REPO" add a.txt
   git -C "$REPO" commit -qm init
