@@ -221,7 +221,9 @@ case "$*" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   *rules/branches*) cat "$FX/rules.json" ;;
   *graphql*) cat "$FX/threads.json" ;;
-  "pr merge"*) [ -f "$FX/merge-fails" ] && { echo "blocked"; exit 1; }; echo MERGED >"$FX/merged" ;;
+  "pr merge"*) [ -f "$FX/merge-fails" ] && { echo "blocked"; exit 1; }
+    if [ -f "$FX/remote-head" ] && [[ "$*" != *"--match-head-commit $(cat "$FX/remote-head")"* ]]; then echo "head changed"; exit 1; fi
+    echo MERGED >"$FX/merged" ;;
   "pr view"*) if [ -f "$FX/merged" ]; then cat "$FX/pr-merged.json"; else cat "$FX/pr.json"; fi ;;
   "pr list"*merged*) cat "$FX/prs-merged.json" ;;
   "pr list"*) cat "$FX/prs.json" ;;
@@ -302,8 +304,9 @@ merge_fixture() {
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
   [ "$status" -eq 0 ]
   [[ "$output" == "merged 1 feedface" ]]
-  grep -q 'pr merge 1 --repo o/r --squash$' "$FX/calls"
+  grep -q 'pr merge 1 --repo o/r --squash --match-head-commit abcdef0123$' "$FX/calls"
   grep -q 'merged feedface' "$ORCHESTRATE_STATE_DIR/o__r/merges.log"
+  grep -q 'head=abcdef0123' "$ORCHESTRATE_STATE_DIR/o__r/merges.log"
 }
 
 @test "pr-merge refuses a moved head, a foreign author, and a red default branch" {
@@ -330,7 +333,21 @@ merge_fixture() {
   ! grep -q 'pr merge' "$FX/calls"
   ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "known flake: sim timeout"
   [ "$status" -eq 0 ]
-  grep -q 'pr merge 1 --repo o/r --squash --admin' "$FX/calls"
+  grep -q 'pr merge 1 --repo o/r --squash --match-head-commit abcdef0123 --admin' "$FX/calls"
+}
+
+@test "pr-merge refuses when the head moves between the read and the merge" {
+  merge_fixture
+  echo "ffffffffff" >"$FX/remote-head"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 5 ]
+  [ "$(grep -c 'pr merge' "$FX/calls")" -eq 1 ]
+  grep -q 'head=abcdef0123.*failed' "$ORCHESTRATE_STATE_DIR/o__r/merges.log"
+  ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "known flake"
+  [ "$status" -eq 5 ]
+  echo "abcdef0123" >"$FX/remote-head"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 0 ]
 }
 
 @test "pr-merge reports a merge GitHub rejected" {

@@ -70,7 +70,7 @@ outcome() { cat "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   run mqr run-once
   [ "$status" -eq 0 ]
   [ "$(outcome a)" = merged ]
-  grep -q 'pr merge 5 --repo o/r --squash$' "$FX/calls"
+  grep -q 'pr merge 5 --repo o/r --squash --match-head-commit abcdef0123456789$' "$FX/calls"
   git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a
 }
 
