@@ -11,7 +11,7 @@ assign, create issues, or touch pull requests. At most 15 closes per pass.
 ## Inputs (run these first; work from their output, not from reading every issue)
 - `{{SCRIPTS}}/issues-ranked.sh --repo {{REPO}} <flags from your prompt>` — the candidate work list.
 - `{{SCRIPTS}}/issue-candidates.sh fixed --repo {{REPO}}` — leads for already-fixed.
-- `{{SCRIPTS}}/issue-candidates.sh dupes --repo {{REPO}}` — leads for duplicates.
+- `{{SCRIPTS}}/issue-candidates.sh dupes --repo {{REPO}}` — leads for duplicates (bounded; a trailing `# omitted` line names the file with every pair).
 - Settled owner decisions and priority areas are in your prompt.
 
 ## Steps
