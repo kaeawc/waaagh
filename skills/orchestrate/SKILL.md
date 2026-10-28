@@ -332,7 +332,12 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
 ## CI and PR status
 
 - Query structured status first (`gh pr view --json …`, `gh pr checks`, `pr-ready.sh`); fetch one
-  failed job log only when needed, save it, excerpt it. Use the repository's CI classifier and
+  failed job log only when needed with `"$SCRIPTS/job-log.sh" --pr <n> --check <name>` (or
+  `--job`/`--run --name`). It is job-scoped, so a finished failing job is readable while a slow
+  sibling keeps the workflow running (`gh run view --log` refuses until the whole run ends); it
+  saves the log per run/attempt/job and prints an excerpt, or an explicit `running`,
+  `not-yet-available`, `forbidden`, `expired` or `transient`. Live output of a running job is only
+  in the browser. Use the repository's CI classifier and
   known-flakes list before retrying or changing code.
 - A classifier that reads only PR workflows misses push and default-branch runs; feed it both.
 - On slow platforms, setup and hook timeouts often surface as unnamed or anonymous failures:
