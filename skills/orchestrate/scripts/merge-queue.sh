@@ -1,24 +1,38 @@
 #!/usr/bin/env bash
 # Serial local merge queue: bring each queued branch up to date with the default branch, run a
-# check command, then push, open a PR if needed and merge it through pr-merge.sh. One pass per
-# `run-once`; there is no daemon and no sleep loop, so no role polls.
+# check command, push, open a PR if needed, wait for fresh readiness evidence, and merge it through
+# pr-merge.sh. One pass per `run-once`; there is no daemon and no sleep loop, so no role polls.
 #
 # Usage: merge-queue.sh <add|run-once|status|retry|parent> [--repo OWNER/REPO] [options]
 #   add       --id ID --worktree DIR --branch B --title T --body-file F [--requires ID,ID|-|auto]
 #             Appends a row to <state dir>/merge-queue/queue.tsv. A duplicate id is refused.
 #             `--requires auto` depends on the queued item whose branch is `parent B`.
-#   run-once  Process eligible items in file order, serially, until the pass ends. An item runs
-#             only when it has no outcome and every id in `requires` has outcome `merged`.
+#   run-once  Refresh main health, then process eligible items in file order, serially, until the
+#             pass ends. An item runs when it has no outcome (or `waiting`) and every id in
+#             `requires` has outcome `merged`.
 #   status    One line per item: id, outcome (or `pending` / `blocked:<ids>`), branch.
 #   retry ID  Clear a non-merged outcome so the next run-once picks the item up again.
 #   parent B  Print the branch B stacks on: `name-3` -> `name-2`, `name-2` -> `name`, else nothing.
-# Outcomes in <state dir>/merge-queue/<id>.outcome: merged | conflict | checkfail | error.
-# Only `merged` is done and only `merged` satisfies a dependent; any other outcome parks the item
-# until `retry`. Logs of the check and of errors are under <state dir>/merge-queue/logs/.
+# Outcomes in <state dir>/merge-queue/<id>.outcome (the reason follows on the next line):
+#   merged     done; the only outcome that satisfies a dependent
+#   waiting    pushed, but readiness is not there yet (checks pending or not reported, mergeability
+#              unknown, GitHub not yet showing the pushed head); the next run-once resumes it, and
+#              skips the base merge, check and push when nothing moved since
+#   blocked    readiness found a real blocker (failed check, review thread, conflict, unknown
+#              policy...); parked until `retry`
+#   conflict | checkfail | error   parked until `retry`
+# The merge is never attempted for an item that is not READY on a fresh pr-ready.sh row for the
+# exact pushed head, whatever the server's branch protection would allow; pr-merge.sh re-checks.
+# Logs of the check and of errors are under <state dir>/merge-queue/logs/.
 # Env: MERGE_QUEUE_CHECK_CMD   run in the worktree after the base merge (unset: no check; a
 #                              direct-merge campaign should still set a cheap structural gate)
-#      MERGE_QUEUE_ADMIN_EVIDENCE  when set, merge with --admin --evidence <text>; pr-merge.sh
-#                              still enforces the fast-path and authorization rules
+#      MERGE_QUEUE_ADMIN_EVIDENCE, MERGE_QUEUE_ADMIN_CHECKS (comma list)  a BLOCK row whose only
+#                              blockers are failures of those checks goes to pr-merge.sh --admin
+#                              --except-check ...; pr-merge.sh enforces the fast-path, authorization
+#                              and every other gate
+#      MERGE_QUEUE_MAIN_HEALTH_ARGS  extra main-health.sh flags (e.g. --ignore-workflow Badges)
+#      ORCHESTRATE_DIRECT_MERGE=1    deliberate ungated mode (only on the user's word): no readiness
+#                              gate here or in pr-merge.sh
 # Exit (run-once): 0 pass finished | 4 default branch red, pass stopped (hold, no outcome written)
 # The worktree must be clean and on the branch. Never forces a push and never rewrites history.
 set -euo pipefail
@@ -46,7 +60,7 @@ fi
 repo="" id="" worktree="" branch="" title="" body="" requires="-" arg=""
 case "$cmd" in
   add | run-once | status | retry) ;;
-  *) sed -n '2,24p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,37p' "$0" >&2; exit 2 ;;
 esac
 while (($#)); do
   case "$1" in
@@ -70,8 +84,8 @@ mkdir -p "$qdir/logs"
 queue="$qdir/queue.tsv"
 touch "$queue"
 
-outcome_of() { [[ -f "$qdir/$1.outcome" ]] && cat "$qdir/$1.outcome" || true; }
-set_outcome() { printf '%s\n' "$2" >"$qdir/$1.outcome"; echo "$1: $2${3:+ ($3)}"; }
+outcome_of() { [[ -f "$qdir/$1.outcome" ]] && head -1 "$qdir/$1.outcome" || true; }
+set_outcome() { printf '%s\n%s\n' "$2" "${3:-}" >"$qdir/$1.outcome"; echo "$1: $2${3:+ ($3)}"; }
 
 # unmet_deps REQUIRES -> the ids in the list whose outcome is not `merged`.
 unmet_deps() {
@@ -88,7 +102,7 @@ unmet_deps() {
 case "$cmd" in
   add)
     [[ "$id" =~ ^[A-Za-z0-9._-]+$ && -n "$worktree" && -n "$branch" && -n "$title" && -n "$body" ]] ||
-      { sed -n '2,24p' "$0" >&2; exit 2; }
+      { sed -n '2,37p' "$0" >&2; exit 2; }
     if cut -f1 "$queue" | grep -Fxq -- "$id"; then
       echo "refused: id '$id' is already queued; ids are never reused" >&2; exit 3
     fi
@@ -120,26 +134,44 @@ case "$cmd" in
     ;;
   run-once)
     base=$(orch_default_branch "$repo")
+    if [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
+      # Fresh main evidence for this pass; red writes the hold, unknown leaves it as it was.
+      read -r -a mh_args <<<"${MERGE_QUEUE_MAIN_HEALTH_ARGS:-}"
+      mh=$("$here/main-health.sh" --repo "$repo" --branch "$base" ${mh_args[@]+"${mh_args[@]}"} 2>&1) || true
+      echo "main: $mh"
+    fi
     while IFS=$'\t' read -r -u 3 qid qwt qbranch qtitle qbody qreq; do
-      [[ -z "$(outcome_of "$qid")" ]] || continue
+      prev=$(outcome_of "$qid")
+      [[ -z "$prev" || "$prev" == waiting ]] || continue
       miss=$(unmet_deps "$qreq")
       if [[ -n "$miss" ]]; then echo "$qid: blocked on $miss"; continue; fi
       log="$qdir/logs/$qid.log"
-      : >"$log"
+      [[ "$prev" == waiting ]] || : >"$log"
       if [[ -n "$(git -C "$qwt" status --porcelain)" ]] ||
         [[ "$(git -C "$qwt" branch --show-current)" != "$qbranch" ]]; then
         set_outcome "$qid" error "worktree dirty or not on $qbranch"; continue
       fi
       git -C "$qwt" fetch -q origin >>"$log" 2>&1 || { set_outcome "$qid" error "fetch failed, see $log"; continue; }
-      if ! git -C "$qwt" merge --no-edit "origin/$base" >>"$log" 2>&1; then
-        git -C "$qwt" merge --abort >>"$log" 2>&1 || true
-        set_outcome "$qid" conflict "see $log"; continue
+      # Resuming a waiting item: the base merge, check and push are already done when the pushed
+      # head still contains the current base and nothing moved since.
+      local_head=$(git -C "$qwt" rev-parse HEAD)
+      if [[ "$prev" == waiting && "$(cat "$qdir/$qid.pushed" 2>/dev/null)" == "$local_head" ]] &&
+        [[ "$(git -C "$qwt" rev-parse -q --verify "origin/$qbranch" || true)" == "$local_head" ]] &&
+        git -C "$qwt" merge-base --is-ancestor "origin/$base" HEAD; then
+        echo "$qid: resuming at ${local_head:0:9}" >>"$log"
+      else
+        if ! git -C "$qwt" merge --no-edit "origin/$base" >>"$log" 2>&1; then
+          git -C "$qwt" merge --abort >>"$log" 2>&1 || true
+          set_outcome "$qid" conflict "see $log"; continue
+        fi
+        if [[ -n "${MERGE_QUEUE_CHECK_CMD:-}" ]] &&
+          ! (cd "$qwt" && bash -c "$MERGE_QUEUE_CHECK_CMD") >>"$log" 2>&1; then
+          set_outcome "$qid" checkfail "see $log"; continue
+        fi
+        git -C "$qwt" push -q origin "$qbranch" >>"$log" 2>&1 || { set_outcome "$qid" error "push rejected, see $log"; continue; }
+        local_head=$(git -C "$qwt" rev-parse HEAD)
+        printf '%s\n' "$local_head" >"$qdir/$qid.pushed"
       fi
-      if [[ -n "${MERGE_QUEUE_CHECK_CMD:-}" ]] &&
-        ! (cd "$qwt" && bash -c "$MERGE_QUEUE_CHECK_CMD") >>"$log" 2>&1; then
-        set_outcome "$qid" checkfail "see $log"; continue
-      fi
-      git -C "$qwt" push -q origin "$qbranch" >>"$log" 2>&1 || { set_outcome "$qid" error "push rejected, see $log"; continue; }
       prs=$(gh pr list --repo "$repo" --head "$qbranch" --state open --json number,headRefOid)
       if [[ "$(jq length <<<"$prs")" == 0 ]]; then
         gh pr create --repo "$repo" --head "$qbranch" --base "$base" --title "$qtitle" --body-file "$qbody" >>"$log" 2>&1 ||
@@ -149,13 +181,46 @@ case "$cmd" in
       pr=$(jq -r '.[0].number // empty' <<<"$prs")
       head=$(jq -r '.[0].headRefOid // empty' <<<"$prs")
       [[ -n "$pr" && -n "$head" ]] || { set_outcome "$qid" error "no open PR for $qbranch"; continue; }
+      if [[ "$head" != "$local_head" ]]; then
+        set_outcome "$qid" waiting "PR $pr shows head ${head:0:9}, pushed ${local_head:0:9}"; continue
+      fi
       margs=(--repo "$repo" --pr "$pr" --head "$head")
-      [[ -z "${MERGE_QUEUE_ADMIN_EVIDENCE:-}" ]] || margs+=(--admin --evidence "$MERGE_QUEUE_ADMIN_EVIDENCE")
+      if [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
+        row=$("$here/pr-ready.sh" --repo "$repo" --base "$base" --pr "$pr" 2>>"$log" | head -1) || row=""
+        IFS=$'\t' read -r _ verdict rhead _ _ detail <<<"$row"
+        if [[ -z "$row" ]]; then set_outcome "$qid" error "no readiness row for PR $pr"; continue; fi
+        if [[ "$head" != "$rhead"* ]]; then set_outcome "$qid" waiting "readiness row is for $rhead"; continue; fi
+        # Not there yet (pending, unreported, unknown mergeability) is waiting; anything else blocks.
+        others=""; fails=""
+        for token in $detail; do
+          case "$token" in
+            pending:* | few-checks=0 | mergeable=UNKNOWN | -) ;;
+            fail:*) fails+=",${token#fail:}" ;;
+            *) others+=" $token" ;;
+          esac
+        done
+        case "$verdict" in
+          READY) ;;
+          WAIT) set_outcome "$qid" waiting "PR $pr: $detail"; continue ;;
+          BLOCK)
+            if [[ -z "$others" && -z "$fails" ]]; then set_outcome "$qid" waiting "PR $pr: $detail"; continue; fi
+            if [[ -z "$others" && -n "${MERGE_QUEUE_ADMIN_EVIDENCE:-}" && -n "${MERGE_QUEUE_ADMIN_CHECKS:-}" ]]; then
+              margs+=(--admin --evidence "$MERGE_QUEUE_ADMIN_EVIDENCE")
+              IFS=, read -r -a admin_checks <<<"$MERGE_QUEUE_ADMIN_CHECKS"
+              for c in "${admin_checks[@]}"; do margs+=(--except-check "$c"); done
+            else
+              set_outcome "$qid" blocked "PR $pr: $detail"; continue
+            fi ;;
+          *) set_outcome "$qid" blocked "PR $pr: $verdict $detail"; continue ;;
+        esac
+      fi
       rc=0
       "$here/pr-merge.sh" "${margs[@]}" >>"$log" 2>&1 || rc=$?
       case "$rc" in
         0) set_outcome "$qid" merged "PR $pr" ;;
         4) echo "hold: default branch is red; pass stopped"; exit 4 ;;
+        6) set_outcome "$qid" blocked "admin merge refused, see $log" ;;
+        7) set_outcome "$qid" waiting "pr-merge found it not ready, see $log" ;;
         *) set_outcome "$qid" error "pr-merge exit $rc, see $log" ;;
       esac
     done 3<"$queue"
