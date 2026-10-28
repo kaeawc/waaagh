@@ -629,9 +629,9 @@ OKC='[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}
     pr_row 7 other false false MERGEABLE "$OKC"
     pr_row 8 me false false MERGEABLE '[{"name":"lint","conclusion":"SUCCESS"}]'
     pr_row 9 me false false MERGEABLE "$OKC" '[{"name":"hold"}]'
-    pr_row 10 me false false MERGEABLE '[{"name":"build","conclusion":"FAILURE","startedAt":"2026-09-27T01:00:00Z"},{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T02:00:00Z"}]'
+    pr_row 10 me false false MERGEABLE '[{"name":"build","conclusion":"FAILURE","startedAt":"2026-09-27T01:00:00Z","detailsUrl":"https://github.com/o/r/actions/runs/50/job/500"},{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T02:00:00Z","detailsUrl":"https://github.com/o/r/actions/runs/50/job/501"}]'
     pr_row 11 me false false MERGEABLE '[{"name":"build","conclusion":"SUCCESS"},{"name":"sim","conclusion":"FAILURE"}]'
-    pr_row 12 me false false MERGEABLE '[{"name":"job (${{ matrix.os }})","conclusion":"CANCELLED","workflowName":"PR","startedAt":"2026-09-27T01:00:00Z"},{"name":"build","conclusion":"SUCCESS","workflowName":"PR","startedAt":"2026-09-27T02:00:00Z"}]'
+    pr_row 12 me false false MERGEABLE '[{"name":"job (${{ matrix.os }})","conclusion":"CANCELLED","workflowName":"PR","startedAt":"2026-09-27T01:00:00Z","detailsUrl":"https://github.com/o/r/actions/runs/60/job/600"},{"name":"build","conclusion":"SUCCESS","workflowName":"PR","startedAt":"2026-09-27T02:00:00Z","detailsUrl":"https://github.com/o/r/actions/runs/61/job/610"}]'
     pr_row 13 me false false MERGEABLE '[{"name":"build","conclusion":"SUCCESS","workflowName":"PR","startedAt":"2026-09-27T01:00:00Z"},{"name":"slow","conclusion":"CANCELLED","workflowName":"PR","startedAt":"2026-09-27T02:00:00Z"}]'
   } | jq -s . >"$FX/prs.json"
   run "$SCRIPTS/pr-ready.sh" --repo o/r --ignore-check sim
@@ -650,6 +650,56 @@ OKC='[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}
   [[ "$output" == *$'12\tREADY'* ]]
   [[ "$output" == *$'13\tBLOCK'*"fail:slow"* ]]
   [[ "$output" == *"open=12 ready=4"* ]]
+}
+
+check() { # name conclusion workflow startedAt [run] [job] [typename]
+  jq -cn --arg n "$1" --arg c "$2" --arg w "$3" --arg t "$4" --arg r "${5:-}" --arg j "${6:-}" --arg ty "${7:-CheckRun}" \
+    '{__typename: $ty, name: $n, conclusion: $c, workflowName: $w, startedAt: $t}
+     + (if $r == "" then {} else {detailsUrl: ("https://github.com/o/r/actions/runs/\($r)" + (if $j == "" then "" else "/job/\($j)" end))} end)'
+}
+verdict_of() { # checks... -> the verdict and detail of one PR built from them
+  printf '%s\n' "$@" | jq -s . >"$FX/checks.json"
+  pr_row 1 me false false MERGEABLE "$(cat "$FX/checks.json")" | jq -s . >"$FX/prs.json"
+  "$SCRIPTS/pr-ready.sh" --repo o/r --no-threads 2>/dev/null | cut -f2,6
+}
+
+@test "pr-ready supersedes only proven replacements of the same check" {
+  stub_gh_router
+  echo '[]' >"$FX/rules.json"
+  T1=2026-09-27T01:00:00Z T2=2026-09-27T02:00:00Z
+  # A later sibling in the same run does not replace a cancelled job.
+  [ "$(verdict_of "$(check unit CANCELLED CI $T1 70 700)" "$(check lint SUCCESS CI $T2 70 701)")" = $'BLOCK\tfail:unit' ]
+  # The same without any run identity: still blocked.
+  [ "$(verdict_of "$(check unit CANCELLED CI $T1)" "$(check lint SUCCESS CI $T2)")" = $'BLOCK\tfail:unit' ]
+  # Same job name in two workflows: the Linux failure is not hidden by the Mac success.
+  [ "$(verdict_of "$(check test FAILURE Linux $T1 71 710)" "$(check test SUCCESS Mac $T2 72 720)")" = $'BLOCK\tfail:test' ]
+  # Same name from two providers (an Actions job and a status context).
+  [ "$(verdict_of "$(check test FAILURE "" $T1 "" "" StatusContext)" "$(check test SUCCESS CI $T2 73 730)")" = $'BLOCK\tfail:test' ]
+  # A rerun attempt (same run, newer job id) replaces the failure, whatever the timestamps say.
+  [ "$(verdict_of "$(check unit FAILURE CI $T2 74 740)" "$(check unit SUCCESS CI $T2 74 741)")" = $'READY\t-' ]
+  [ "$(verdict_of "$(check unit FAILURE CI "" 74 740)" "$(check unit SUCCESS CI "" 74 741)")" = $'READY\t-' ]
+  # A genuinely newer run of the same workflow and job replaces a cancellation...
+  [ "$(verdict_of "$(check unit CANCELLED CI $T1 75 750)" "$(check unit SUCCESS CI $T2 76 760)")" = $'READY\t-' ]
+  # ...but not a failure: two runs of one workflow on the same head (push and pull_request) both count.
+  [ "$(verdict_of "$(check unit FAILURE CI $T1 75 750)" "$(check unit SUCCESS CI $T2 76 760)")" = $'BLOCK\tfail:unit' ]
+  # Partial rerun: the rerun job replaces only itself; an untouched failure in that run stays.
+  [ "$(verdict_of "$(check unit FAILURE CI $T1 77 770)" "$(check e2e FAILURE CI $T1 77 771)" "$(check unit SUCCESS CI $T2 77 772)")" = $'BLOCK\tfail:e2e' ]
+  # Matrix jobs are distinct checks; one failing leg blocks.
+  [ "$(verdict_of "$(check "test (linux)" SUCCESS CI $T1 78 780)" "$(check "test (mac)" FAILURE CI $T1 78 781)")" = $'BLOCK\tfail:test (mac)' ]
+  # Duplicates without run identity and equal or missing timestamps: every instance counts.
+  [ "$(verdict_of "$(check build FAILURE CI $T1)" "$(check build SUCCESS CI $T1)")" = $'BLOCK\tfail:build' ]
+  [ "$(verdict_of "$(check build SUCCESS CI "")" "$(check build FAILURE CI "")")" = $'BLOCK\tfail:build' ]
+  # A cancelled matrix template without run identity is not superseded.
+  [ "$(verdict_of "$(check 'job (${{ matrix.os }})' CANCELLED PR $T1)" "$(check build SUCCESS PR $T2)")" = $'BLOCK\tfail:job (${{ matrix.os }})' ]
+}
+
+@test "pr-ready lets a legacy status context's newer status replace its older one" {
+  stub_gh_router
+  echo '[]' >"$FX/rules.json"
+  old=$(jq -cn '{__typename: "StatusContext", context: "ci/legacy", state: "FAILURE", startedAt: "2026-09-27T01:00:00Z"}')
+  new=$(jq -cn '{__typename: "StatusContext", context: "ci/legacy", state: "SUCCESS", startedAt: "2026-09-27T02:00:00Z"}')
+  [ "$(verdict_of "$old" "$new")" = $'READY\t-' ]
+  [[ "$(verdict_of "$new" "$(jq -c '.startedAt = "2026-09-27T03:00:00Z"' <<<"$old")")" == $'BLOCK\tfail:ci/legacy'* ]]
 }
 
 @test "pr-ready blocks an otherwise ready PR with an unresolved review thread" {

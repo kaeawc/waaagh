@@ -12,7 +12,11 @@
 #          | threads=<n> | threads=unknown (a page of review threads was unreadable)
 #          | policy=unknown (required checks could not be read) | few-checks=<n>
 #   SKIP   draft | fork | hold
-# A cancelled check counts as failed unless its workflow started a later run (superseded).
+# Check identity is (provider type, workflow, name), with the Actions run and job ids taken from
+# the details URL. Only a proven replacement supersedes an earlier result: within one run, a newer
+# job id (a rerun attempt); across runs of the same workflow and check, only a CANCELLED result,
+# by a newer run; a legacy status context, by its own newer status. Without a run id nothing is
+# superseded, so every instance counts. A cancelled check otherwise counts as failed.
 # --author defaults to the authenticated gh user; repeat it to add e.g. app/dependabot.
 # --ignore-check drops an advisory check from every count (repeatable). --min-pass (default 1)
 # guards against a PR whose checks have not been reported yet. Review threads of every otherwise
@@ -45,7 +49,7 @@ while (($#)); do
     --min-pass) min_pass=$2; shift 2 ;;
     --no-threads) threads=no; shift ;;
     --delta) delta=yes; shift ;;
-    -h | --help) sed -n '2,28p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "pr-ready.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -98,17 +102,35 @@ rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" 
               elif IN("", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED") then "pending"
               else "fail" end;
     .[] | select(.author.login as $a | $authors | index($a)) | select(.baseRefName == $base)
-    # Latest result per check name; a rerun supersedes the earlier run of the same check.
-    | ([(.statusCheckRollup // [])[] | {name: (.name // .context), at: (.startedAt // .createdAt // ""),
-          wf: (.workflowName // ""), cancelled: ((.conclusion // "") == "CANCELLED"), k: (norm | kind)}]
+    # Check identity: provider type, workflow and name, plus the Actions run and job ids from the
+    # details URL. Only a proven replacement supersedes an earlier result (see the header).
+    | ([(.statusCheckRollup // [])[]
+        | ((.detailsUrl // .targetUrl // "") | (capture("/actions/runs/(?<r>[0-9]+)(/job/(?<j>[0-9]+))?") // {})) as $id
+        | {name: (.name // .context), at: (.startedAt // .createdAt // ""),
+           type: (.__typename // (if has("context") then "StatusContext" else "CheckRun" end)),
+           wf: (.workflowName // ""), run: ($id.r // null | if . == null then null else tonumber end),
+           job: ($id.j // null | if . == null then null else tonumber end),
+           cancelled: ((.conclusion // "") == "CANCELLED"), k: (norm | kind)}]
         | map(select(.name as $n | $ignore | index($n) | not))
-        # A cancelled check is a superseded run when its workflow started anything later; drop it.
-        | (map(select(.cancelled | not)) | group_by(.wf) | map({key: .[0].wf, value: (map(.at) | max)}) | from_entries) as $newest
-        | map(select((.cancelled and (($newest[.wf] // "") > .at)) | not))
-        | group_by(.name) | map(sort_by(.at) | last)) as $checks
-    | ($checks | map(select(.k == "pass") | .name)) as $pass
-    | ($checks | map(select(.k == "pending") | .name)) as $pend
-    | ($checks | map(select(.k == "fail") | .name)) as $fail
+        # Newest Actions run per workflow, for superseding cancelled checks.
+        | (map(select(.run != null)) | group_by(.wf) | map({key: .[0].wf, value: (map(.run) | max)}) | from_entries) as $newest_run
+        | group_by([.type, .wf, .name])
+        | map(if .[0].type == "StatusContext" then [sort_by(.at) | last]   # a status context is overwritten
+              else
+                # Same run: the newest job id is a rerun attempt and replaces the older ones.
+                (map(select(.run != null)) | group_by(.run) | map(sort_by(.job // 0, .at) | last)) as $per_run
+                | ($per_run | map(.run) | max) as $last_run
+                # Across runs only a cancellation is superseded, by a newer run of the same check.
+                | ($per_run | map(select((.cancelled and .run < $last_run) | not)))
+                  + map(select(.run == null))   # no run identity: nothing proves a replacement
+              end)
+        | flatten
+        # A cancelled matrix template ("job (${{ matrix.x }})") is replaced by a newer run of its workflow.
+        | map(select((.cancelled and (.name | contains("${{")) and .run != null
+                      and (($newest_run[.wf] // 0) > .run)) | not))) as $checks
+    | ($checks | map(select(.k == "pass") | .name) | unique) as $pass
+    | ($checks | map(select(.k == "pending") | .name) | unique) as $pend
+    | ($checks | map(select(.k == "fail") | .name) | unique) as $fail
     | ($required - $ignore - $pass - $pend - $fail) as $missing
     | (if .isDraft then ["SKIP", "draft"]
        elif .isCrossRepository then ["SKIP", "fork"]
