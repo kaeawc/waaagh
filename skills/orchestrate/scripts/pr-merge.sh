@@ -10,8 +10,11 @@
 #               user authorized it. Needs --evidence naming the classified flake or pending
 #               advisory check being bypassed; it is written to the merge log.
 #   --main-fix  this PR fixes a red default branch; merge although MAIN_RED is set
-# Exit: 0 merged | 3 ineligible or head moved | 4 default branch is red (hold) | 5 merge failed
-#       | 6 --admin not allowed
+# The merge itself is bound to the full head SHA read here (gh pr merge --match-head-commit), so a
+# push that lands between this check and the merge makes GitHub refuse it; that refusal is
+# re-read and reported as a moved head, never retried without the guard.
+# Exit: 0 merged | 3 ineligible or head moved (also during the merge) | 4 default branch is red
+#       (hold) | 5 merge failed | 6 --admin not allowed
 # Appends one line per attempt to <state dir>/merges.log.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -30,11 +33,11 @@ while (($#)); do
     --admin) admin=yes; shift ;;
     --evidence) evidence=$2; shift 2 ;;
     --main-fix) main_fix=yes; shift ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,16p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,18p' "$0" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
@@ -67,13 +70,21 @@ if [[ "$ok" != true ]]; then
   exit 3
 fi
 
-args=("--$method")
+full=$(jq -r .headRefOid <<<"$info")
+log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "$full" "$*" >>"$state/merges.log"; }
+args=("--$method" --match-head-commit "$full")
 [[ "$admin" == yes ]] && args+=(--admin)
 out=$(gh pr merge "$pr" --repo "$repo" "${args[@]}" 2>&1 | tail -1) || true
-final=$(gh pr view "$pr" --repo "$repo" --json state,mergeCommit | jq -r '"\(.state) \(.mergeCommit.oid // "-")"')
+after=$(gh pr view "$pr" --repo "$repo" --json state,mergeCommit,headRefOid)
+final=$(jq -r '"\(.state) \(.mergeCommit.oid // "-")"' <<<"$after")
 if [[ "$final" == MERGED* ]]; then
   log "merged ${final#MERGED } method=$method admin=$admin${evidence:+ evidence=$evidence}"
   echo "merged $pr ${final#MERGED }"
+elif [[ "$(jq -r '.headRefOid // ""' <<<"$after")" != "$full" ]]; then
+  now=$(jq -r '.headRefOid // "-"' <<<"$after")
+  log "refused head moved during merge to ${now:0:9}: $out"
+  echo "head moved during merge: judged ${full:0:9}, now ${now:0:9}; re-judge it"
+  exit 3
 else
   log "failed: $out"
   echo "merge failed: $out"

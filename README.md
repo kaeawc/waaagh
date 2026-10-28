@@ -78,7 +78,8 @@ and from `<state dir>/lane-rules.md`.
 
 - Only PRs authored by the authenticated user (plus authors you name) are merged; fork-head PRs and
   drafts never are.
-- A merge is refused when the head moved since it was judged, and while the default branch is red.
+- A merge is refused when the head moved since it was judged (checked before the merge and bound
+  server-side with `--match-head-commit`), and while the default branch is red.
 - Admin merges need the fast path (or explicit authorization) and a logged reason.
 - The hygiene bot can close issues only as fixed-by-a-merged-PR or duplicate-of-an-open-issue, with
   evidence in the closing comment; every close is logged.
