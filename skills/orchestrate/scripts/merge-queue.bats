@@ -5,7 +5,7 @@
 setup() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-  export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1790510400
+  export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1790510400 ORCHESTRATE_READ_SLEEP=0
   unset MERGE_QUEUE_CHECK_CMD MERGE_QUEUE_ADMIN_EVIDENCE
   git init -q --bare -b main "$BATS_TEST_TMPDIR/origin.git"
   git clone -q "$BATS_TEST_TMPDIR/origin.git" "$BATS_TEST_TMPDIR/seed" 2>/dev/null
@@ -34,15 +34,20 @@ case "$all" in
   "api repos/o/r/branches/"*) echo '{"protected":false}' ;;
   *graphql*) jq -n --argjson t "$(cat "$FX/threads.json")" '{data: {repository: {p5: {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: $t}}}}}' ;;
   "run list"*) cat "$FX/runs.json" ;;
-  "pr list"*--head*) rm -f "$FX/merged"; b=$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/'); echo "$b" >>"$FX/order"; echo "$b" >"$FX/branch"
+  "pr list"*"--state merged"*) cat "$FX/merged-prs.json" 2>/dev/null || echo '[]' ;;
+  "pr list"*--head*) [ ! -f "$FX/list-fails-$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/')" ] || { echo "HTTP 502" >&2; exit 1; }
+    rm -f "$FX/merged"; b=$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/'); echo "$b" >>"$FX/order"; echo "$b" >"$FX/branch"
     jq -n --arg h "$(head_of)" '[{number: 5, headRefOid: $h}]' ;;
   "pr list"*) jq -n --arg h "$(head_of)" --argjson c "$(cat "$FX/checks.json")" --arg m "$(cat "$FX/mergeable")" \
     '[{number: 5, author: {login: "me"}, isDraft: false, isCrossRepository: false, baseRefName: "main",
        headRefOid: $h, mergeable: $m, labels: [], statusCheckRollup: $c}]' ;;
   "pr merge"*) want=$(echo "$all" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')
     [ "$want" = "$(head_of)" ] || { echo "Head branch was modified"; exit 1; }
-    echo MERGED >"$FX/merged" ;;
-  "pr view"*) if [ -f "$FX/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}';
+    echo MERGED >"$FX/merged"
+    [ "$(cat "$FX/merge-mode" 2>/dev/null)" != no-readback ] || echo 3 >"$FX/view-fails" ;;
+  "pr view"*) if [ -s "$FX/view-fails" ] && [ "$(cat "$FX/view-fails")" -gt 0 ]; then
+      echo $(($(cat "$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
+    if [ -f "$FX/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}';
     else jq -n --arg h "$(head_of)" --arg m "$(cat "$FX/mergeable")" '{state: "OPEN", isDraft: false, isCrossRepository: false,
       headRefOid: $h, author: {login: "me"}, mergeable: $m}'; fi ;;
   *) echo "unexpected gh call: $all" >&2; exit 9 ;;
@@ -301,4 +306,57 @@ outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   run mqr run-once
   [ "$(outcome a)" = merged ]
   grep -q -- '--admin' "$FX/calls"
+}
+
+@test "a merge whose answer was lost is confirmed on the next pass, without a new push, PR or merge" {
+  wt a
+  wt b
+  enqueue a
+  enqueue b a
+  echo no-readback >"$FX/merge-mode"
+  run mqr run-once
+  [ "$(outcome a)" = waiting ]
+  [[ "$output" == *"merge outcome unknown"* ]]
+  [[ "$output" == *"b: blocked on a"* ]]
+  rm "$FX/merge-mode"; : >"$FX/calls"
+  run mqr run-once
+  [ "$(outcome a)" = merged ]
+  [[ "$output" == *"a: merged (PR 5 (confirmed on re-check))"* ]]
+  [ "$(outcome b)" = merged ]
+  # a needed one read; the only merge in this pass was b's.
+  [ "$(grep -c 'pr merge' "$FX/calls")" -eq 1 ]
+}
+
+@test "a retried item whose PR was already merged at that head is confirmed, not reopened" {
+  wt a
+  enqueue a
+  MERGE_QUEUE_CHECK_CMD='exit 1' run mqr run-once
+  [ "$(outcome a)" = checkfail ]
+  git -C "$BATS_TEST_TMPDIR/a" push -q origin a
+  # Someone merged it meanwhile: no open PR, a merged one at this exact head.
+  jq -n --arg h "$(git -C "$BATS_TEST_TMPDIR/a" rev-parse HEAD)" '[{number: 9, headRefOid: $h}]' >"$FX/merged-prs.json"
+  echo '[]' >"$FX/open-override"
+  mqr retry a
+  sed -i.bak 's/^  "pr list"\*--head\*) /  "pr list"*--head*) [ -f "$FX\/open-override" ] \&\& { cat "$FX\/open-override"; exit 0; }; /' "$BATS_TEST_TMPDIR/bin/gh"
+  run mqr run-once
+  [ "$(outcome a)" = merged ]
+  [[ "$output" == *"PR 9 (already merged at"* ]]
+  ! grep -q 'pr create' "$FX/calls"
+  ! grep -q 'pr merge' "$FX/calls"
+}
+
+@test "a transient lookup failure parks one item as waiting and the pass goes on" {
+  wt a
+  wt b
+  enqueue a
+  enqueue b
+  touch "$FX/list-fails-a"
+  run mqr run-once
+  [ "$status" -eq 0 ]
+  [ "$(outcome a)" = waiting ]
+  [[ "$output" == *"a: waiting (PR lookup failed (transient))"* ]]
+  [ "$(outcome b)" = merged ]
+  rm "$FX/list-fails-a"
+  run mqr run-once
+  [ "$(outcome a)" = merged ]
 }

@@ -15,9 +15,11 @@
 #   parent B  Print the branch B stacks on: `name-3` -> `name-2`, `name-2` -> `name`, else nothing.
 # Outcomes in <state dir>/merge-queue/<id>.outcome (the reason follows on the next line):
 #   merged     done; the only outcome that satisfies a dependent
-#   waiting    pushed, but readiness is not there yet (checks pending or not reported, mergeability
-#              unknown, GitHub not yet showing the pushed head); the next run-once resumes it, and
-#              skips the base merge, check and push when nothing moved since
+#   waiting    pushed, but not merged yet: checks pending or not reported, mergeability unknown,
+#              GitHub not yet showing the pushed head, a merge queued on GitHub, a merge whose
+#              outcome could not be read back, or a transient read failure. The next run-once
+#              first re-checks the item's known PR (MERGED -> merged, without any new push, PR or
+#              merge), then resumes, skipping the base merge, check and push when nothing moved
 #   blocked    readiness found a real blocker (failed check, review thread, conflict, unknown
 #              policy...); parked until `retry`
 #   conflict | checkfail | error   parked until `retry`
@@ -60,7 +62,7 @@ fi
 repo="" id="" worktree="" branch="" title="" body="" requires="-" arg=""
 case "$cmd" in
   add | run-once | status | retry) ;;
-  *) sed -n '2,37p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,39p' "$0" >&2; exit 2 ;;
 esac
 while (($#)); do
   case "$1" in
@@ -102,7 +104,7 @@ unmet_deps() {
 case "$cmd" in
   add)
     [[ "$id" =~ ^[A-Za-z0-9._-]+$ && -n "$worktree" && -n "$branch" && -n "$title" && -n "$body" ]] ||
-      { sed -n '2,37p' "$0" >&2; exit 2; }
+      { sed -n '2,39p' "$0" >&2; exit 2; }
     if cut -f1 "$queue" | grep -Fxq -- "$id"; then
       echo "refused: id '$id' is already queued; ids are never reused" >&2; exit 3
     fi
@@ -151,6 +153,15 @@ case "$cmd" in
         [[ "$(git -C "$qwt" branch --show-current)" != "$qbranch" ]]; then
         set_outcome "$qid" error "worktree dirty or not on $qbranch"; continue
       fi
+      # The PR this item already has, if any, is inspected first (merged included), so a pass after
+      # a lost response or a retry never pushes, opens or merges a second time.
+      if [[ -f "$qdir/$qid.pr" ]]; then
+        known=$(cat "$qdir/$qid.pr")
+        if ! kstate=$(orch_read_retry 3 gh pr view "$known" --repo "$repo" --json state | jq -re .state); then
+          set_outcome "$qid" waiting "PR $known unreadable (transient); will re-check"; continue
+        fi
+        if [[ "$kstate" == MERGED ]]; then set_outcome "$qid" merged "PR $known (confirmed on re-check)"; continue; fi
+      fi
       git -C "$qwt" fetch -q origin >>"$log" 2>&1 || { set_outcome "$qid" error "fetch failed, see $log"; continue; }
       # Resuming a waiting item: the base merge, check and push are already done when the pushed
       # head still contains the current base and nothing moved since.
@@ -172,13 +183,26 @@ case "$cmd" in
         local_head=$(git -C "$qwt" rev-parse HEAD)
         printf '%s\n' "$local_head" >"$qdir/$qid.pushed"
       fi
-      prs=$(gh pr list --repo "$repo" --head "$qbranch" --state open --json number,headRefOid)
+      list_open() { orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state open --json number,headRefOid; }
+      if ! prs=$(list_open); then set_outcome "$qid" waiting "PR lookup failed (transient)"; continue; fi
       if [[ "$(jq length <<<"$prs")" == 0 ]]; then
+        # Already merged at this exact head (an earlier pass lost the answer)? Then it is done.
+        if ! merged=$(orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state merged --json number,headRefOid); then
+          set_outcome "$qid" waiting "PR lookup failed (transient)"; continue
+        fi
+        mpr=$(jq -r --arg h "$local_head" '[.[] | select(.headRefOid == $h)][0].number // empty' <<<"$merged")
+        if [[ -n "$mpr" ]]; then
+          printf '%s\n' "$mpr" >"$qdir/$qid.pr"
+          set_outcome "$qid" merged "PR $mpr (already merged at ${local_head:0:9})"; continue
+        fi
+        # A create whose response was lost may still have opened the PR: look before reporting.
         gh pr create --repo "$repo" --head "$qbranch" --base "$base" --title "$qtitle" --body-file "$qbody" >>"$log" 2>&1 ||
-          { set_outcome "$qid" error "pr create failed, see $log"; continue; }
-        prs=$(gh pr list --repo "$repo" --head "$qbranch" --state open --json number,headRefOid)
+          echo "pr create failed; checking whether it was created anyway" >>"$log"
+        if ! prs=$(list_open); then set_outcome "$qid" waiting "PR lookup after create failed (transient)"; continue; fi
+        [[ "$(jq length <<<"$prs")" != 0 ]] || { set_outcome "$qid" error "pr create failed, see $log"; continue; }
       fi
       pr=$(jq -r '.[0].number // empty' <<<"$prs")
+      [[ -z "$pr" ]] || printf '%s\n' "$pr" >"$qdir/$qid.pr"
       head=$(jq -r '.[0].headRefOid // empty' <<<"$prs")
       [[ -n "$pr" && -n "$head" ]] || { set_outcome "$qid" error "no open PR for $qbranch"; continue; }
       if [[ "$head" != "$local_head" ]]; then
@@ -221,6 +245,8 @@ case "$cmd" in
         4) echo "hold: default branch is red; pass stopped"; exit 4 ;;
         6) set_outcome "$qid" blocked "admin merge refused, see $log" ;;
         7) set_outcome "$qid" waiting "pr-merge found it not ready, see $log" ;;
+        8) set_outcome "$qid" waiting "merge queued on GitHub; will confirm" ;;
+        9) set_outcome "$qid" waiting "merge outcome unknown; will reconcile" ;;
         *) set_outcome "$qid" error "pr-merge exit $rc, see $log" ;;
       esac
     done 3<"$queue"

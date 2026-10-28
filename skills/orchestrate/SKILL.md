@@ -187,6 +187,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
+| `ops/` | `pr-merge.sh`, `issue-close.sh` | journal of each GitHub write (intent, attempt, state) and its raw output, so a lost answer is reconciled, never replayed |
 | `../validate/` | `validate.sh` | validation receipts and logs, keyed by `fingerprint.sh --key` (shared across repos; `ORCHESTRATE_VALIDATE_DIR`) |
 | `hygiene-actions.log`, `hygiene/` | hygiene bot | closes made; plans and ranked lanes |
 | `briefs/`, `lane-rules.md` | you | filled role briefs; repository rules for every lane |

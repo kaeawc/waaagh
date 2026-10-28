@@ -26,3 +26,21 @@ orch_default_branch() { gh api "repos/$1" | jq -r .default_branch; }
 
 # orch_iso EPOCH -> 2026-01-02T03:04:05Z
 orch_iso() { jq -rn --argjson t "$1" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")'; }
+
+# orch_journal FILE JSON: write an operation journal entry atomically (temp file + mv).
+orch_journal() {
+  mkdir -p "$(dirname "$1")"
+  printf '%s\n' "$2" >"$1.tmp.$$" && mv "$1.tmp.$$" "$1"
+}
+
+# orch_read_retry N CMD...: run a read up to N times (ORCHESTRATE_READ_SLEEP seconds apart, default 2);
+# prints the first successful output. Only for reads: never wrap a mutation in it.
+orch_read_retry() {
+  local n=$1 i out
+  shift
+  for ((i = 1; i <= n; i++)); do
+    if out=$("$@" 2>/dev/null); then printf '%s\n' "$out"; return 0; fi
+    ((i == n)) || sleep "${ORCHESTRATE_READ_SLEEP:-2}"
+  done
+  return 1
+}
