@@ -21,7 +21,7 @@ Two ways to use this skill:
 - **Campaign** — a sustained loop over the tracker and the open PRs. Add the campaign sections.
 
 Scripts are in `${CLAUDE_SKILL_DIR}/scripts/` (`SCRIPTS` below; self-test:
-`bats "$SCRIPTS/selftest.bats"`). Role brief templates are in `${CLAUDE_SKILL_DIR}/roles/`. They need
+`bats "$SCRIPTS"/*.bats`). Role brief templates are in `${CLAUDE_SKILL_DIR}/roles/`. They need
 `gh` (authenticated), `jq` and `git`; implementation lanes need the `codex` CLI.
 
 ## Roles and routing

@@ -2,6 +2,7 @@
 # Self-test for the orchestrate skill's helper scripts. Run: bats scripts/selftest.bats
 
 setup() {
+  load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   REPO="$BATS_TEST_TMPDIR/repo"
   mkdir -p "$REPO"
@@ -14,6 +15,22 @@ setup() {
 }
 
 fp() { "$SCRIPTS/fingerprint.sh" --dir "$REPO" "$@"; }
+
+@test "fixtures ignore an inherited signing setup and hooks" {
+  # A hostile user config: signing through a signer that always fails, and a failing hook.
+  hostile="$BATS_TEST_TMPDIR/hostile.gitconfig"
+  mkdir -p "$BATS_TEST_TMPDIR/hooks"
+  printf '#!/bin/sh\nexit 1\n' >"$BATS_TEST_TMPDIR/hooks/pre-commit"; chmod +x "$BATS_TEST_TMPDIR/hooks/pre-commit"
+  printf '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n[core]\n\thooksPath = %s\n' "$BATS_TEST_TMPDIR/hooks" >"$hostile"
+  GIT_CONFIG_GLOBAL="$hostile"
+  ! (cd "$REPO" && echo x >>a.txt && git commit -qam signed 2>/dev/null)
+  git -C "$REPO" checkout -q a.txt
+  hermetic_git
+  [ "$GIT_CONFIG_GLOBAL" != "$hostile" ]
+  echo y >>"$REPO/a.txt"
+  git -C "$REPO" commit -qam unsigned
+  [ "$(git -C "$REPO" config --get commit.gpgsign)" = false ]
+}
 
 @test "clean git tree reports tree=clean" {
   run fp
