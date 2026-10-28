@@ -817,3 +817,83 @@ DIVERSE='[{"number":901,"title":"Crash when the keyboard opens on tablet"},
   [ "$status" -eq 0 ]
   [ -f "$BATS_TEST_TMPDIR/st/device.lock" ]
 }
+
+# --- validation receipts ---------------------------------------------------------------------
+val() { ORCHESTRATE_VALIDATE_DIR="$BATS_TEST_TMPDIR/store" "$SCRIPTS/validate.sh" "$@" --dir "$REPO"; }
+
+@test "writing validation logs into the checkout changes the fingerprint; validate.sh writes outside it" {
+  before=$(fp)
+  mkdir -p "$REPO/scratch"; echo "all tests pass" >"$REPO/scratch/validate.log"
+  [ "$(fp)" != "$before" ]
+  rm -r "$REPO/scratch"
+  run val run --cmd "true" --runner validator --independent
+  [ "$status" -eq 0 ]
+  [[ "$output" == "PASS exit=0 key=v2|"* ]]
+  [ "$(fp)" = "$before" ]
+  [ -z "$(git -C "$REPO" status --porcelain)" ]
+}
+
+@test "an independent passing receipt is reused without re-running; a source change needs a fresh run" {
+  val run --cmd "grep -q one a.txt" --runner validator --independent >/dev/null
+  run val check --cmd "grep -q one a.txt"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "reuse "*"runner=validator"* ]]
+  receipt=$(printf '%s' "$output" | awk '{print $2}')
+  jq -e '.schema == 1 and .result == "pass" and .exit == 0 and .verification == "independent"
+         and .fingerprint_before == .fingerprint_after and (.log | length > 0)' "$receipt"
+  echo two >"$REPO/a.txt"
+  run val check --cmd "grep -q one a.txt"
+  [ "$status" -eq 1 ]
+  [[ "$output" == "fresh-needed: no receipt"* ]]
+}
+
+@test "the declared environment is part of the receipt key" {
+  NODE_ENV=development val run --cmd 'test "$NODE_ENV" = development' --env NODE_ENV --runner v --independent >/dev/null
+  NODE_ENV=development run val check --cmd 'test "$NODE_ENV" = development' --env NODE_ENV
+  [ "$status" -eq 0 ]
+  NODE_ENV=production run val check --cmd 'test "$NODE_ENV" = development' --env NODE_ENV
+  [ "$status" -eq 1 ]
+  NODE_ENV=production run val run --cmd 'test "$NODE_ENV" = development' --env NODE_ENV --runner v --independent
+  [ "$status" -eq 1 ]
+  [[ "$output" == FAIL* ]]
+}
+
+@test "failures carry a bounded excerpt and are never reused" {
+  run val run --cmd 'for i in $(seq 1 5000); do echo "case $i failed: boom"; done; exit 3' --runner v --independent
+  [ "$status" -eq 1 ]
+  [[ "$output" == "FAIL exit=3 "* ]]
+  [[ "$output" == *"full log: "* ]]
+  [ "${#output}" -lt 6000 ]
+  run val check --cmd 'for i in $(seq 1 5000); do echo "case $i failed: boom"; done; exit 3'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"last result was fail (exit 3)"* ]]
+}
+
+@test "self-reported, partial, stale and tree-changing receipts need a fresh run" {
+  val run --cmd "true" --runner codex >/dev/null
+  run val check --cmd "true"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"self-reported"* ]]
+  ORCHESTRATE_NOW=1000 val run --cmd "true" --runner v --independent >/dev/null
+  ORCHESTRATE_NOW=1100 run val check --cmd "true" --max-age 60
+  [[ "$output" == *"100s old"* ]]
+  ORCHESTRATE_NOW=1050 run val check --cmd "true" --max-age 60
+  [ "$status" -eq 0 ]
+  receipt=$(printf '%s' "$output" | awk '{print $2}')
+  jq 'del(.finished_epoch)' "$receipt" >"$receipt.tmp" && mv "$receipt.tmp" "$receipt"
+  run val check --cmd "true"
+  [[ "$output" == *"partial receipt"* ]]
+  echo '{"schema":' >"$receipt"
+  run val check --cmd "true"
+  [[ "$output" == *"unreadable receipt"* ]]
+  run val run --cmd "echo new >new.txt" --runner v --independent
+  [ "$status" -eq 3 ]
+  [[ "$output" == VOID* ]]
+}
+
+@test "validate.sh refuses a receipt store inside the checkout" {
+  run "$SCRIPTS/validate.sh" run --dir "$REPO" --cmd true --runner v --store "$REPO/scratch"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"inside the checkout"* ]]
+  [ ! -e "$REPO/scratch" ]
+}

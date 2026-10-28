@@ -120,7 +120,7 @@ Run the runner with the Bash tool using `run_in_background: true`, in the same c
 
 **Shared host:** never `pkill`/`killall`/`kill` by pattern. Other lanes and sessions run the same test commands on this machine. Only kill a PID you launched yourself and recorded when you launched it.
 
-3. **Verify independently.** Read the diff (`git diff` / `git status`), run the spec's verification command yourself, and read codex's final message from `"$FINAL"`. Codex's claim of success is not evidence; your re-run is.
+3. **Verify independently.** Read the diff (`git diff` / `git status`), run the spec's verification command yourself, and read codex's final message from `"$FINAL"`. Codex's claim of success is not evidence; your re-run is. When the orchestrate skill's scripts are available, make the re-run through `validate.sh run --dir "$(pwd)" --cmd "<command>" <declared env> --runner <this lane> --independent`, so it leaves a receipt outside the worktree, and quote its verdict line. Never write or edit a receipt from codex's output.
 
 ## What you return
 

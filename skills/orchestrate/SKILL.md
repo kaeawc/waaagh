@@ -140,11 +140,14 @@ refuses to push or merge on a coordinator's say-so. A brief that grants it must 
 grant verbatim; otherwise the role's contract is to hand back ready-to-run commands. A spec you cannot finish writing means
 the decision is not made — that is your work, not the lane's.
 
-**Validation brief** (Haiku): checkout path and fingerprint (`"$SCRIPTS/fingerprint.sh" --dir P`),
-the exact commands and environment. Read-only; full output to `scratch/validate-<fingerprint>/`.
-Return per command PASS/FAIL, exit code, `excerpt.sh` output for failures, log paths, and the
-fingerprint re-checked at the end (a changed fingerprint voids the result). No diagnosis, no fixes.
-Nobody edits that checkout while validation runs.
+**Validation brief** (Haiku): checkout path, the exact commands and the declared environment
+(an `--env-manifest`). For each command, first `"$SCRIPTS/validate.sh" check --dir P --cmd "<cmd>"
+<env>`: `reuse <receipt>` is the result, no re-run. Otherwise `"$SCRIPTS/validate.sh" run --dir P
+--cmd "<cmd>" <env> --runner validator --independent`. It logs and writes a receipt outside the
+checkout (writing logs into the tree would change the fingerprint being measured) and voids the
+result if the tree changed during the run. Return per command the one-line verdict, the receipt
+path and, for FAIL/VOID, the excerpt it printed. No diagnosis, no fixes. Nobody edits that checkout
+while validation runs.
 
 **Review brief** (`roles/review.md`): goal, acceptance criteria, risk surface, and the diff as a
 path — never pasted inline. Verified findings only, with `file:line` and a failure scenario.
@@ -161,6 +164,10 @@ Act on it or surface the disagreement to the user.
   and installed-dependency marker the command depends on; values are hashed, never printed. Reuse a
   result only when its `v2|…` key matches exactly. A command that depends on undeclared external
   state (network, services, caches, devices) is not eligible for reuse.
+- Reuse goes through receipts: `validate.sh check` accepts only a complete, passing, independent
+  receipt for the exact current key within `--max-age` (default 24 h); anything missing, partial,
+  failed, self-reported or stale means a fresh `validate.sh run`. An implementer's own report is
+  never a receipt: only a runner that did not write the change passes `--independent`.
 - Never hand full logs, complete diffs or validation transcripts to yourself or a costly model.
   Save them, excerpt with `"$SCRIPTS/excerpt.sh" <log> [context] [max-lines] [max-bytes]` (bounded: per-line and total byte caps, first and last failures kept, repeats folded), and pass the path.
 - Label results `verified-local` or `verified-ci`. While CI is backlogged, "fixed" means
@@ -179,6 +186,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
+| `../validate/` | `validate.sh` | validation receipts and logs, keyed by `fingerprint.sh --key` (shared across repos; `ORCHESTRATE_VALIDATE_DIR`) |
 | `hygiene-actions.log`, `hygiene/` | hygiene bot | closes made; plans and ranked lanes |
 | `briefs/`, `lane-rules.md` | you | filled role briefs; repository rules for every lane |
 | `lanes.tsv` | you | active lanes: worktree, branch, issues, files, agent, status |
