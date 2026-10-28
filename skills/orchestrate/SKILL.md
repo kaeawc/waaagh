@@ -158,7 +158,7 @@ Act on it or surface the disagreement to the user.
 - Key local results by fingerprint (base commit + working-tree diff hash) + command + environment:
   `"$SCRIPTS/fingerprint.sh" --key "<command>"`. Reuse a result only when its key matches exactly.
 - Never hand full logs, complete diffs or validation transcripts to yourself or a costly model.
-  Save them, excerpt with `"$SCRIPTS/excerpt.sh" <log> [context] [max]`, and pass the path.
+  Save them, excerpt with `"$SCRIPTS/excerpt.sh" <log> [context] [max-lines] [max-bytes]` (bounded: per-line and total byte caps, first and last failures kept, repeats folded), and pass the path.
 - Label results `verified-local` or `verified-ci`. While CI is backlogged, "fixed" means
   local-only until a post-merge run on the default branch completes. A run cancelled by a
   concurrency group is a cancellation, not a failure.

@@ -75,6 +75,69 @@ fp() { "$SCRIPTS/fingerprint.sh" --dir "$REPO" "$@"; }
   printf 'terrorist novel\nfailover configured\n' >"$log"
   run "$SCRIPTS/excerpt.sh" "$log"
   [[ "$output" == *"(no failure lines matched)"* ]]
+  [[ "$output" == *"full log: $log (2 lines)"* ]]
+}
+
+@test "excerpt of an empty log still prints the evidence path" {
+  log="$BATS_TEST_TMPDIR/empty.log"
+  : >"$log"
+  run "$SCRIPTS/excerpt.sh" "$log"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(no failure lines matched)"* ]]
+  [[ "$output" == *"full log: $log (0 lines)"* ]]
+}
+
+@test "excerpt survives a large matching log (no SIGPIPE) and keeps the first and last failures" {
+  log="$BATS_TEST_TMPDIR/large.log"
+  pad=$(printf 'x%.0s' $(seq 1 100))
+  awk -v pad="$pad" 'BEGIN { for (i = 1; i <= 20000; i++) printf "error failure %d: %s\n", i, pad }' >"$log"
+  run "$SCRIPTS/excerpt.sh" "$log" 0 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1:error failure 1:"* ]]
+  [[ "$output" == *"20000:error failure 20000:"* ]]
+  [[ "$output" == *"truncated: showing 10 of 20000 excerpt lines"* ]]
+  [[ "$output" == *"full log: $log (20000 lines)"* ]]
+  [ "${#output}" -lt 4000 ]
+}
+
+@test "excerpt folds exact repeats of a failure line" {
+  log="$BATS_TEST_TMPDIR/repeat.log"
+  awk 'BEGIN { for (i = 1; i <= 20000; i++) print "test failed: long message for pipe buffering" }' >"$log"
+  run "$SCRIPTS/excerpt.sh" "$log" 0 10
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'long message')" -eq 1 ]
+  [[ "$output" == *"folded 19999 repeated failure lines"* ]]
+  [[ "$output" == *"full log: $log"* ]]
+}
+
+@test "excerpt keeps a megabyte single line within the byte budget" {
+  log="$BATS_TEST_TMPDIR/wide.log"
+  awk 'BEGIN { printf "error "; for (i = 0; i < 1000000; i++) printf "x"; print "" }' >"$log"
+  run "$SCRIPTS/excerpt.sh" "$log" 0 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == "1:error xxx"*"...[+"*" bytes]"* ]]
+  [ "${#output}" -lt 1000 ]
+}
+
+@test "excerpt honours MAX_BYTES across many long lines" {
+  log="$BATS_TEST_TMPDIR/budget.log"
+  awk 'BEGIN { for (i = 1; i <= 500; i++) { printf "fatal %d ", i; for (j = 0; j < 300; j++) printf "y"; print "" } }' >"$log"
+  run "$SCRIPTS/excerpt.sh" "$log" 0 120 2000
+  [ "$status" -eq 0 ]
+  body=$(printf '%s\n' "$output" | grep -v '^full log:' | grep -v '^\.\.\. ')
+  [ "${#body}" -le 2000 ]
+  [[ "$output" == *"truncated: showing"*"of 500 excerpt lines"* ]]
+  [[ "$output" == *"500:fatal 500 "* ]]
+}
+
+@test "excerpt separates non-adjacent context groups and rejects bad numbers" {
+  log="$BATS_TEST_TMPDIR/ctx.log"
+  printf 'a\nb\nerror one\nc\nd\ne\nf\ng\nfatal two\nh\n' >"$log"
+  run "$SCRIPTS/excerpt.sh" "$log" 1
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | head -7 | tr '\n' '|')" = "2-b|3:error one|4-c|--|8-g|9:fatal two|10-h|" ]
+  run "$SCRIPTS/excerpt.sh" "$log" x
+  [ "$status" -eq 2 ]
 }
 
 # --- PR takeover: claims and intake -------------------------------------------------------
