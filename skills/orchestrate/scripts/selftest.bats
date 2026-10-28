@@ -588,8 +588,17 @@ case "$*" in
     want=$(printf '%s\n' "$*" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')
     cur=$(cat "$FX/remote-head" 2>/dev/null || jq -r .headRefOid "$FX/pr.json")
     { [ -n "$want" ] && [ "$want" = "$cur" ]; } || { echo "Head branch was modified. Review and try the merge again."; exit 1; }
-    echo MERGED >"$FX/merged" ;;
-  "pr view"*) if [ -f "$FX/merged" ]; then cat "$FX/pr-merged.json"
+    # $FX/merge-mode: lost (merged, error returned) | no-readback (merged, next reads fail) | queued
+    case "$(cat "$FX/merge-mode" 2>/dev/null)" in
+      lost) echo MERGED >"$FX/merged"; echo "HTTP 502 Bad Gateway" >&2; exit 1 ;;
+      no-readback) echo MERGED >"$FX/merged"; echo 3 >"$FX/view-fails" ;;
+      queued) touch "$FX/queued"; echo "! Pull request will be added to the merge queue"; exit 0 ;;
+      *) echo MERGED >"$FX/merged" ;;
+    esac ;;
+  "pr view"*) if [ -s "$FX/view-fails" ] && [ "$(cat "$FX/view-fails")" -gt 0 ]; then
+      echo $(($(cat "$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
+    if [ -f "$FX/merged" ]; then cat "$FX/pr-merged.json"
+    elif [ -f "$FX/queued" ]; then jq '.autoMergeRequest = {"enabledAt": "2026-09-27T12:00:00Z"}' "$FX/pr.json"
     elif [ -f "$FX/remote-head" ]; then jq --arg h "$(cat "$FX/remote-head")" '.headRefOid = $h' "$FX/pr.json"
     else cat "$FX/pr.json"; if [ -f "$FX/race" ]; then rm "$FX/race"; cp "$FX/race-head" "$FX/remote-head"; fi; fi ;;
   "pr list"*merged*) cat "$FX/prs-merged.json" ;;
@@ -597,8 +606,26 @@ case "$*" in
   "run list"*) cat "$FX/runs.json" ;;
   "issue list"*--label*) cat "$FX/pause.json" ;;
   "issue list"*) cat "$FX/issues.json" ;;
-  "issue view"*) cat "$FX/issue.json" ;;
-  "issue close"*) : ;;
+  "issue view"*) # issue.json plus what earlier closes changed; $FX/view-fails counts down failures
+    if [ -s "$FX/view-fails" ] && [ "$(cat "$FX/view-fails")" -gt 0 ]; then
+      echo $(($(cat "$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
+    n=$3
+    jq --argjson c "$(cat "$FX/comments-$n" 2>/dev/null || echo '[]')" --arg closed "$([ -f "$FX/closed-$n" ] && echo yes)" \
+      '. + {comments: $c} + (if $closed == "yes" then {state: "CLOSED"} else {} end)' "$FX/issue.json" ;;
+  "issue close"*) # $FX/close-mode: ok | comment-only (comment posted, close fails) | lost (done, error
+    # returned) | no-readback (done, then the next reads fail)
+    n=$3 body=""; while [ $# -gt 0 ]; do [ "$1" = --comment ] && body=$2; shift; done
+    mode=$(cat "$FX/close-mode" 2>/dev/null || echo ok)
+    if [ -n "$body" ]; then
+      jq --arg b "$body" '. + [{body: $b}]' "${FX}/comments-$n" 2>/dev/null >"$FX/c.tmp" || jq -n --arg b "$body" '[{body: $b}]' >"$FX/c.tmp"
+      mv "$FX/c.tmp" "$FX/comments-$n"
+    fi
+    case "$mode" in
+      comment-only) exit 1 ;;
+      lost) touch "$FX/closed-$n"; echo "HTTP 502" >&2; exit 1 ;;
+      no-readback) touch "$FX/closed-$n"; echo 3 >"$FX/view-fails" ;;
+      *) touch "$FX/closed-$n" ;;
+    esac ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 STUB
@@ -966,6 +993,38 @@ sim_fails() { pr_row 1 me false false MERGEABLE '[{"name":"build","conclusion":"
   [ "$status" -eq 0 ]
 }
 
+@test "pr-merge reconciles a lost response, a failed readback and a queued merge without merging twice" {
+  merge_fixture
+  export ORCHESTRATE_READ_SLEEP=0
+  J="$ORCHESTRATE_STATE_DIR/o__r/ops/merge-pr1.json"
+  # Success, response lost: the readback shows MERGED.
+  echo lost >"$FX/merge-mode"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state "$J")" = merged ]
+  # Success, readback fails: unknown, journaled; the rerun reconciles without a second merge.
+  rm -f "$FX/merged"; : >"$FX/calls"
+  echo no-readback >"$FX/merge-mode"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 9 ]
+  [[ "$output" == "unverified:"* ]]
+  [ "$(jq -r .state "$J")" = unknown ]
+  grep -q 'unverified: merge exit 0, readback failed' "$ORCHESTRATE_STATE_DIR/o__r/merges.log"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(earlier attempt)"* ]]
+  [ "$(grep -c 'pr merge' "$FX/calls")" -eq 1 ]
+  # Accepted into GitHub's merge queue: queued, and a rerun does not merge again.
+  rm -f "$FX/merged"; : >"$FX/calls"
+  echo queued >"$FX/merge-mode"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 8 ]
+  [[ "$output" == "queued:"* ]]
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 8 ]
+  [ "$(grep -c 'pr merge' "$FX/calls")" -eq 1 ]
+}
+
 @test "pr-merge reports a merge GitHub rejected" {
   merge_fixture
   touch "$FX/merge-fails"
@@ -1188,16 +1247,58 @@ DIVERSE='[{"number":901,"title":"Crash when the keyboard opens on tablet"},
   [ "$status" -eq 0 ]
   grep -q 'issue close 5 --repo o/r --reason completed' "$FX/calls"
   grep -q 'issue=5' "$ORCHESTRATE_STATE_DIR/o__r/hygiene-actions.log"
+  rm -f "$FX/closed-5" "$FX/comments-5"
   run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as duplicate --of 5 --evidence "$E"
   [ "$status" -eq 3 ]
   run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as duplicate --of 6 --evidence "$E"
   [ "$status" -eq 0 ]
   grep -q 'issue close 5 --repo o/r --duplicate-of 6' "$FX/calls"
+  rm -f "$FX/closed-5" "$FX/comments-5"
   echo '{"state":"OPEN","labels":[{"name":"epic"}]}' >"$FX/issue.json"
   run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as duplicate --of 6 --evidence "$E"
   [ "$status" -eq 3 ]
   run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as fixed --pr 9 --evidence "short"
   [ "$status" -eq 2 ]
+}
+
+@test "issue-close finishes a partial close without a second comment, and reconciles a lost answer" {
+  stub_gh_router
+  export ORCHESTRATE_READ_SLEEP=0
+  echo '{"state":"OPEN","labels":[]}' >"$FX/issue.json"
+  echo '{"state":"MERGED"}' >"$FX/pr.json"
+  E="src/x.ts:10 now awaits the write; the race is gone"
+  close() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as fixed --pr 9 --evidence "$E"; }
+  # Comment posted, close failed: rerun closes without commenting again.
+  echo comment-only >"$FX/close-mode"
+  close
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"without a second comment"* ]]
+  echo ok >"$FX/close-mode"
+  close
+  [ "$status" -eq 0 ]
+  [ "$(jq length "$FX/comments-5")" -eq 1 ]
+  [ "$(grep -c 'issue=5' "$ORCHESTRATE_STATE_DIR/o__r/hygiene-actions.log")" -eq 1 ]
+  # Success with a lost response: read back as closed, logged once.
+  rm -f "$FX/closed-5" "$FX/comments-5"; : >"$ORCHESTRATE_STATE_DIR/o__r/hygiene-actions.log"
+  echo lost >"$FX/close-mode"
+  close
+  [ "$status" -eq 0 ]
+  # Success, then the readback fails: unknown, and the rerun reconciles without closing again.
+  rm -f "$FX/closed-5" "$FX/comments-5"; : >"$ORCHESTRATE_STATE_DIR/o__r/hygiene-actions.log"
+  echo no-readback >"$FX/close-mode"
+  close
+  [ "$status" -eq 9 ]
+  [ ! -s "$ORCHESTRATE_STATE_DIR/o__r/hygiene-actions.log" ]
+  : >"$FX/calls"
+  close
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(earlier attempt)"* ]]
+  ! grep -q 'issue close' "$FX/calls"
+  [ "$(jq length "$FX/comments-5")" -eq 1 ]
+  [ "$(grep -c 'issue=5' "$ORCHESTRATE_STATE_DIR/o__r/hygiene-actions.log")" -eq 1 ]
+  # And once done, a further run refuses: the issue is closed and nothing is pending.
+  close
+  [ "$status" -eq 3 ]
 }
 
 @test "device lock is exclusive while its holder is alive and reclaimable when stale" {

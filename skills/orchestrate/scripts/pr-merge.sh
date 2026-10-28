@@ -23,8 +23,14 @@
 # The merge itself is bound to the full head SHA read here (gh pr merge --match-head-commit), so a
 # push that lands between this check and the merge makes GitHub refuse it; that refusal is
 # re-read and reported as a moved head, never retried without the guard.
+# Every attempt is journaled before the mutation (<state dir>/ops/merge-pr<N>.json: repo, PR, full
+# head, attempt id, state) and reconciled after it with bounded reads, keeping the merge command's
+# exit code and full output in <state dir>/ops/. A rerun first reconciles an unfinished journal
+# against the PR: already MERGED is reported as merged without merging again.
 # Exit: 0 merged | 3 ineligible or head moved (also during the merge) | 4 default branch is red
-#       (hold) | 5 merge failed | 6 --admin not allowed | 7 not ready
+#       (hold) | 5 merge rejected | 6 --admin not allowed | 7 not ready | 8 accepted but queued
+#       on GitHub (merge queue or auto-merge): not merged yet, do not merge again
+#       | 9 outcome unknown (the PR could not be read back): run again later to reconcile
 # Appends one line per attempt to <state dir>/merges.log.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -45,16 +51,38 @@ while (($#)); do
     --except-check) excepts+=("$2"); shift 2 ;;
     --ignore-check) ignores+=("$2"); shift 2 ;;
     --main-fix) main_fix=yes; shift ;;
-    -h | --help) sed -n '2,28p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,28p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,34p' "$0" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 state=$(orch_state_dir "$repo")
 log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "${head:0:9}" "$*" >>"$state/merges.log"; }
+
+journal="$state/ops/merge-pr$pr.json"
+# An unfinished earlier attempt is reconciled before anything else: never merge twice.
+if [[ -f "$journal" ]] && [[ "$(jq -r .state "$journal" 2>/dev/null)" =~ ^(intent|unknown|queued)$ ]]; then
+  jfull=$(jq -r .head "$journal")
+  now=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,mergeCommit,headRefOid,autoMergeRequest) ||
+    { echo "unverified: an earlier merge attempt of PR $pr is unreconciled and the PR is unreadable"; exit 9; }
+  case "$(jq -r .state <<<"$now")" in
+    MERGED)
+      orch_journal "$journal" "$(jq -c --arg at "$(orch_iso "$(orch_now)")" '.state = "merged" | .reconciled_at = $at' "$journal")"
+      printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "$jfull" \
+        "merged $(jq -r '.mergeCommit.oid // "-"' <<<"$now") (reconciled earlier attempt $(jq -r .attempt "$journal"))" >>"$state/merges.log"
+      echo "merged $pr $(jq -r '.mergeCommit.oid // "-"' <<<"$now") (earlier attempt)"
+      exit 0 ;;
+    OPEN)
+      if [[ "$(jq -r '.autoMergeRequest != null' <<<"$now")" == true ]]; then
+        echo "queued: PR $pr is queued to merge on GitHub (earlier attempt); not merging again"; exit 8
+      fi
+      orch_journal "$journal" "$(jq -c '.state = "superseded"' "$journal")" ;;
+    *) orch_journal "$journal" "$(jq -c '.state = "superseded"' "$journal")" ;;
+  esac
+fi
 
 if [[ -f "$state/MAIN_RED" && "$main_fix" == no ]]; then
   echo "hold: default branch is red ($(head -1 "$state/MAIN_RED"))"; exit 4
@@ -72,7 +100,8 @@ if [[ "$admin" == yes ]]; then
   fi
 fi
 
-info=$(gh pr view "$pr" --repo "$repo" --json state,isDraft,isCrossRepository,headRefOid,author,mergeable)
+info=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,isDraft,isCrossRepository,headRefOid,author,mergeable) ||
+  { echo "unverified: PR $pr could not be read; nothing was attempted"; exit 9; }
 ok=$(jq -r --arg head "$head" --args '
   .state == "OPEN" and (.isDraft | not) and (.isCrossRepository | not)
   and (.headRefOid | startswith($head)) and (.mergeable != "CONFLICTING")
@@ -129,19 +158,44 @@ fi
 log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "$full" "$*" >>"$state/merges.log"; }
 args=("--$method" --match-head-commit "$full")
 [[ "$admin" == yes ]] && args+=(--admin)
-out=$(gh pr merge "$pr" --repo "$repo" "${args[@]}" 2>&1 | tail -1) || true
-after=$(gh pr view "$pr" --repo "$repo" --json state,mergeCommit,headRefOid)
+attempt="$(orch_now)-$$"
+orch_journal "$journal" "$(jq -cn --arg repo "$repo" --argjson pr "$pr" --arg head "$full" --arg attempt "$attempt" \
+  --arg at "$(orch_iso "$(orch_now)")" --arg method "$method" --arg admin "$admin" \
+  '{op: "merge", repo: $repo, pr: $pr, head: $head, attempt: $attempt, method: $method, admin: $admin,
+    state: "intent", started_at: $at}')"
+jset() { orch_journal "$journal" "$(jq -c --arg s "$1" --arg d "${2:-}" '.state = $s | .detail = $d' "$journal")"; }
+diag="$state/ops/merge-pr$pr-$attempt.out"
+rc=0
+gh pr merge "$pr" --repo "$repo" "${args[@]}" >"$diag" 2>&1 || rc=$?
+out=$(tail -1 "$diag")
+
+# Reconcile: bounded reads of the PR, never a second mutation.
+if ! after=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,mergeCommit,headRefOid,autoMergeRequest); then
+  jset unknown "merge exit $rc; readback failed"
+  log "unverified: merge exit $rc, readback failed; attempt $attempt; output in $diag"
+  echo "unverified: the merge of PR $pr may or may not have happened (exit $rc, readback failed); run again to reconcile"
+  exit 9
+fi
 final=$(jq -r '"\(.state) \(.mergeCommit.oid // "-")"' <<<"$after")
 if [[ "$final" == MERGED* ]]; then
+  jset merged "${final#MERGED }"
   log "merged ${final#MERGED } method=$method admin=$admin${evidence:+ evidence=$evidence}"
   echo "merged $pr ${final#MERGED }"
 elif [[ "$(jq -r '.headRefOid // ""' <<<"$after")" != "$full" ]]; then
   now=$(jq -r '.headRefOid // "-"' <<<"$after")
+  jset rejected "head moved to $now"
   log "refused head moved during merge to ${now:0:9}: $out"
   echo "head moved during merge: judged ${full:0:9}, now ${now:0:9}; re-judge it"
   exit 3
+elif [[ "$final" == OPEN* ]] && { [[ "$(jq -r '.autoMergeRequest != null' <<<"$after")" == true ]] ||
+  { ((rc == 0)) && grep -qiE 'queue|auto-?merge|will be (automatically )?merged' "$diag"; }; }; then
+  jset queued "$out"
+  log "queued on GitHub: $out"
+  echo "queued: GitHub accepted the merge of PR $pr but has not merged it yet ($out); do not merge again"
+  exit 8
 else
-  log "failed: $out"
+  jset rejected "exit $rc: $out"
+  log "failed: exit $rc: $out"
   echo "merge failed: $out"
   exit 5
 fi
