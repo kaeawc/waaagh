@@ -15,7 +15,10 @@ red `{{BASE}}`.
 3. For each `READY` row, oldest first, one at a time:
    `{{SCRIPTS}}/pr-merge.sh --repo {{REPO}} {{AUTHORS}} --pr <n> --head <head>`.
    Exit 3 (head moved or ineligible), 4 (red hold) or 5 (GitHub refused): record and move on.
-   After each successful merge re-run step 2, because mergeability of the others changes.
+   After each successful merge re-run step 2 with `--delta` added, because mergeability of the
+   others changes: it fetches everything fresh but prints only rows that changed (or `no-change`),
+   so work from the rows you already hold plus the delta. Always pass the head from the newest row
+   you have; `pr-merge.sh` re-checks the live PR, so a row is a lead, never authority to merge.
 4. `BLOCK fail:<checks>` rows — only in `fast` mode: for each failed check, get its run id
    (`gh pr checks <n> --repo {{REPO}} --json name,state,link`), save the job log under
    `{{STATE}}/logs/`, and classify it with {{CI_CLASSIFIER}}. Merge with
