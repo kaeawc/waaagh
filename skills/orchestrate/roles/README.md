@@ -27,7 +27,7 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 | `{{IGNORE_CHECKS}}` | `--ignore-check` flags for advisory checks, from memory |
 | `{{CI_CLASSIFIER}}` | the repo's CI failure classifier and known-flakes list, or "none" |
 | `{{REBASE_GATES}}` | commands that must pass before a branch update is pushed |
-| `{{GENERATED_FILES}}` | conflict-prone generated files and the command that regenerates each |
+| `{{GENERATED_FILES}}` | conflict-prone generated files and the command that regenerates each; also written to `<state dir>/generated-files.tsv` (`<glob><TAB><command>` per line) for `regen-merge.sh` |
 | `{{VERIFY_SKILL}}` | the repo's verification skill (for example a manual-test skill) |
 | `{{DEVICES}}` | the devices this batch may use, and the ones it must never touch |
 

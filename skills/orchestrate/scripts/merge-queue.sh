@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Serial local merge queue: bring each queued branch up to date with the default branch, run a
+# Serial local merge queue: bring each queued branch up to date with the default branch (through
+# regen-merge.sh, so conflicts only in generated files are regenerated, not parked), run a
 # check command, push, open a PR if needed, wait for fresh readiness evidence, and merge it through
 # pr-merge.sh. One pass per `run-once`; there is no daemon and no sleep loop, so no role polls.
 #
@@ -62,7 +63,7 @@ fi
 repo="" id="" worktree="" branch="" title="" body="" requires="-" arg=""
 case "$cmd" in
   add | run-once | status | retry) ;;
-  *) sed -n '2,39p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,40p' "$0" >&2; exit 2 ;;
 esac
 while (($#)); do
   case "$1" in
@@ -104,7 +105,7 @@ unmet_deps() {
 case "$cmd" in
   add)
     [[ "$id" =~ ^[A-Za-z0-9._-]+$ && -n "$worktree" && -n "$branch" && -n "$title" && -n "$body" ]] ||
-      { sed -n '2,39p' "$0" >&2; exit 2; }
+      { sed -n '2,40p' "$0" >&2; exit 2; }
     if cut -f1 "$queue" | grep -Fxq -- "$id"; then
       echo "refused: id '$id' is already queued; ids are never reused" >&2; exit 3
     fi
@@ -171,10 +172,15 @@ case "$cmd" in
         git -C "$qwt" merge-base --is-ancestor "origin/$base" HEAD; then
         echo "$qid: resuming at ${local_head:0:9}" >>"$log"
       else
-        if ! git -C "$qwt" merge --no-edit "origin/$base" >>"$log" 2>&1; then
-          git -C "$qwt" merge --abort >>"$log" 2>&1 || true
-          set_outcome "$qid" conflict "see $log"; continue
-        fi
+        # Merge the base right before the push; generated-file conflicts are regenerated.
+        mrc=0
+        "$here/regen-merge.sh" --worktree "$qwt" --base "$base" >>"$log" 2>&1 || mrc=$?
+        case "$mrc" in
+          0) ;;
+          3) set_outcome "$qid" conflict "see $log"; continue ;;
+          5) set_outcome "$qid" conflict "generated files did not regenerate cleanly, see $log"; continue ;;
+          *) set_outcome "$qid" error "base merge failed, see $log"; continue ;;
+        esac
         if [[ -n "${MERGE_QUEUE_CHECK_CMD:-}" ]] &&
           ! (cd "$qwt" && bash -c "$MERGE_QUEUE_CHECK_CMD") >>"$log" 2>&1; then
           set_outcome "$qid" checkfail "see $log"; continue

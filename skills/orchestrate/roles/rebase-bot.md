@@ -15,12 +15,15 @@ live.
    touches a file `{{BASE}}` changed since its merge base.
 2. For each, find its worktree (`git worktree list`, or `jj workspace list`). No worktree, or
    uncommitted changes in it: skip and report. Never create or clean one.
-3. Fetch and merge `origin/{{BASE}}` into the branch.
-   - Clean merge: run the gates, then push.
-   - Conflicts only in generated files ({{GENERATED_FILES}}): take `{{BASE}}`'s side, regenerate
-     with the listed command (it must not grow a ratchet baseline), commit, run the gates, push.
-   - Any other conflicted file: abort the merge and report the PR and the files; the orchestrator
-     assigns a conflict lane.
+3. Merge `origin/{{BASE}}` into the branch with
+   `{{SCRIPTS}}/regen-merge.sh --worktree <path> --base {{BASE}}`. It reads the generated-file spec
+   (`{{STATE}}/generated-files.tsv`: {{GENERATED_FILES}}), takes `{{BASE}}`'s side of conflicts that
+   are only in generated files, regenerates, checks a second run changes nothing, and commits.
+   - Exit 0: run the gates, then push.
+   - Exit 3 (a conflict outside generated files): it already aborted; report the PR and the files;
+     the orchestrator assigns a conflict lane.
+   - Exit 5 (regeneration unstable or touching non-generated files): it already aborted; report it
+     with its output line. Never hand-merge a generated file or grow a ratchet baseline.
 4. Gates before every push: {{REBASE_GATES}}. A failing gate means do not push: leave the merge
    commit unpushed and report the first error line.
 5. A push rejected because the remote moved means someone else is writing: stop on that PR.
