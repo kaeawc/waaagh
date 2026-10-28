@@ -31,6 +31,8 @@
 # under <state dir>/snapshots/), a "<n> GONE" row for a PR no longer listed, or one "no-change"
 # line. Everything is still fetched fresh; the delta only trims output. A snapshot is never
 # authority to merge: pr-merge.sh re-checks the live PR.
+# Every GitHub read goes through gh-read.sh (bounded retries, typed errors; read failures are
+# recorded in the diagnostics file). An unreadable PR list exits 3 with no verdicts.
 # Last line on stderr: "open=<n> ready=<n>" (+ " changed=<n>" with --delta, + " truncated=yes"
 # when the PR list hit its 300-row limit, + " policy=unknown", + " diagnostics=<path>").
 set -euo pipefail
@@ -68,6 +70,7 @@ holds_json=$(json_list ${holds[@]+"${holds[@]}"})
 
 diag_dir="$(orch_state_dir "$repo")/diagnostics"
 diag="$diag_dir/pr-ready-$(orch_iso "$(orch_now)" | tr -d ':')-$$.log"
+mkdir -p "$diag_dir"
 note() { # record a read problem in a diagnostics file; the verdicts carry only its category
   mkdir -p "$diag_dir"
   printf '%s\n' "$*" >>"$diag"
@@ -77,14 +80,15 @@ note() { # record a read problem in a diagnostics file; the verdicts carry only 
 # protection (the branch endpoint shows it to anyone with read access). A read that fails or
 # returns something malformed is "unknown", never "none": the PR cannot be judged READY.
 policy=known required='[]'
-if out=$(gh api "repos/$repo/rules/branches/$base" 2>&1) &&
+ghr() { "$here/gh-read.sh" --json -- "$@"; }   # bounded, typed, read-only
+if out=$(ghr api "repos/$repo/rules/branches/$base" 2>&1) &&
   r=$(jq -ce 'if type == "array" then [.[] | select(.type == "required_status_checks")
               | .parameters.required_status_checks[].context] else error("not an array") end' <<<"$out" 2>/dev/null); then
   required=$r
 else
   policy=unknown; note "rulesets read failed for $base: ${out:0:500}"
 fi
-if out=$(gh api "repos/$repo/branches/$base" 2>&1) &&
+if out=$(ghr api "repos/$repo/branches/$base" 2>&1) &&
   r=$(jq -ce 'if type == "object" and has("protected") then
                 ((.protection.required_status_checks // {}) | [(.contexts // [])[], ((.checks // [])[] | .context)])
               else error("no protected field") end' <<<"$out" 2>/dev/null); then
@@ -94,8 +98,12 @@ else
 fi
 
 list_limit=300
-prs=$(gh pr list --repo "$repo" --state open --limit "$list_limit" \
-  --json number,author,isDraft,isCrossRepository,baseRefName,headRefOid,mergeable,labels,statusCheckRollup)
+if ! prs=$(ghr pr list --repo "$repo" --state open --limit "$list_limit" \
+  --json number,author,isDraft,isCrossRepository,baseRefName,headRefOid,mergeable,labels,statusCheckRollup 2>&1); then
+  note "PR list unreadable: ${prs:0:500}"
+  echo "pr-ready: the open PR list could not be read; no verdicts (diagnostics: $diag)" >&2
+  exit 3
+fi
 truncated=no
 [[ "$(jq length <<<"$prs")" -lt "$list_limit" ]] || truncated=yes
 rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" --argjson holds "$holds_json" \
@@ -168,7 +176,7 @@ thread_counts() {
   done
   q+='}}'
   # shellcheck disable=SC2016  # GraphQL variables, not shell expansions
-  { gh api graphql -F owner="${repo%%/*}" -F name="${repo##*/}" -f query="$q" 2>/dev/null || echo '{}'; } |
+  { ghr api graphql -F owner="${repo%%/*}" -F name="${repo##*/}" -f query="$q" 2>>"$diag" || echo '{}'; } |
     jq -r --args '
       (.data.repository // {}) as $r
       | $ARGS.positional[] as $n | ($r["p" + $n] // null) as $pr
@@ -184,10 +192,10 @@ more_threads() {
   while [[ -n "$cursor" ]]; do
     [[ "$cursor" != "?" ]] || { note "PR $n: thread page without a cursor"; echo unknown; return; }
     # shellcheck disable=SC2016  # GraphQL variables, not shell expansions
-    page=$(gh api graphql -F owner="${repo%%/*}" -F name="${repo##*/}" -F pr="$n" -f cursor="$cursor" -f query='
+    page=$(ghr api graphql -F owner="${repo%%/*}" -F name="${repo##*/}" -F pr="$n" -f cursor="$cursor" -f query='
       query($owner:String!,$name:String!,$pr:Int!,$cursor:String!){repository(owner:$owner,name:$name){
         pullRequest(number:$pr){reviewThreads(first:100,after:$cursor){pageInfo{hasNextPage endCursor}
-        nodes{isResolved isOutdated}}}}}' 2>/dev/null |
+        nodes{isResolved isOutdated}}}}}' 2>>"$diag" |
       jq -r '.data.repository.pullRequest.reviewThreads
         | [([.nodes[] | select((.isResolved | not) and (.isOutdated | not))] | length),
            (if .pageInfo.hasNextPage then (.pageInfo.endCursor // "?") else "" end)] | @tsv' 2>/dev/null) ||
@@ -260,5 +268,5 @@ else
 fi
 [[ "$truncated" == no ]] || summary+=" truncated=yes"
 [[ "$policy" == known ]] || summary+=" policy=unknown"
-[[ ! -f "$diag" ]] || summary+=" diagnostics=$diag"
+if [[ -s "$diag" ]]; then summary+=" diagnostics=$diag"; else rm -f "$diag"; fi
 echo "$summary" >&2

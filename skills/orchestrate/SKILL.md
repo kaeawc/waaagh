@@ -348,6 +348,11 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   `not-yet-available`, `forbidden`, `expired` or `transient`. Live output of a running job is only
   in the browser. Use the repository's CI classifier and
   known-flakes list before retrying or changing code.
+- GitHub reads in the scripts go through `"$SCRIPTS/gh-read.sh"`: bounded retries for network and
+  5xx failures, typed outcomes (`not-found`, `auth`, `forbidden`, `rate-limited` with `retry-at`,
+  `transient`, `malformed`), and one rate-limit cooldown shared by every lane on the host. A
+  `rate-limited` result past the pass budget means: stop GitHub work until `retry-at`, do not
+  retry in a loop. It never runs a write; writes are journaled and reconciled (`ops/`).
 - A classifier that reads only PR workflows misses push and default-branch runs; feed it both.
 - On slow platforms, setup and hook timeouts often surface as unnamed or anonymous failures:
   triage them as timeout headroom, not regression.

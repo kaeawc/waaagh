@@ -38,7 +38,7 @@ repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 json_list() { if (($#)); then printf '%s\n' "$@" | jq -R . | jq -sc .; else echo '[]'; fi; }
 
-if ! runs=$(gh run list --repo "$repo" --branch "$branch" --event push --limit "$limit" \
+if ! runs=$("$here/gh-read.sh" --json -- run list --repo "$repo" --branch "$branch" --event push --limit "$limit" \
   --json workflowName,status,conclusion,headSha,databaseId,createdAt 2>&1) ||
   ! jq -e 'type == "array"' <<<"$runs" >/dev/null 2>&1; then
   echo "unknown run list unreadable: ${runs:0:200}"
