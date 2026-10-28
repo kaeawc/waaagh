@@ -317,6 +317,29 @@ against its PR's own changes.
 - **Host sleep corrupts timings.** Failures that straddle a sleep (lid closed) are noise, but
   re-run them; do not record them as flakes.
 
+### Host load
+
+Many lanes on one machine stack their gates: load climbs past what the host can run, gates hit
+their wall caps, and lanes re-run them, which makes it worse.
+
+- **Symptoms.** A load average well above the core count (`uptime`); hundreds of test, bundler,
+  Gradle or Xcode processes; gates timing out that pass alone. To see who is responsible, count
+  processes by working directory (`lsof -a -d cwd -Fn | sed -n 's/^n//p' | sort | uniq -c | sort -rn`).
+- **Every gate goes through `"$SCRIPTS/gate-slot.sh" -- <command>`**: a host-wide semaphore
+  (default 3, `ORCHESTRATE_GATE_SLOTS`), bounded wait (exit 75 = no slot; report it, do not
+  retry in a loop). It sources `<state dir>/gate-env.sh` first, so worker, timeout and retry caps
+  apply even when a lane forgets them. Put them there once per repo.
+- **Gradle and Xcode run alone.** `gate-slot.sh` routes them to `heavy-build-slot.sh`: one heavy
+  build at a time, started only after running gates drain, with no new gate meanwhile, and
+  `org.gradle.workers.max` capped (`HEAVY_BUILD_WORKERS`, default 2). Never run a Node gate and a
+  native build at once.
+- Run the changed-files prepush check once per slice, not once per commit.
+- **Finished worktrees** go through `"$SCRIPTS/wt-cleanup.sh"` (dry run; `--apply` to remove): only
+  clean, idle, pushed, unlocked, unprotected worktrees nobody is working in, via `git worktree
+  remove` without `--force`.
+- None of these kill anything. Slots held by dead or reused PIDs are reclaimed; a live holder is
+  waited for.
+
 ### Main health
 
 A job that only passes on retry, or only from a build-cache hit, hides a red main. The red-main
