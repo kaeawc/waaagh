@@ -474,6 +474,67 @@ SH
   ! grep -q "worktree's \`scratch/\`" "$R/_common.md"
 }
 
+@test "runner writes a usage receipt from codex's turn.completed events, without double counting" {
+  runner_env
+  cat >"$FAKEBIN/codex" <<'SH'
+#!/usr/bin/env bash
+out=""; while (($#)); do [[ $1 == --output-last-message ]] && out=$2; shift; done
+cat >/dev/null
+echo '{"type":"thread.started","thread_id":"t1"}'
+echo 'not json at all'
+echo '{"type":"item.completed","item":{"text":"working"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":123,"cached_input_tokens":20,"output_tokens":10,"new_field":5}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":7,"cached_input_tokens":0,"output_tokens":3}}'
+echo done >"$out"
+SH
+  printf 'LANE-WORKTREE: %s\ntask\n' "$(cd "$REPO" && pwd -P)" >"$RUNDIR/spec.md"
+  CODEX_LANE_SERVICE_TIER=fast run run_lane "$RUNDIR/spec.md"
+  [ "$status" -eq 0 ]
+  R="$RUNDIR/codex.jsonl.usage.json"
+  jq -e '.schema == "waaagh.lane-usage/1" and .model == "gpt-6-luna" and .service_tier == "fast"
+         and .exit == 0 and .turns == 2 and .usage_source == "codex-jsonl:turn.completed"
+         and .usage.input_tokens == 130 and .usage.cached_input_tokens == 20 and .usage.output_tokens == 13
+         and .usage.reasoning_output_tokens == null and .other_usage.new_field == 5
+         and (.duration_s | type) == "number" and .lane_status == null' "$R"
+  "$SCRIPTS/../../../bin/codex-lane-usage.sh" mark --log "$RUNDIR/codex.jsonl" --status complete
+  [ "$(jq -r .lane_status "$R")" = complete ]
+  run "$SCRIPTS/../../../bin/codex-lane-usage.sh" mark --log "$RUNDIR/codex.jsonl" --status great
+  [ "$status" -eq 2 ]
+}
+
+@test "a log without usage events gives unknown counts, not zeros" {
+  L="$BATS_TEST_TMPDIR/u/codex.jsonl"; mkdir -p "${L%/*}"
+  printf '{"type":"item.completed","item":{"text":"x"}}\n{"type":"turn.failed","error":{"message":"boom"}}\n' >"$L"
+  "$SCRIPTS/../../../bin/codex-lane-usage.sh" write --log "$L" --model gpt-6-sol --exit 1 --outcome "normal exit code 1"
+  jq -e '.usage_source == "none" and .usage.input_tokens == null and .usage.output_tokens == null
+         and .turns == 0 and .failed_turns == 1 and .effort == null and .duration_s == null' "$L.usage.json"
+  rm "$L"
+  "$SCRIPTS/../../../bin/codex-lane-usage.sh" write --log "$L"
+  jq -e '.usage_source == "none"' "$L.usage.json"
+}
+
+@test "usage-report aggregates receipts by model and verified status and keeps unknowns visible" {
+  D="$BATS_TEST_TMPDIR/lanes"; mkdir -p "$D/a" "$D/b" "$D/c"
+  mk() { # dir model status input output finished source
+    jq -n --arg m "$2" --arg s "$3" --argjson i "$4" --argjson o "$5" --arg f "$6" --arg src "$7" \
+      '{schema: "waaagh.lane-usage/1", model: $m, lane_status: (if $s == "" then null else $s end),
+        usage_source: $src, usage: {input_tokens: $i, cached_input_tokens: null, output_tokens: $o,
+        reasoning_output_tokens: null}, duration_s: 10, finished_at: $f}' >"$D/$1/codex.jsonl.usage.json"
+  }
+  mk a gpt-6-luna complete 100 10 2026-10-01T00:00:00Z codex-jsonl:turn.completed
+  mk b gpt-6-luna complete 50 5 2026-10-02T00:00:00Z codex-jsonl:turn.completed
+  mk c gpt-6-sol "" null null 2026-10-03T00:00:00Z none
+  echo '{"schema":"something/9"}' >"$D/c/other.usage.json"
+  run "$SCRIPTS/usage-report.sh" --dir "$D" --dir "$D"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'gpt-6-luna\tcomplete\t2\t0\t150\t-\t15\t-\t20'* ]]
+  [[ "$output" == *$'gpt-6-sol\tunmarked\t1\t1\t-\t-\t-\t-\t10'* ]]
+  [[ "$output" == *$'total\t-\t3\t1\t150\t-\t15\t-\t30'* ]]
+  [[ "$output" == *"skipped 1 receipts with another schema"* ]]
+  run "$SCRIPTS/usage-report.sh" --dir "$D" --since 2026-10-02T00:00:00Z
+  [[ "$output" == *$'total\t-\t2\t'* ]]
+}
+
 # --- campaign scripts: readiness, merge, main health, issues, lanes, device lock ---------------
 
 # gh stub that answers by subcommand from fixture files and records every call.
