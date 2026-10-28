@@ -22,5 +22,7 @@
 8. Keep long output in files under `{{STATE}}/`, never inside a checkout (it would change the
    fingerprint), and quote excerpts (`{{SCRIPTS}}/excerpt.sh <log>`) plus the path, never whole
    logs or whole messages.
-9. Say whether each result is `verified-local` or `verified-ci`. Your report states what you did, what you skipped and why, and anything denied or surprising.
+9. Keep your final report short (about 15 lines unless your brief sets a budget): results, paths
+   to evidence, decisions needed. No narration of the steps you took.
+10. Say whether each result is `verified-local` or `verified-ci`. Your report states what you did, what you skipped and why, and anything denied or surprising.
    An item you could not finish is reported as unfinished, not as done.

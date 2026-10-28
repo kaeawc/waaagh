@@ -71,6 +71,14 @@ Claude drivers, reviewers and device-verification batches around it. So:
 - If a requested model or effort is unavailable, say so and use the nearest lower-cost option;
   never silently upgrade.
 - No role delegates further unless its brief authorizes it.
+- **One fresh, small driver per task.** A lane driver wraps one implementer run: spec path, file
+  list and short excerpts in, a short report out. When the next task comes, launch a new driver;
+  never hand a long-lived lane new work with `SendMessage`, because every resume re-sends its
+  whole accumulated context, and that, not the implementer, dominates the bill. Resume a driver
+  only to ask about the work it just returned. Pass paths and excerpts, never transcripts or full
+  diffs. Ask for replies of about 15 lines (the report format, no narration). No babysitting
+  loops: a PR gets one event watch (the host's PR monitor or one bounded `pr-ready.sh --delta`
+  check per tick), not an agent that keeps polling it.
 - Launch independent lanes in one message. Agents that poll in the background stall: every role
   is single-pass, and you relaunch it when its inputs change.
 - Route codex work only through `waaagh:codex-implementer` and `waaagh:sol-implementer`, which run
