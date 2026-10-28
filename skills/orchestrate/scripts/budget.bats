@@ -31,8 +31,8 @@ within() { # CASE COLUMN MAX
 }
 
 @test "pr-ready makes a constant number of gh calls for 20 and 100 ready PRs" {
-  within pr-ready-20-ready gh_calls 3
-  within pr-ready-100-ready gh_calls 4
+  within pr-ready-20-ready gh_calls 4
+  within pr-ready-100-ready gh_calls 5
   within pr-ready-100-ready rows 100
 }
 

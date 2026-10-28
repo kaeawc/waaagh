@@ -20,6 +20,7 @@ echo "$*" >>"$FX/calls"
 case "$*" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   *rules/branches*) echo '[]' ;;
+  "api repos/o/r/branches/"*) echo '{"protected":false}' ;;
   *graphql*) jq -n --args '{data: {repository: (reduce $ARGS.positional[] as $n ({};
       .["p" + $n] = {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: []}}))}}' \
       $(printf '%s\n' "$*" | grep -oE ' p[0-9]+:' | tr -dc '0-9\n') ;;
