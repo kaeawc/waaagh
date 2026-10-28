@@ -4,6 +4,12 @@
 #
 # Exit: codex's own exit code | 64 spec does not name this worktree | 124 hard cap | 125 stalled
 # Files next to --log: .spec (snapshot) .args .stderr .progress.latest .progress .final .exit
+#   .progress.state  semantic progress only (alive, changed files, latest message); rewritten
+#                    only when it changes
+#   .progress.rev    opaque revision of .progress.state; wait on it with codex-lane-wait.sh
+#   .progress.latest the state plus liveness counters (elapsed, log size, CPU), every poll
+# Messages and commands are capped at CODEX_LANE_MESSAGE_CHARS (default 1500) characters and each
+# changed-file entry at 200; the full record stays in the --log JSONL.
 # Env: CODEX_LANE_SERVICE_TIER (e.g. fast), CODEX_LANE_SOL_MODEL (default gpt-6.1-sol)
 set -euo pipefail
 
@@ -31,6 +37,8 @@ while (($#)); do
 done
 
 valid_positive_integer() { [[ $1 =~ ^[0-9]+$ ]] && ((10#$1 > 0)); }
+MESSAGE_CHARS=${CODEX_LANE_MESSAGE_CHARS:-1500}
+valid_positive_integer "$MESSAGE_CHARS" || { echo "codex-lane-run: bad CODEX_LANE_MESSAGE_CHARS" >&2; exit 2; }
 # The Sol lane resolves to GPT-6.1 Sol by default; override with CODEX_LANE_SOL_MODEL.
 if [[ $MODEL == gpt-6-sol ]]; then MODEL=${CODEX_LANE_SOL_MODEL:-gpt-6.1-sol}; fi
 if [[ -z $MODEL || -z $SPEC || -z $FINAL || -z $CD_DIR ]] || ! valid_positive_integer "$SOFT" || ! valid_positive_integer "$STALL" || ! valid_positive_integer "$HARD" || ! valid_positive_integer "$POLL"; then
@@ -105,7 +113,7 @@ git_summary() {
   local status=$1 count listing
   if ((is_git)); then
     count=$(printf '%s\n' "$status" | awk 'NF { n++ } END { print n+0 }')
-    listing=$(printf '%s\n' "$status" | sed -n '1,20p')
+    listing=$(printf '%s\n' "$status" | sed -n '1,20p' | cut -c1-200)
   else count=0; listing='(not a git work tree)'; fi
   printf 'Changed entries: %s\n%s' "$count" "$listing"
 }
@@ -139,7 +147,20 @@ last_message() {
     if [[ -z $message ]]; then message=$(tail -n 50 "$LOG" 2>/dev/null | grep -Eo '"command"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/^[^:]*:[[:space:]]*"//; s/"$//' | tail -n 1 || true); fi
   fi
   [[ -n $message ]] || message='(no message recovered)'
+  if ((${#message} > MESSAGE_CHARS)); then
+    message="${message:0:MESSAGE_CHARS}...[truncated: ${#message} chars; full text in $LOG]"
+  fi
   printf '%s' "$message"
+}
+# Semantic state only: no clock, size or CPU counters, so it changes only when the work does.
+write_state() {
+  local alive=$1 git_info=$2 message=$3 tmp rev
+  tmp="$LOG.progress.state.tmp"
+  printf 'Codex alive: %s\n%s\nMost recent agent message or command:\n%s\n' "$alive" "$git_info" "$message" > "$tmp"
+  if [[ -f $LOG.progress.state ]] && cmp -s "$tmp" "$LOG.progress.state"; then rm -f "$tmp"; return; fi
+  mv "$tmp" "$LOG.progress.state"
+  rev=$(git hash-object "$LOG.progress.state" 2>/dev/null || cksum < "$LOG.progress.state" | tr ' ' '-')
+  printf '%s\n' "${rev:0:12}" > "$LOG.progress.rev.tmp" && mv "$LOG.progress.rev.tmp" "$LOG.progress.rev"
 }
 write_status() {
   local destination=$1 elapsed=$2 size=$3 since=$4 alive=$5 git_info=$6 message=$7 cpu=$8
@@ -149,6 +170,7 @@ write_status() {
   } > "$destination"
 }
 mkdir -p "$(dirname "$FINAL")" "$(dirname "$LOG")"
+rm -f "$LOG.exit" "$LOG.progress.state" "$LOG.progress.rev"
 cp "$SPEC" "$LOG.spec"
 : > "$FINAL"
 echo "codex-lane-run: log=$LOG (wait on $LOG.exit, not latest.jsonl.exit)" >&2
@@ -181,6 +203,7 @@ while :; do
   if process_alive "$child_pid"; then alive=yes; else alive=no; fi
   message=$(last_message)
   write_status "$LOG.progress.latest" "$elapsed" "$size" "$since" "$alive" "$git_info" "$message" "$current_cpu"
+  write_state "$alive" "$git_info" "$message"
   checkpoint=$((elapsed / SOFT))
   while ((checkpoint > last_checkpoint)); do
     {

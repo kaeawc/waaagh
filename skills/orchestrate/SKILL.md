@@ -76,7 +76,8 @@ Claude drivers, reviewers and device-verification batches around it. So:
 - Route codex work only through `waaagh:codex-implementer` and `waaagh:sol-implementer`, which run
   `${CLAUDE_PLUGIN_ROOT}/bin/codex-lane-run.sh`; never call `codex` for implementation directly (the smoke test above is the one exception), because the runner
   carries the cross-lane guard and the timeouts. Spec line 1 must be `LANE-WORKTREE: <realpath>`;
-  the lane polls its own run directory.
+  the lane waits on its own run with `bin/codex-lane-wait.sh`, which wakes only on completion or a
+  semantic change, instead of reading progress files every poll.
 
 **Choosing the reviewer.** One independent Opus reviewer per lane. Tiny or mechanical diff: review
 it yourself. Add a second lens only for a risk surface one reviewer cannot cover (concurrency,

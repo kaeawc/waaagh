@@ -32,6 +32,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `agents/codex-implementer.md` | Routine implementation lane (GPT-6 Luna, `medium`): wraps one supervised `codex exec` run and verifies it |
 | `agents/sol-implementer.md` | Judgment implementation lane (GPT-6.1 Sol, `medium` or `high`): same runner and checks |
 | `bin/codex-lane-run.sh` | Lane runner: spec/worktree identity check, spec snapshot, stall and hard timeouts |
+| `bin/codex-lane-wait.sh` | Bounded wait on one run: returns on completion, a semantic progress change, or a small `no-change` |
 
 ### Scripts
 
