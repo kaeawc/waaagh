@@ -3,14 +3,17 @@
 #
 # Usage: pr-ready.sh [--repo OWNER/REPO] [--author LOGIN]... [--base BRANCH]
 #                    [--ignore-check NAME]... [--hold PR]... [--hold-label LABEL]
-#                    [--min-pass N] [--no-threads] [--delta]
+#                    [--min-pass N] [--no-threads] [--delta] [--pr N]
 # Output (TSV): number  verdict  head  mergeable  passed  detail
 #   READY  mergeable, no pending check, no failed check, every required check passed, and no
 #          unresolved review thread
 #   WAIT   checks still pending (detail lists them)
-#   BLOCK  detail gives the reasons: conflict | fail:<checks> | missing-required:<checks>
+#   BLOCK  detail gives EVERY reason, space separated: conflict | fail:<checks>
+#          | missing-required:<checks> | few-checks=<n> | pending:<checks> | mergeable=<state>
 #          | threads=<n> | threads=unknown (a page of review threads was unreadable)
-#          | policy=unknown (required checks could not be read) | few-checks=<n>
+#          | policy=unknown (required checks could not be read)
+#          Review threads and policy are checked for BLOCK rows too, so a row whose only blocker
+#          is a failed check really has no other: the admin path depends on that.
 #   SKIP   draft | fork | hold
 # Check identity is (provider type, workflow, name), with the Actions run and job ids taken from
 # the details URL. Only a proven replacement supersedes an earlier result: within one run, a newer
@@ -19,8 +22,8 @@
 # superseded, so every instance counts. A cancelled check otherwise counts as failed.
 # --author defaults to the authenticated gh user; repeat it to add e.g. app/dependabot.
 # --ignore-check drops an advisory check from every count (repeatable). --min-pass (default 1)
-# guards against a PR whose checks have not been reported yet. Review threads of every otherwise
-# READY PR are read in one batched GraphQL call (50 PRs per call), following every further page.
+# guards against a PR whose checks have not been reported yet. --pr limits the output to one PR.
+# Review threads of every READY or BLOCK PR are read in one batched GraphQL call (50 PRs per call), following every further page.
 # Required checks come from rulesets and classic branch protection; a failed or malformed read of
 # either blocks every otherwise READY PR. Read problems are written to
 # <state dir>/diagnostics/pr-ready-<time>.log, named on the summary line.
@@ -35,7 +38,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 
-repo="" base="" hold_label="hold" min_pass=1 threads=yes delta=no
+repo="" base="" hold_label="hold" min_pass=1 threads=yes delta=no only_pr=""
 all_args=("$@")
 authors=() ignores=() holds=()
 while (($#)); do
@@ -49,7 +52,8 @@ while (($#)); do
     --min-pass) min_pass=$2; shift 2 ;;
     --no-threads) threads=no; shift ;;
     --delta) delta=yes; shift ;;
-    -h | --help) sed -n '2,32p' "$0"; exit 0 ;;
+    --pr) only_pr=$2; shift 2 ;;
+    -h | --help) sed -n '2,35p' "$0"; exit 0 ;;
     *) echo "pr-ready.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -96,12 +100,13 @@ truncated=no
 [[ "$(jq length <<<"$prs")" -lt "$list_limit" ]] || truncated=yes
 rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" --argjson holds "$holds_json" \
     --argjson required "$required" --arg base "$base" --arg hold_label "$hold_label" \
-    --argjson min_pass "$min_pass" '
+    --argjson min_pass "$min_pass" --arg only_pr "$only_pr" '
     def norm: . as $c | (($c.conclusion // "") | if . == "" then ($c.state // $c.status // "") else . end) | ascii_upcase;
     def kind: if IN("SUCCESS", "SKIPPED", "NEUTRAL") then "pass"
               elif IN("", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED") then "pending"
               else "fail" end;
-    .[] | select(.author.login as $a | $authors | index($a)) | select(.baseRefName == $base)
+    .[] | select($only_pr == "" or (.number | tostring) == $only_pr)
+    | select(.author.login as $a | $authors | index($a)) | select(.baseRefName == $base)
     # Check identity: provider type, workflow and name, plus the Actions run and job ids from the
     # details URL. Only a proven replacement supersedes an earlier result (see the header).
     | ([(.statusCheckRollup // [])[]
@@ -141,14 +146,18 @@ rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" 
             (if ($missing | length) > 0 and ($pend | length) == 0 then "missing-required:" + ($missing | join(",")) else empty end),
             (if ($pass | length) < $min_pass and ($pend | length) == 0 then "few-checks=\($pass | length)" else empty end)
           ]) as $block
-         | if ($block | length) > 0 then ["BLOCK", ($block | join(" "))]
+         | if ($block | length) > 0 then
+             # Keep the other dimensions next to the blockers instead of hiding them.
+             ["BLOCK", ($block + [(if ($pend | length) > 0 then "pending:" + ($pend | join(",")) else empty end),
+                                   (if IN(.mergeable; "MERGEABLE", "CONFLICTING") then empty else "mergeable=" + .mergeable end)]
+                       | join(" "))]
            elif ($pend | length) > 0 or .mergeable != "MERGEABLE" then
              ["WAIT", (if ($pend | length) > 0 then "pending:" + ($pend | join(",")) else "mergeable=" + .mergeable end)]
            else ["READY", "-"] end
        end) as $v
     | [.number, $v[0], .headRefOid[0:9], .mergeable, ($pass | length), $v[1]] | @tsv' <<<"$prs" | sort -n)
 
-# Unresolved, current review threads per otherwise READY PR, in batched GraphQL calls; a PR with
+# Unresolved, current review threads per READY or BLOCK PR, in batched GraphQL calls; a PR with
 # more than one page is followed page by page through its cursor. Prints "number<TAB>count", where
 # count is "unknown" when any page of that PR could not be read.
 thread_counts() {
@@ -194,7 +203,7 @@ more_threads() {
 tcounts=""
 if [[ "$threads" == yes ]]; then
   ready_nums=()
-  while IFS= read -r n; do ready_nums+=("$n"); done < <(awk -F'\t' '$2 == "READY" { print $1 }' <<<"$rows")
+  while IFS= read -r n; do ready_nums+=("$n"); done < <(awk -F'\t' '$2 == "READY" || $2 == "BLOCK" { print $1 }' <<<"$rows")
   for ((i = 0; i < ${#ready_nums[@]}; i += 50)); do
     while IFS=$'\t' read -r n count cursor; do
       [[ -n "$n" ]] || continue
@@ -210,12 +219,18 @@ out=""
 while IFS=$'\t' read -r num verdict head mergeable passed detail; do
   [[ -n "$num" ]] || continue
   open=$((open + 1))
-  if [[ "$verdict" == READY && "$policy" == unknown ]]; then
-    verdict=BLOCK detail="policy=unknown"
-  elif [[ "$verdict" == READY && "$threads" == yes ]]; then
-    n=$(awk -F'\t' -v n="$num" '$1 == n { print $2; exit }' <<<"$tcounts")
-    n=${n:-unknown}
-    if [[ "$n" != 0 ]]; then verdict=BLOCK detail="threads=$n"; fi
+  if [[ "$verdict" == READY || "$verdict" == BLOCK ]]; then
+    extra=""
+    [[ "$policy" == known ]] || extra+=" policy=unknown"
+    if [[ "$threads" == yes ]]; then
+      n=$(awk -F'\t' -v n="$num" '$1 == n { print $2; exit }' <<<"$tcounts")
+      n=${n:-unknown}
+      [[ "$n" == 0 ]] || extra+=" threads=$n"
+    fi
+    if [[ -n "$extra" ]]; then
+      if [[ "$verdict" == READY ]]; then detail=${extra# }; else detail+=$extra; fi
+      verdict=BLOCK
+    fi
   fi
   [[ "$verdict" == READY ]] && ready=$((ready + 1))
   out+=$(printf '%s\t%s\t%s\t%s\t%s\t%s' "$num" "$verdict" "$head" "$mergeable" "$passed" "$detail")$'\n'
