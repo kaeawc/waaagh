@@ -63,4 +63,6 @@ GAPS: <spec ambiguities, unfinished items, or "none">
 RUN: <RUN_DIR>
 ```
 
+Just before returning, record the status you report on the run's usage receipt: `${CLAUDE_PLUGIN_ROOT}/bin/codex-lane-usage.sh mark --log "<LOG>" --status <STATUS>`.
+
 Quote evidence, do not paste it: the decisive lines plus a path. One codex run per task unless the caller decomposed it. Never `pkill`/`killall`/kill by pattern; kill only a PID you started and recorded.

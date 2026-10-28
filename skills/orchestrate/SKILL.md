@@ -423,7 +423,9 @@ verification batch, check the device lock those routines use; never start a batc
 ## Final report
 
 Per lane: model and effort as run, artifact (diff or PR), validation key and result, review
-verdict, and anything unavailable, substituted, skipped or escalated. For a campaign add: merged
+verdict, and anything unavailable, substituted, skipped or escalated. Codex usage comes from
+`"$SCRIPTS/usage-report.sh"` (receipts the runner writes from codex's own usage events; unknown
+stays unknown, and no cost is inferred), always next to how many lanes were verified complete. For a campaign add: merged
 PRs, issues closed by the hygiene bot, verification batches and their findings, admin merges with
 their evidence, the decision queue, and the overrides from memory you applied. Never absorb a lane
 failure, a model substitution or a cost change quietly.

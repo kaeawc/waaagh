@@ -4,6 +4,7 @@
 #
 # Exit: codex's own exit code | 64 spec does not name this worktree | 124 hard cap | 125 stalled
 # Files next to --log: .spec (snapshot) .args .stderr .progress.latest .progress .final .exit
+#   .usage.json      usage receipt from codex's own usage events (codex-lane-usage.sh)
 #   .progress.state  semantic progress only (alive, changed files, latest message); rewritten
 #                    only when it changes
 #   .progress.rev    opaque revision of .progress.state; wait on it with codex-lane-wait.sh
@@ -12,6 +13,7 @@
 # changed-file entry at 200; the full record stays in the --log JSONL.
 # Env: CODEX_LANE_SERVICE_TIER (e.g. fast), CODEX_LANE_SOL_MODEL (default gpt-6.1-sol)
 set -euo pipefail
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 usage() {
   echo "Usage: codex-lane-run.sh --model SLUG --spec FILE --final FILE --cd DIR [--log FILE] [--effort RUNG] [--soft SECS] [--stall SECS] [--hard SECS] [--poll SECS]" >&2
@@ -239,6 +241,10 @@ if [[ ! -s $FINAL ]]; then
   } > "$FINAL"
 fi
 cp "$FINAL" "$LOG.final" 2>/dev/null || true
+# Usage receipt before .exit, so a waiter that sees .exit also finds the receipt.
+"$HERE/codex-lane-usage.sh" write --log "$LOG" --model "$MODEL" --effort "$EFFORT" \
+  --tier "${CODEX_LANE_SERVICE_TIER:-}" --exit "$exit_code" --outcome "$reason" \
+  --started "$start" --finished "$(date +%s)" >/dev/null 2>&1 || true
 printf '%s\n' "$exit_code" > "$LOG.exit"
 trap - EXIT
 exit "$exit_code"

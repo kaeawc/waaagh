@@ -20,6 +20,6 @@ jobs:
           cd skills/orchestrate/scripts && shellcheck -S warning -x ./*.sh
           shellcheck -S warning ../../../bin/codex-lane-run.sh
       - name: Self-test
-        run: bats skills/orchestrate/scripts/selftest.bats
+        run: bats skills/orchestrate/scripts/selftest.bats skills/orchestrate/scripts/budget.bats
       - name: Validate manifests
         run: jq -e . .claude-plugin/plugin.json .claude-plugin/marketplace.json >/dev/null
