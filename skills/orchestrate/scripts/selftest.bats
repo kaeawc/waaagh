@@ -834,7 +834,8 @@ merge_fixture() {
   stub_gh_router
   echo '{"state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":"abcdef0123456789abcdef0123456789abcdef01","author":{"login":"me"},"mergeable":"MERGEABLE"}' >"$FX/pr.json"
   echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}' >"$FX/pr-merged.json"
-  echo '[{"number":1}]' >"$FX/prs.json"
+  # The readiness row: build passes, the "sim" check failed (a classified flake in the admin tests).
+  pr_row 1 me false false MERGEABLE '[{"name":"build","conclusion":"SUCCESS"},{"name":"sim","conclusion":"FAILURE"}]' | jq -s . >"$FX/prs.json"
 }
 
 @test "pr-merge merges a verified head and logs it" {
@@ -860,7 +861,7 @@ merge_fixture() {
 @test "pr-merge --admin keeps the same head guard" {
   merge_fixture
   touch "$FX/race"; echo 2222222222222222222222222222222222222222 >"$FX/race-head"
-  ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "known flake: sim timeout"
+  ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --except-check sim --evidence "known flake: sim timeout"
   [ "$status" -eq 3 ]
   grep -q 'pr merge 1 --repo o/r --squash --match-head-commit abcdef0123456789abcdef0123456789abcdef01 --admin' "$FX/calls"
   [ ! -f "$FX/merged" ]
@@ -884,13 +885,66 @@ merge_fixture() {
   merge_fixture
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin
   [ "$status" -eq 6 ]
-  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "known flake: sim timeout"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --except-check sim --evidence "known flake: sim timeout"
   [ "$status" -eq 6 ]
   [[ "$output" == *"fast-path only"* ]]
   ! grep -q 'pr merge' "$FX/calls"
   ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "known flake: sim timeout"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"needs --except-check"* ]]
+  ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --except-check sim --evidence "known flake: sim timeout"
   [ "$status" -eq 0 ]
   grep -q 'pr merge 1 --repo o/r --squash --match-head-commit abcdef0123456789abcdef0123456789abcdef01 --admin' "$FX/calls"
+}
+
+@test "pr-ready reports every blocker of a failing PR, including review threads it now reads" {
+  stub_gh_router
+  pr_row 1 me false false MERGEABLE '[{"name":"build","conclusion":"SUCCESS"},{"name":"test","conclusion":"FAILURE"}]' | jq -s . >"$FX/prs.json"
+  echo '{"1":[{"isResolved":false,"isOutdated":false}]}' >"$FX/threads.json"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'1\tBLOCK\t'*$'\tfail:test threads=1'* ]]
+  grep -q graphql "$FX/calls"
+  pr_row 2 me false false UNKNOWN '[{"name":"build","status":"IN_PROGRESS"},{"name":"test","conclusion":"FAILURE"}]' | jq -s . >"$FX/prs.json"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'2\tBLOCK\t'*$'\tfail:test pending:build mergeable=UNKNOWN'* ]]
+  run "$SCRIPTS/pr-ready.sh" --repo o/r --pr 3
+  [ -z "$(printf '%s\n' "$output" | grep -v '^open=')" ]
+}
+
+@test "the admin exception covers only the excepted checks, never review, policy or other failures" {
+  merge_fixture
+  export ORCHESTRATE_FAST_PATH_OVER=0
+  adm() { run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "sim: known flake" "$@"; }
+  # A classified flake plus an unresolved review thread is refused.
+  echo '{"1":[{"isResolved":false,"isOutdated":false}]}' >"$FX/threads.json"
+  adm --except-check sim
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"threads=1"* ]]
+  # Unreadable review threads cannot authorize it either.
+  echo '{"1":"null"}' >"$FX/threads.json"
+  adm --except-check sim
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"threads=unknown"* ]]
+  echo '{}' >"$FX/threads.json"
+  # A failure that is not excepted, or a pending check, is refused.
+  pr_row 1 me false false MERGEABLE '[{"name":"build","conclusion":"FAILURE"},{"name":"sim","conclusion":"FAILURE"}]' | jq -s . >"$FX/prs.json"
+  adm --except-check sim
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"fail:build (not excepted)"* ]]
+  pr_row 1 me false false MERGEABLE '[{"name":"build","status":"IN_PROGRESS"},{"name":"sim","conclusion":"FAILURE"}]' | jq -s . >"$FX/prs.json"
+  adm --except-check sim
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"pending:build"* ]]
+  # Unknown policy is not waived by a check exception.
+  pr_row 1 me false false MERGEABLE '[{"name":"build","conclusion":"SUCCESS"},{"name":"sim","conclusion":"FAILURE"}]' | jq -s . >"$FX/prs.json"
+  touch "$FX/rules-fails"
+  adm --except-check sim
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"policy=unknown"* ]]
+  ! grep -q 'pr merge' "$FX/calls"
+  rm "$FX/rules-fails"
+  adm --except-check sim
+  [ "$status" -eq 0 ]
 }
 
 @test "pr-merge reports a merge GitHub rejected" {

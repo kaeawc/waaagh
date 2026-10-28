@@ -24,9 +24,12 @@ red `{{BASE}}`.
    run; saves under `{{STATE}}/logs/` and prints an excerpt), and classify the excerpt with
    {{CI_CLASSIFIER}}. `not-yet-available`, `transient` or `running`: the failure is unclassified
    for this pass. Merge with
-   `pr-merge.sh … --admin --evidence "<check>: <flake entry or classifier verdict>"` only when
-   EVERY failed check is a classified known flake or infrastructure failure, nothing is pending
-   except checks in {{IGNORE_CHECKS}}, and the row has no other block reason. One unclassified
+   `pr-merge.sh … --admin --except-check <check>… --evidence "<check>: <flake entry or classifier
+   verdict>"` (one `--except-check` per classified check, plus {{IGNORE_CHECKS}}) only when EVERY
+   failed check is a classified known flake or infrastructure failure and the row has no other
+   block reason (no `pending:`, `threads=`, `policy=`, `conflict`, `mergeable=` or
+   `missing-required:`). `pr-merge.sh` re-reads readiness and refuses (exit 6) if anything but
+   those checks blocks. One unclassified
    failure means no merge. In `conservative` mode never pass `--admin`; just report the failures.
 5. After the last merge, run `main-health.sh` again and report its line.
 

@@ -273,7 +273,9 @@ fewer.
 
 `pr-merge.sh` enforces the guard: `--admin` is refused outside the fast path unless the user
 authorized admin merges (`ORCHESTRATE_ADMIN_MERGE=1`, set only on their word, which memory may
-record), and always needs `--evidence`. It also refuses a moved head, a draft, a fork-head PR, an
+record), and always needs `--evidence` and an `--except-check` per bypassed check. The exception
+covers those checks only: a fresh readiness row must show no other blocker (review threads,
+unreadable threads or policy, pending checks, conflict, missing required checks). It also refuses a moved head, a draft, a fork-head PR, an
 author you did not list, and any merge while `MAIN_RED` is set (except `--main-fix`).
 
 **Direct (ungated or admin) merging** is a deliberate mode, never a default. Pair it with a

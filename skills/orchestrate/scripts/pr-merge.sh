@@ -3,12 +3,18 @@
 # ready. Never merges a draft, a fork-head PR, a PR by an unlisted author, or a moved head.
 #
 # Usage: pr-merge.sh --pr N --head SHA [--repo OWNER/REPO] [--author LOGIN]...
-#                    [--method squash|merge|rebase] [--admin --evidence TEXT] [--main-fix]
+#                    [--method squash|merge|rebase] [--main-fix]
+#                    [--admin --except-check NAME... --evidence TEXT] [--ignore-check NAME]...
 #   --head      the head SHA (any prefix >= 7) that pr-ready.sh judged; a moved head refuses
 #   --admin     bypass branch protection. Allowed only in the fast path: more open PRs than
 #               ORCHESTRATE_FAST_PATH_OVER (default 20), or ORCHESTRATE_ADMIN_MERGE=1 when the
 #               user authorized it. Needs --evidence naming the classified flake or pending
-#               advisory check being bypassed; it is written to the merge log.
+#               advisory check being bypassed; it is written to the merge log. The exception is
+#               only for the checks named by --except-check: a fresh pr-ready.sh row for this PR
+#               must show no blocker other than failures of exactly those checks (no review
+#               thread, unknown thread or policy read, conflict, pending check, missing required
+#               check), or the merge is refused with exit 6.
+#   --ignore-check  advisory checks, passed to pr-ready.sh for that row
 #   --main-fix  this PR fixes a red default branch; merge although MAIN_RED is set
 # The merge itself is bound to the full head SHA read here (gh pr merge --match-head-commit), so a
 # push that lands between this check and the merge makes GitHub refuse it; that refusal is
@@ -22,7 +28,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 
 repo="" pr="" head="" method=squash admin=no evidence="" main_fix=no
-authors=()
+authors=() excepts=() ignores=()
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -32,12 +38,14 @@ while (($#)); do
     --method) method=$2; shift 2 ;;
     --admin) admin=yes; shift ;;
     --evidence) evidence=$2; shift 2 ;;
+    --except-check) excepts+=("$2"); shift 2 ;;
+    --ignore-check) ignores+=("$2"); shift 2 ;;
     --main-fix) main_fix=yes; shift ;;
-    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,18p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,24p' "$0" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
@@ -50,6 +58,7 @@ fi
 
 if [[ "$admin" == yes ]]; then
   [[ -n "$evidence" ]] || { echo "refused: --admin needs --evidence"; exit 6; }
+  ((${#excepts[@]})) || { echo "refused: --admin needs --except-check for each check it bypasses"; exit 6; }
   if [[ "${ORCHESTRATE_ADMIN_MERGE:-0}" != 1 ]]; then
     over=${ORCHESTRATE_FAST_PATH_OVER:-20}
     open=$(gh pr list --repo "$repo" --state open --limit 300 --json number | jq length)
@@ -71,6 +80,37 @@ if [[ "$ok" != true ]]; then
 fi
 
 full=$(jq -r .headRefOid <<<"$info")
+
+if [[ "$admin" == yes ]]; then
+  # The admin exception covers the named checks only. Every other dimension must be clear in a
+  # fresh readiness row for this exact head.
+  flags=(--repo "$repo" --pr "$pr")
+  for a in "${authors[@]}"; do flags+=(--author "$a"); done
+  for c in ${ignores[@]+"${ignores[@]}"}; do flags+=(--ignore-check "$c"); done
+  row=$("$here/pr-ready.sh" "${flags[@]}" 2>/dev/null | head -1) || row=""
+  IFS=$'\t' read -r _ verdict rhead _ _ detail <<<"$row"
+  why=""
+  if [[ -z "$row" ]]; then why="no readiness row for PR $pr"
+  elif [[ "$full" != "$rhead"* ]]; then why="readiness row is for head $rhead, not ${full:0:9}"
+  elif [[ "$verdict" == BLOCK ]]; then
+    for token in $detail; do
+      if [[ "$token" == fail:* ]]; then
+        IFS=, read -r -a failed <<<"${token#fail:}"
+        for f in "${failed[@]}"; do
+          printf '%s\n' "${excepts[@]}" | grep -qxF -- "$f" || why+=" fail:$f (not excepted)"
+        done
+      else
+        why+=" $token"
+      fi
+    done
+  elif [[ "$verdict" != READY ]]; then why="$verdict ${detail}"
+  fi
+  if [[ -n "$why" ]]; then
+    log "refused admin: blockers beyond the excepted checks:$why"
+    echo "refused: --admin covers only ${excepts[*]}; other blockers:$why"
+    exit 6
+  fi
+fi
 log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "$full" "$*" >>"$state/merges.log"; }
 args=("--$method" --match-head-commit "$full")
 [[ "$admin" == yes ]] && args+=(--admin)
