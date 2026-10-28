@@ -827,6 +827,63 @@ JSON
   [ "$status" -eq 2 ]
 }
 
+run_json() { # workflow status conclusion sha id createdAt
+  jq -cn --arg w "$1" --arg s "$2" --arg c "$3" --arg h "$4" --argjson id "$5" --arg t "$6" \
+    '{workflowName:$w,status:$s,conclusion:$c,headSha:$h,databaseId:$id,createdAt:$t}'
+}
+
+@test "main-health keeps the hold when a selected workflow has no completed evidence" {
+  stub_gh_router
+  mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"; echo "red old" >"$ORCHESTRATE_STATE_DIR/o__r/MAIN_RED"
+  { run_json Build completed success aaaaaaaaaaaa 1 2026-09-27T01:00:00Z
+    run_json Tests in_progress "" bbbbbbbbbbbb 2 2026-09-27T02:00:00Z; } | jq -s . >"$FX/runs.json"
+  run "$SCRIPTS/main-health.sh" --repo o/r --branch main --workflow Build --workflow Tests
+  [ "$status" -eq 2 ]
+  [ "$output" = "unknown missing=Tests(pending)" ]
+  [ -f "$ORCHESTRATE_STATE_DIR/o__r/MAIN_RED" ]
+  run "$SCRIPTS/main-health.sh" --repo o/r --branch main --workflow Build --workflow Deploy
+  [ "$output" = "unknown missing=Deploy(no-run)" ]
+  # The pending-only control stays unknown.
+  run_json Tests in_progress "" bbbbbbbbbbbb 2 2026-09-27T02:00:00Z | jq -s . >"$FX/runs.json"
+  run "$SCRIPTS/main-health.sh" --repo o/r --branch main
+  [ "$status" -eq 2 ]
+  [ -f "$ORCHESTRATE_STATE_DIR/o__r/MAIN_RED" ]
+}
+
+@test "main-health clears the hold only with every selected workflow green, naming each SHA" {
+  stub_gh_router
+  mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"; echo "red old" >"$ORCHESTRATE_STATE_DIR/o__r/MAIN_RED"
+  { run_json Build completed success aaaaaaaaaaaa 1 2026-09-27T01:00:00Z
+    run_json Tests completed success bbbbbbbbbbbb 2 2026-09-27T02:00:00Z
+    run_json Badges completed failure bbbbbbbbbbbb 3 2026-09-27T02:00:00Z; } | jq -s . >"$FX/runs.json"
+  run "$SCRIPTS/main-health.sh" --repo o/r --branch main --workflow Build --workflow Tests --ignore-workflow Badges
+  [ "$status" -eq 0 ]
+  [ "$output" = "green bbbbbbbbb Build@aaaaaaaaa,Tests@bbbbbbbbb mixed-heads" ]
+  [ ! -f "$ORCHESTRATE_STATE_DIR/o__r/MAIN_RED" ]
+  # Ignored workflows stay advisory; the same failure in a selected workflow is red.
+  run "$SCRIPTS/main-health.sh" --repo o/r --branch main --ignore-workflow Badges
+  [ "$status" -eq 0 ]
+  run "$SCRIPTS/main-health.sh" --repo o/r --branch main --workflow Build --workflow Badges
+  [ "$status" -eq 1 ]
+  [ "$output" = "red bbbbbbbbb Badges=failure(3)" ]
+}
+
+@test "main-health tells an exhausted run window from a missing workflow, and an unreadable list from red" {
+  stub_gh_router
+  for i in 1 2 3; do run_json Build completed success "aaaaaaaaaa0$i" "$i" "2026-09-27T0$i:00:00Z"; done | jq -s . >"$FX/runs.json"
+  run "$SCRIPTS/main-health.sh" --repo o/r --branch main --workflow Build --workflow Nightly --limit 3
+  [ "$status" -eq 2 ]
+  [ "$output" = "unknown missing=Nightly(not-in-window)" ]
+  run "$SCRIPTS/main-health.sh" --repo o/r --branch main --workflow Build --workflow Nightly --limit 10
+  [ "$output" = "unknown missing=Nightly(no-run)" ]
+  echo 'not json' >"$FX/runs.json"
+  mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"; echo "red old" >"$ORCHESTRATE_STATE_DIR/o__r/MAIN_RED"
+  run "$SCRIPTS/main-health.sh" --repo o/r --branch main
+  [ "$status" -eq 2 ]
+  [[ "$output" == "unknown run list unreadable"* ]]
+  [ -f "$ORCHESTRATE_STATE_DIR/o__r/MAIN_RED" ]
+}
+
 @test "campaign lanes follow the three tiers and accept overrides" {
   [ "$("$SCRIPTS/campaign.sh" lanes --bots idle --verify idle)" = 16 ]
   [ "$("$SCRIPTS/campaign.sh" lanes --bots working --verify idle)" = 12 ]
