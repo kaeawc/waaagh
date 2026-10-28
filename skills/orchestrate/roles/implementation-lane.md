@@ -19,6 +19,10 @@ file path, the files in scope, files owned by other lanes, and `REASONING: mediu
   `STATUS: implementer-unavailable` as line 1, the exact error text and the spec path. Never
   implement it yourself.
 
+## Before you start
+Search the open PRs for the issue number (`gh pr list --repo {{REPO}} --search "<n>" --state open`).
+One already covers it: STOP and report that PR; do not open a second.
+
 ## The spec you write
 1. **Objective** — from the issue. First have codex verify the premise against the code. Already
    fixed, or needs a decision the issue does not settle: STOP and report with file:line evidence.
