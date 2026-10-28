@@ -1140,6 +1140,35 @@ run_json() { # workflow status conclusion sha id createdAt
   [ "$(jq -r .last_verification_sha "$ORCHESTRATE_STATE_DIR/o__r/campaign.json")" = abc123 ]
 }
 
+@test "campaign wrap-up stops new lanes, keeps the rest of status, and reports when drained" {
+  stub_gh_router
+  jq -n '[range(0;3)|{number:.}]' >"$FX/prs.json"
+  run "$SCRIPTS/campaign.sh" wrap-up on --repo o/r
+  [ "$output" = "wrap-up on" ]
+  [ "$("$SCRIPTS/campaign.sh" lanes --repo o/r --bots idle --verify idle)" = 0 ]
+  [ "$("$SCRIPTS/campaign.sh" lanes --bots idle --verify idle)" = 16 ]   # no repo: the pure cap
+  S="$ORCHESTRATE_STATE_DIR/o__r"
+  printf 'wt-a\tlane/a\t12\tsrc/a.ts\tsol\tawaiting-ci\nwt-b\tlane/b\t13\tsrc/b.ts\tsol\tmerged\n' >"$S/lanes.tsv"
+  printf '# Decisions\n- [ ] keep the v1 API?\n- [x] drop Node 18\n- [ ] rename the flag?\n' >"$S/decisions.md"
+  run "$SCRIPTS/campaign.sh" status --repo o/r --bots idle
+  [[ "$output" == *"wrap_up=on"* ]]
+  [[ "$output" == *"lanes=0"* ]]
+  [[ "$output" == *"active_lanes=1"* ]]
+  [[ "$output" == *"decisions_open=2"* ]]
+  [[ "$output" == *"drained=no"* ]]
+  [[ "$output" == *"main=ok"* && "$output" == *"merge_mode="* ]]
+  echo '[]' >"$FX/prs.json"
+  printf 'wt-a\tlane/a\t12\tsrc/a.ts\tsol\tmerged\n' >"$S/lanes.tsv"
+  run "$SCRIPTS/campaign.sh" status --repo o/r
+  [[ "$output" == *"drained=yes"* ]]
+  run "$SCRIPTS/campaign.sh" wrap-up off --repo o/r
+  run "$SCRIPTS/campaign.sh" status --repo o/r --bots idle
+  [[ "$output" == *"wrap_up=off"* && "$output" == *"lanes=16"* ]]
+  [[ "$output" != *"drained="* ]]
+  run "$SCRIPTS/campaign.sh" wrap-up maybe --repo o/r
+  [ "$status" -eq 2 ]
+}
+
 @test "issues-ranked puts priority bugs first, then bugs, newest first, and marks issues in a PR" {
   stub_gh_router
   echo '[{"number":50,"closingIssuesReferences":[{"number":3}]}]' >"$FX/prs.json"

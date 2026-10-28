@@ -203,8 +203,8 @@ Everything a campaign must remember lives in one directory per repository:
 | `../validate/` | `validate.sh` | validation receipts and logs, keyed by `fingerprint.sh --key` (shared across repos; `ORCHESTRATE_VALIDATE_DIR`) |
 | `hygiene-actions.log`, `hygiene/` | hygiene bot | closes made; plans and ranked lanes |
 | `briefs/`, `lane-rules.md` | you | filled role briefs; repository rules for every lane |
-| `lanes.tsv` | you | active lanes: worktree, branch, issues, files, agent, status |
-| `decisions.md` | you | owner-decision queue: question, options, what it blocks, answer |
+| `lanes.tsv` | you | lanes: worktree, branch, issues, files, agent, status (last column; `done`, `merged`, `closed`, `abandoned` end a lane) |
+| `decisions.md` | you | owner-decision queue, one `- [ ] question — options — what it blocks` line each, `- [x]` once answered |
 | `verify/<batch>/` | verification | evidence and report per batch |
 
 Per-PR checkpoints and claims stay under `~/.claude/orchestrate/prs/` (`pr-claim.sh path`). Do not
@@ -217,7 +217,12 @@ Start by reading memory and `"$SCRIPTS/campaign.sh" status`; then repeat this ti
 agent reports or a PR changes. Do not tick on a timer.
 
 1. **Stop check.** `paused=yes` (an open issue labelled `orchestrate-pause` or `fleet-pause`):
-   launch nothing new, let running agents finish, report.
+   launch nothing new, let running agents finish, report. **Wrap-up** (`wrap_up=on`, set with
+   `"$SCRIPTS/campaign.sh" wrap-up on` when the owner says to stop starting work and finish what
+   is in flight): skip Plan (4) and Fill (6), so `lanes=0`; still fix a red default branch (2),
+   merge ready PRs and run the rebase bot and PR doctor on open PRs (3), and give a lane to any PR
+   or issue the owner names explicitly. When `drained=yes` (no open PR, no active lane), report the
+   open owner decisions (`decisions_open`) and stop; `wrap-up off` resumes the normal loop.
 2. **Default branch.** `"$SCRIPTS/main-health.sh"` (memory lists advisory workflows to ignore).
    Red: the first free lane fixes it, and the merge bot merges only that fix until it is green
    again. `unknown` (a selected workflow still pending or missing, or the run list unreadable)
