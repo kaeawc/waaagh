@@ -566,8 +566,15 @@ case "$*" in
           else {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: .}} end)))}}' \
         $(printf '%s\n' "$*" | grep -oE ' p[0-9]+:' | tr -dc '0-9\n')
     fi ;;
-  "pr merge"*) [ -f "$FX/merge-fails" ] && { echo "blocked"; exit 1; }; echo MERGED >"$FX/merged" ;;
-  "pr view"*) if [ -f "$FX/merged" ]; then cat "$FX/pr-merged.json"; else cat "$FX/pr.json"; fi ;;
+  "pr merge"*) [ -f "$FX/merge-fails" ] && { echo "blocked"; exit 1; }
+    # Like GitHub: refuse unless --match-head-commit names the current remote head exactly.
+    want=$(printf '%s\n' "$*" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')
+    cur=$(cat "$FX/remote-head" 2>/dev/null || jq -r .headRefOid "$FX/pr.json")
+    { [ -n "$want" ] && [ "$want" = "$cur" ]; } || { echo "Head branch was modified. Review and try the merge again."; exit 1; }
+    echo MERGED >"$FX/merged" ;;
+  "pr view"*) if [ -f "$FX/merged" ]; then cat "$FX/pr-merged.json"
+    elif [ -f "$FX/remote-head" ]; then jq --arg h "$(cat "$FX/remote-head")" '.headRefOid = $h' "$FX/pr.json"
+    else cat "$FX/pr.json"; if [ -f "$FX/race" ]; then rm "$FX/race"; cp "$FX/race-head" "$FX/remote-head"; fi; fi ;;
   "pr list"*merged*) cat "$FX/prs-merged.json" ;;
   "pr list"*) cat "$FX/prs.json" ;;
   "run list"*) cat "$FX/runs.json" ;;
@@ -758,7 +765,7 @@ ready_prs() { # n: n mergeable, green PRs by me
 
 merge_fixture() {
   stub_gh_router
-  echo '{"state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":"abcdef0123","author":{"login":"me"},"mergeable":"MERGEABLE"}' >"$FX/pr.json"
+  echo '{"state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":"abcdef0123456789abcdef0123456789abcdef01","author":{"login":"me"},"mergeable":"MERGEABLE"}' >"$FX/pr.json"
   echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}' >"$FX/pr-merged.json"
   echo '[{"number":1}]' >"$FX/prs.json"
 }
@@ -768,8 +775,28 @@ merge_fixture() {
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
   [ "$status" -eq 0 ]
   [[ "$output" == "merged 1 feedface" ]]
-  grep -q 'pr merge 1 --repo o/r --squash$' "$FX/calls"
-  grep -q 'merged feedface' "$ORCHESTRATE_STATE_DIR/o__r/merges.log"
+  grep -q 'pr merge 1 --repo o/r --squash --match-head-commit abcdef0123456789abcdef0123456789abcdef01$' "$FX/calls"
+  grep -q $'head=abcdef0123456789abcdef0123456789abcdef01\tmerged feedface' "$ORCHESTRATE_STATE_DIR/o__r/merges.log"
+}
+
+@test "pr-merge refuses when the head moves between its check and the merge" {
+  merge_fixture
+  touch "$FX/race"; echo 1111111111111111111111111111111111111111 >"$FX/race-head"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 3 ]
+  [[ "$output" == "head moved during merge: judged abcdef012, now 111111111"* ]]
+  [ ! -f "$FX/merged" ]
+  [ "$(grep -c 'pr merge' "$FX/calls")" -eq 1 ]
+  grep -q $'head=abcdef0123456789abcdef0123456789abcdef01\trefused head moved during merge to 111111111' "$ORCHESTRATE_STATE_DIR/o__r/merges.log"
+}
+
+@test "pr-merge --admin keeps the same head guard" {
+  merge_fixture
+  touch "$FX/race"; echo 2222222222222222222222222222222222222222 >"$FX/race-head"
+  ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "known flake: sim timeout"
+  [ "$status" -eq 3 ]
+  grep -q 'pr merge 1 --repo o/r --squash --match-head-commit abcdef0123456789abcdef0123456789abcdef01 --admin' "$FX/calls"
+  [ ! -f "$FX/merged" ]
 }
 
 @test "pr-merge refuses a moved head, a foreign author, and a red default branch" {
@@ -796,7 +823,7 @@ merge_fixture() {
   ! grep -q 'pr merge' "$FX/calls"
   ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "known flake: sim timeout"
   [ "$status" -eq 0 ]
-  grep -q 'pr merge 1 --repo o/r --squash --admin' "$FX/calls"
+  grep -q 'pr merge 1 --repo o/r --squash --match-head-commit abcdef0123456789abcdef0123456789abcdef01 --admin' "$FX/calls"
 }
 
 @test "pr-merge reports a merge GitHub rejected" {
