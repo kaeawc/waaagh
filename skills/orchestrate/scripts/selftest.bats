@@ -281,7 +281,13 @@ case "$*" in
   "api user") echo '{"login":"me"}' ;;
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   *rules/branches*) cat "$FX/rules.json" ;;
-  *graphql*) cat "$FX/threads.json" ;;
+  *graphql*) # threads.json maps PR number -> thread nodes, "null" (no data) or "more" (next page)
+    [ -f "$FX/graphql-fails" ] && exit 1
+    jq -n --argjson t "$(cat "$FX/threads.json")" --args '{data: {repository: (reduce $ARGS.positional[] as $n ({};
+      .["p" + $n] = ($t[$n] // [] | if . == "null" then null
+        elif . == "more" then {reviewThreads: {pageInfo: {hasNextPage: true}, nodes: []}}
+        else {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: .}} end)))}}' \
+      $(printf '%s\n' "$*" | grep -oE ' p[0-9]+:' | tr -dc '0-9\n') ;;
   "pr merge"*) [ -f "$FX/merge-fails" ] && { echo "blocked"; exit 1; }; echo MERGED >"$FX/merged" ;;
   "pr view"*) if [ -f "$FX/merged" ]; then cat "$FX/pr-merged.json"; else cat "$FX/pr.json"; fi ;;
   "pr list"*merged*) cat "$FX/prs-merged.json" ;;
@@ -297,7 +303,7 @@ STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/gh"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_NOW=1790510400
   echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"build"}]}}]' >"$FX/rules.json"
-  echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}' >"$FX/threads.json"
+  echo '{}' >"$FX/threads.json"
   echo '[]' >"$FX/pause.json"
   echo '[]' >"$FX/prs-merged.json"
 }
@@ -346,9 +352,81 @@ OKC='[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}
 @test "pr-ready blocks an otherwise ready PR with an unresolved review thread" {
   stub_gh_router
   pr_row 1 me false false MERGEABLE "$OKC" | jq -s . >"$FX/prs.json"
-  echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":false},{"isResolved":false,"isOutdated":true}]}}}}}' >"$FX/threads.json"
+  echo '{"1":[{"isResolved":false,"isOutdated":false},{"isResolved":false,"isOutdated":true}]}' >"$FX/threads.json"
   run "$SCRIPTS/pr-ready.sh" --repo o/r
   [[ "$output" == *$'1\tBLOCK'*"threads=1"* ]]
+}
+
+@test "pr-ready fails closed when review threads are unreadable or span more than one page" {
+  stub_gh_router
+  { pr_row 1 me false false MERGEABLE "$OKC"; pr_row 2 me false false MERGEABLE "$OKC"; pr_row 3 me false false MERGEABLE "$OKC"; } |
+    jq -s . >"$FX/prs.json"
+  echo '{"1":"null","2":"more"}' >"$FX/threads.json"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'1\tBLOCK'*"threads=unknown"* ]]
+  [[ "$output" == *$'2\tBLOCK'*"threads=unknown"* ]]
+  [[ "$output" == *$'3\tREADY'* ]]
+  touch "$FX/graphql-fails"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'3\tBLOCK'*"threads=unknown"* ]]
+  [[ "$output" == *"ready=0"* ]]
+}
+
+ready_prs() { # n: n mergeable, green PRs by me
+  for i in $(seq 1 "$1"); do pr_row "$i" me false false MERGEABLE "$OKC"; done | jq -s . >"$FX/prs.json"
+}
+
+@test "pr-ready reads review threads in one batched call per 50 ready PRs" {
+  stub_gh_router
+  ready_prs 20
+  run "$SCRIPTS/pr-ready.sh" --repo o/r --base main --author me
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"open=20 ready=20"* ]]
+  [ "$(grep -c graphql "$FX/calls")" -eq 1 ]
+  [ "$(wc -l <"$FX/calls")" -eq 3 ]
+  : >"$FX/calls"
+  ready_prs 100
+  run "$SCRIPTS/pr-ready.sh" --repo o/r --base main
+  [[ "$output" == *"open=100 ready=100"* ]]
+  [ "$(grep -c graphql "$FX/calls")" -eq 2 ]
+}
+
+@test "the merge-bot loop over 20 ready PRs makes 20 thread calls, not 210" {
+  stub_gh_router
+  for n in $(seq 20 -1 1); do
+    ready_prs "$n"
+    "$SCRIPTS/pr-ready.sh" --repo o/r --base main >/dev/null 2>&1
+  done
+  [ "$(grep -c graphql "$FX/calls")" -eq 20 ]
+}
+
+@test "pr-ready --delta prints only changes, GONE rows, or a one-line no-change" {
+  stub_gh_router
+  ready_prs 20
+  run "$SCRIPTS/pr-ready.sh" --repo o/r --delta
+  [ "$(printf '%s\n' "$output" | grep -c READY)" -eq 20 ]
+  run "$SCRIPTS/pr-ready.sh" --repo o/r --delta
+  [[ "$output" == "no-change"*"changed=0"* ]]
+  [ "${#output}" -lt 80 ]
+  # PR 1 merged (gone), PR 2 got a new head, PR 3 gained a failing check.
+  jq '.[1:] | (.[0].headRefOid = "ffffffffff") | (.[1].statusCheckRollup += [{"name":"lint","conclusion":"FAILURE"}])' \
+    "$FX/prs.json" >"$FX/p2" && mv "$FX/p2" "$FX/prs.json"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r --delta
+  [[ "$output" == *$'1\tGONE'* ]]
+  [[ "$output" == *$'2\tREADY\tfffffffff'* ]]
+  [[ "$output" == *$'3\tBLOCK'*"fail:lint"* ]]
+  [ "$(printf '%s\n' "$output" | grep -vc '^open=')" -eq 3 ]
+  # A different invocation (other arguments) keeps its own snapshot.
+  run "$SCRIPTS/pr-ready.sh" --repo o/r --delta --no-threads
+  [ "$(printf '%s\n' "$output" | grep -c READY)" -eq 18 ]
+}
+
+@test "pr-ready reports a PR list that hit its limit" {
+  stub_gh_router
+  ready_prs 300
+  run "$SCRIPTS/pr-ready.sh" --repo o/r --no-threads
+  [[ "$output" == *"truncated=yes"* ]]
 }
 
 merge_fixture() {

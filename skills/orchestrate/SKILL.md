@@ -195,7 +195,8 @@ agent reports or a PR changes. Do not tick on a timer.
 2. **Default branch.** `"$SCRIPTS/main-health.sh"` (memory lists advisory workflows to ignore).
    Red: the first free lane fixes it, and the merge bot merges only that fix until it is green
    again. Keep going with lanes that do not depend on it; red main is work, not an interrupt.
-3. **Merge.** `"$SCRIPTS/pr-ready.sh"` (advisory checks from memory as `--ignore-check`). Any
+3. **Merge.** `"$SCRIPTS/pr-ready.sh"` (advisory checks from memory as `--ignore-check`; add
+   `--delta` on later ticks to see only changed rows, or `no-change`). Any
    `READY` row, or any `BLOCK fail:` row in fast mode → launch the merge bot. `conflict` rows →
    rebase bot. Real conflicts it reports → a conflict lane. Failing or feedback-blocked PRs → the
    PR doctor, at most one writer per PR branch.
@@ -324,6 +325,9 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   triage them as timeout headroom, not regression.
 - Treat a red non-required roll-up as blocking unless it is a classified known flake.
 - After a push, discard old-head conclusions and resnapshot.
+- A status snapshot (a `pr-ready.sh` row, a `--delta` view) is discovery, not authorization: every
+  mutation re-checks live state (`pr-merge.sh` re-reads head, author, draft and mergeability).
+  `threads=unknown` or `truncated=yes` means the data is incomplete, never that it is empty.
 - **Polling.** In the Claude desktop app, bind the PR with the host PR tools and let its monitor
   notify you; do not self-poll a bound PR. Elsewhere, poll unchanged pending status with bounded
   snapshots at increasing intervals (30s, 60s, then 120s) and advance other lanes between polls.
