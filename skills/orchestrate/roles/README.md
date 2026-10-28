@@ -12,7 +12,10 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 3. Lane worktrees are named and persistent, created by you; an auto-created isolated worktree can
    be removed if the agent returns before editing.
 4. The agent's prompt is then short: the brief's path plus this pass's inputs (PR list, holds,
-   issue numbers, lane worktree, effort).
+   issue numbers, lane worktree, effort), as paths and excerpts, never transcripts.
+5. Every pass is a fresh agent. Do not resume an earlier role or lane agent to give it the next
+   task: its whole context would be re-sent. Resume one only to ask about the work it just
+   returned.
 
 | Placeholder | Meaning |
 |---|---|
