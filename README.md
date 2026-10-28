@@ -88,8 +88,8 @@ and from `<state dir>/lane-rules.md`.
 ## Development
 
 ```
-bats skills/orchestrate/scripts/selftest.bats skills/orchestrate/scripts/merge-queue.bats
-(cd skills/orchestrate/scripts && shellcheck -x ./*.sh)
+shellcheck -S warning -x skills/orchestrate/scripts/*.sh bin/*.sh
+bats skills/orchestrate/scripts/*.bats
 claude --plugin-dir .
 ```
 

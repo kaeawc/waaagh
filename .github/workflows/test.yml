@@ -16,10 +16,12 @@ jobs:
       - name: Install bats
         run: sudo apt-get update && sudo apt-get install -y bats
       - name: ShellCheck
+        run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh bin/*.sh
+      - name: Hostile git config (the suites must not depend on it)
         run: |
-          cd skills/orchestrate/scripts && shellcheck -S warning -x ./*.sh
-          shellcheck -S warning ../../../bin/codex-lane-run.sh
-      - name: Self-test
-        run: bats skills/orchestrate/scripts/selftest.bats skills/orchestrate/scripts/budget.bats
+          git config --global commit.gpgsign true
+          git config --global gpg.program false
+      - name: Self-test (every suite)
+        run: bats skills/orchestrate/scripts/*.bats
       - name: Validate manifests
         run: jq -e . .claude-plugin/plugin.json .claude-plugin/marketplace.json >/dev/null
