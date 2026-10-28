@@ -14,7 +14,8 @@ red `{{BASE}}`.
 2. `{{SCRIPTS}}/pr-ready.sh --repo {{REPO}} {{AUTHORS}} {{IGNORE_CHECKS}} [--hold N]...`
 3. For each `READY` row, oldest first, one at a time:
    `{{SCRIPTS}}/pr-merge.sh --repo {{REPO}} {{AUTHORS}} --pr <n> --head <head>`.
-   Exit 3 (head moved or ineligible), 4 (red hold) or 5 (GitHub refused): record and move on.
+   Exit 3 (head moved or ineligible), 4 (red hold), 5 (GitHub refused) or 7 (no longer READY on a
+   fresh read): record and move on.
    After each successful merge re-run step 2 with `--delta` added, because mergeability of the
    others changes: it fetches everything fresh but prints only rows that changed (or `no-change`),
    so work from the rows you already hold plus the delta. Always pass the head from the newest row

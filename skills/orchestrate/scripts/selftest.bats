@@ -834,9 +834,10 @@ merge_fixture() {
   stub_gh_router
   echo '{"state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":"abcdef0123456789abcdef0123456789abcdef01","author":{"login":"me"},"mergeable":"MERGEABLE"}' >"$FX/pr.json"
   echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}' >"$FX/pr-merged.json"
-  # The readiness row: build passes, the "sim" check failed (a classified flake in the admin tests).
-  pr_row 1 me false false MERGEABLE '[{"name":"build","conclusion":"SUCCESS"},{"name":"sim","conclusion":"FAILURE"}]' | jq -s . >"$FX/prs.json"
+  pr_row 1 me false false MERGEABLE "$OKC" | jq -s . >"$FX/prs.json"
 }
+# The readiness row for the admin tests: build passes, "sim" failed (a classified flake).
+sim_fails() { pr_row 1 me false false MERGEABLE '[{"name":"build","conclusion":"SUCCESS"},{"name":"sim","conclusion":"FAILURE"}]' | jq -s . >"$FX/prs.json"; }
 
 @test "pr-merge merges a verified head and logs it" {
   merge_fixture
@@ -860,6 +861,7 @@ merge_fixture() {
 
 @test "pr-merge --admin keeps the same head guard" {
   merge_fixture
+  sim_fails
   touch "$FX/race"; echo 2222222222222222222222222222222222222222 >"$FX/race-head"
   ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --except-check sim --evidence "known flake: sim timeout"
   [ "$status" -eq 3 ]
@@ -883,6 +885,7 @@ merge_fixture() {
 
 @test "pr-merge allows --admin only in the fast path and only with evidence" {
   merge_fixture
+  sim_fails
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin
   [ "$status" -eq 6 ]
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --except-check sim --evidence "known flake: sim timeout"
@@ -913,6 +916,7 @@ merge_fixture() {
 
 @test "the admin exception covers only the excepted checks, never review, policy or other failures" {
   merge_fixture
+  sim_fails
   export ORCHESTRATE_FAST_PATH_OVER=0
   adm() { run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "sim: known flake" "$@"; }
   # A classified flake plus an unresolved review thread is refused.
@@ -944,6 +948,21 @@ merge_fixture() {
   ! grep -q 'pr merge' "$FX/calls"
   rm "$FX/rules-fails"
   adm --except-check sim
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-merge refuses a PR that is not READY unless direct merging was authorized" {
+  merge_fixture
+  sim_fails
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 7 ]
+  [[ "$output" == "not ready: BLOCK fail:sim"* ]]
+  pr_row 1 me false false UNKNOWN '[{"name":"build","status":"IN_PROGRESS"}]' | jq -s . >"$FX/prs.json"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 7 ]
+  [[ "$output" == "not ready: WAIT pending:build"* ]]
+  ! grep -q 'pr merge' "$FX/calls"
+  ORCHESTRATE_DIRECT_MERGE=1 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
   [ "$status" -eq 0 ]
 }
 

@@ -278,7 +278,10 @@ covers those checks only: a fresh readiness row must show no other blocker (revi
 unreadable threads or policy, pending checks, conflict, missing required checks). It also refuses a moved head, a draft, a fork-head PR, an
 author you did not list, and any merge while `MAIN_RED` is set (except `--main-fix`).
 
-**Direct (ungated or admin) merging** is a deliberate mode, never a default. Pair it with a
+`pr-merge.sh` also refuses (exit 7) any non-admin merge whose fresh readiness row is not READY.
+
+**Direct (ungated or admin) merging** is a deliberate mode, never a default; ungated merging is
+`ORCHESTRATE_DIRECT_MERGE=1`, set only on the user's word. Pair it with a
 main-repair lane and post-merge review batches over the merged range, and keep the cheap
 structural gates (ratchets, typecheck) even when tests are skipped. A squash built from a stale
 tree can silently revert PRs that landed in between: the post-merge review diffs each squash
@@ -287,8 +290,11 @@ against its PR's own changes.
 ### Merge queue lessons
 
 - **`"$SCRIPTS/merge-queue.sh"` is the local queue**: serial, one pass per `run-once`, no daemon.
-  Every item ends in an outcome (`merged`, `conflict`, `checkfail`, `error`); only `merged` is done
-  and satisfies dependents, and `retry <id>` re-arms the rest. Ids are never reused (`add`
+  Each pass refreshes main health and merges an item only when a fresh `pr-ready.sh` row for the
+  exact pushed head is READY, whatever the server's protection would accept. Outcomes: `merged`
+  (done; the only one that satisfies dependents), `waiting` (pushed, readiness not there yet; the
+  next `run-once` resumes it without redoing the base merge, check or push), and `blocked`,
+  `conflict`, `checkfail`, `error`, which park the item until `retry <id>`. Ids are never reused (`add`
   refuses). Stacked `name-N` branches: the parent of `-2` is the bare name (`parent <branch>`).
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
   every stacked merge: take the default branch's copy and regenerate it, never hand-merge. A

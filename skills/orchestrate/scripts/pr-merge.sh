@@ -15,12 +15,16 @@
 #               thread, unknown thread or policy read, conflict, pending check, missing required
 #               check), or the merge is refused with exit 6.
 #   --ignore-check  advisory checks, passed to pr-ready.sh for that row
+# Without --admin the same fresh row must be READY for this exact head, or the merge is refused
+# with exit 7 (the row's verdict and reasons are printed), so the merge never depends on the
+# server's branch protection. Ungated merging is a deliberate mode: ORCHESTRATE_DIRECT_MERGE=1,
+# set only on the user's word, skips this readiness gate (not the identity, head or hold checks).
 #   --main-fix  this PR fixes a red default branch; merge although MAIN_RED is set
 # The merge itself is bound to the full head SHA read here (gh pr merge --match-head-commit), so a
 # push that lands between this check and the merge makes GitHub refuse it; that refusal is
 # re-read and reported as a moved head, never retried without the guard.
 # Exit: 0 merged | 3 ineligible or head moved (also during the merge) | 4 default branch is red
-#       (hold) | 5 merge failed | 6 --admin not allowed
+#       (hold) | 5 merge failed | 6 --admin not allowed | 7 not ready
 # Appends one line per attempt to <state dir>/merges.log.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -41,11 +45,11 @@ while (($#)); do
     --except-check) excepts+=("$2"); shift 2 ;;
     --ignore-check) ignores+=("$2"); shift 2 ;;
     --main-fix) main_fix=yes; shift ;;
-    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,24p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,28p' "$0" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
@@ -81,17 +85,23 @@ fi
 
 full=$(jq -r .headRefOid <<<"$info")
 
-if [[ "$admin" == yes ]]; then
-  # The admin exception covers the named checks only. Every other dimension must be clear in a
-  # fresh readiness row for this exact head.
+if [[ "$admin" == yes || "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
+  # A fresh readiness row for this exact head. The admin exception covers the named checks only;
+  # every other dimension must be clear.
   flags=(--repo "$repo" --pr "$pr")
   for a in "${authors[@]}"; do flags+=(--author "$a"); done
   for c in ${ignores[@]+"${ignores[@]}"}; do flags+=(--ignore-check "$c"); done
   row=$("$here/pr-ready.sh" "${flags[@]}" 2>/dev/null | head -1) || row=""
   IFS=$'\t' read -r _ verdict rhead _ _ detail <<<"$row"
   why=""
-  if [[ -z "$row" ]]; then why="no readiness row for PR $pr"
-  elif [[ "$full" != "$rhead"* ]]; then why="readiness row is for head $rhead, not ${full:0:9}"
+  if [[ -z "$row" ]]; then why=" no readiness row for PR $pr"
+  elif [[ "$full" != "$rhead"* ]]; then why=" readiness row is for head $rhead, not ${full:0:9}"
+  elif [[ "$admin" == no ]]; then
+    if [[ "$verdict" != READY ]]; then
+      log "refused not ready: $verdict $detail"
+      echo "not ready: $verdict $detail"
+      exit 7
+    fi
   elif [[ "$verdict" == BLOCK ]]; then
     for token in $detail; do
       if [[ "$token" == fail:* ]]; then
@@ -103,7 +113,12 @@ if [[ "$admin" == yes ]]; then
         why+=" $token"
       fi
     done
-  elif [[ "$verdict" != READY ]]; then why="$verdict ${detail}"
+  elif [[ "$verdict" != READY ]]; then why=" $verdict ${detail}"
+  fi
+  if [[ -n "$why" && "$admin" == no ]]; then
+    log "refused:$why"
+    echo "refused:$why"
+    exit 7
   fi
   if [[ -n "$why" ]]; then
     log "refused admin: blockers beyond the excepted checks:$why"
