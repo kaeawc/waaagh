@@ -1025,6 +1025,25 @@ sim_fails() { pr_row 1 me false false MERGEABLE '[{"name":"build","conclusion":"
   [ "$(grep -c 'pr merge' "$FX/calls")" -eq 1 ]
 }
 
+@test "a check failing on the head is never bypassed without logged evidence (#26)" {
+  merge_fixture
+  sim_fails
+  # Waved off as advisory: refused without evidence, merged and logged with it.
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --ignore-check sim
+  [ "$status" -eq 6 ]
+  [[ "$output" == "refused: sim failing on this head"* ]]
+  ! grep -q 'pr merge' "$FX/calls"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --ignore-check sim --evidence "sim: classifier INFRA run 77 (device farm 503)"
+  [ "$status" -eq 0 ]
+  grep -q 'evidence=sim: classifier INFRA run 77' "$ORCHESTRATE_STATE_DIR/o__r/merges.log"
+  # Direct mode skips the readiness gate, not this rule.
+  rm -f "$FX/merged"
+  ORCHESTRATE_DIRECT_MERGE=1 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  [ "$status" -eq 6 ]
+  ORCHESTRATE_DIRECT_MERGE=1 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --evidence "sim: known flake #4"
+  [ "$status" -eq 0 ]
+}
+
 @test "pr-merge reports a merge GitHub rejected" {
   merge_fixture
   touch "$FX/merge-fails"

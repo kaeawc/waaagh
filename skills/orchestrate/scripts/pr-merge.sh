@@ -14,7 +14,8 @@
 #               must show no blocker other than failures of exactly those checks (no review
 #               thread, unknown thread or policy read, conflict, pending check, missing required
 #               check), or the merge is refused with exit 6.
-#   --ignore-check  advisory checks, passed to pr-ready.sh for that row
+#   --ignore-check  advisory checks, passed to pr-ready.sh for that row. If one of them is failing
+#               on the head, --evidence is required too (and logged), as in direct mode.
 # Without --admin the same fresh row must be READY for this exact head, or the merge is refused
 # with exit 7 (the row's verdict and reasons are printed), so the merge never depends on the
 # server's branch protection. Ungated merging is a deliberate mode: ORCHESTRATE_DIRECT_MERGE=1,
@@ -51,11 +52,11 @@ while (($#)); do
     --except-check) excepts+=("$2"); shift 2 ;;
     --ignore-check) ignores+=("$2"); shift 2 ;;
     --main-fix) main_fix=yes; shift ;;
-    -h | --help) sed -n '2,34p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,35p' "$0"; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,34p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,35p' "$0" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
@@ -152,6 +153,24 @@ if [[ "$admin" == yes || "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
   if [[ -n "$why" ]]; then
     log "refused admin: blockers beyond the excepted checks:$why"
     echo "refused: --admin covers only ${excepts[*]}; other blockers:$why"
+    exit 6
+  fi
+fi
+
+# A check failing on this head may be bypassed (as advisory via --ignore-check, by --admin, or in
+# direct mode) only with --evidence naming why; a lane calling it "infra" is not evidence.
+if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" == 1 ]]; }; then
+  rflags=(--repo "$repo" --pr "$pr" --no-threads)
+  for a in "${authors[@]}"; do rflags+=(--author "$a"); done
+  raw=$("$here/pr-ready.sh" "${rflags[@]}" 2>/dev/null | head -1) || raw=""
+  if [[ -z "$raw" ]]; then
+    log "refused: check state unreadable and no --evidence"
+    echo "refused: the head's checks could not be read; a merge past them needs --evidence"; exit 6
+  fi
+  failing=$(cut -f6 <<<"$raw" | tr ' ' '\n' | sed -n 's/^fail://p' | tr '\n' ',' | sed 's/,$//')
+  if [[ -n "$failing" ]]; then
+    log "refused: failing on the head without --evidence: $failing"
+    echo "refused: $failing failing on this head; bypassing a failing check needs --evidence (the classifier verdict or flake entry)"
     exit 6
   fi
 fi

@@ -48,3 +48,9 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$SKILL" "Merge the base immediately"
   has "$ROLES/README.md" "generated-files.tsv"
 }
+
+@test "red main covers per-test timing budget breaches, and failing checks need logged evidence (#26)" {
+  has "$SKILL" "**Per-test timing budgets.**"
+  has "$SKILL" "\`pr-merge.sh --main-fix\`"
+  has "$SKILL" "A lane saying \"infra\" is not evidence."
+}
