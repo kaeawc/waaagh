@@ -122,9 +122,13 @@ review on every poll or push.
   edit corrupts the live run. Write the new version beside it and `mv` it into place.
 - **Check lane identity and artifacts, not the word "completed".** The lane's worktree must show
   changes only in its own files, and codex's final message must be about its own task. An empty
-  diff with a clean exit, or a mismatched topic, is a refusal: re-run the lane. An agent that
-  backgrounded its work and idled has done nothing: resume it with `SendMessage` and tell it to
-  finish inline.
+  diff with a clean exit, or a mismatched topic, is a refusal: re-run the lane.
+- **An interim stop is not a result.** A notification that says the agent is waiting on its own
+  background work (a gate still running), or whose result is only a status line, is interim: take
+  no action on it (no merge, no relaunch, no verdict, no new lane in its files) and wait for the
+  final notification of the same task, which follows when that work ends. Only if the background
+  work has ended and no final report came, resume that agent once to finish inline. Briefs say
+  "run gates inline, never in the background", so interim stops should be rare.
 - With many lanes the host saturates and whole-suite gates hit their wall caps. Lanes run targeted
   suites; CI's clean runners carry the full suite. Say so in the PR.
 

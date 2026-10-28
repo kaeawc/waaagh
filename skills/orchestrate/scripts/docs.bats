@@ -21,3 +21,12 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$ROLES/README.md" "Every pass is a fresh agent."
   has "$ROLES/_common.md" "Keep your final report short"
 }
+
+@test "an interim 'waiting on background work' stop is not acted on, and gates run inline (#22)" {
+  has "$SKILL" "An interim stop is not a result."
+  has "$SKILL" "no merge, no relaunch, no verdict"
+  has "$SKILL" "final notification of the same task"
+  has "$ROLES/_common.md" "never in the background"
+  has "$ROLES/implementation-lane.md" "never background one"
+  ! grep -q "backgrounded its work and idled has done nothing" "$SKILL"
+}
