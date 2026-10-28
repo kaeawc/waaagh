@@ -485,8 +485,62 @@ JSON
   [[ "$output" == *$'12\t90\t'*$'\tbody\t'* ]]
   [[ "$output" != $'10\t'* ]]
   run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r
-  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 1 ]
-  [[ "$output" == *$'\t10\t11\t'* ]]
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -vc '^# ')" = 1 ]
+  [[ "$output" == *$'0.8\t10\t11\t'* ]]
+  [[ "$output" == *"# shown 1 of 1 leads (0 clusters, 1 pairs; 0 over the per-issue cap); all: $ORCHESTRATE_STATE_DIR/o__r/candidates/dupes-"*.tsv ]]
+}
+
+# n issues titled the same, numbered 1..n, plus optional extra JSON rows.
+dupes_fixture() {
+  jq -n --argjson n "$1" --argjson extra "${2:-[]}" \
+    '[range(1; $n + 1) | {number: ., title: "Fix shared device session recovery failure"}] + $extra' >"$FX/issues.json"
+}
+DIVERSE='[{"number":901,"title":"Crash when the keyboard opens on tablet"},
+          {"number":902,"title":"Crash when keyboard opens on tablets"},
+          {"number":903,"title":"Login screen shows stale avatar image"},
+          {"number":904,"title":"Login screen shows a stale avatar"}]'
+
+@test "dupes collapses a repetitive cluster into one bounded row and keeps unrelated leads" {
+  stub_gh_router
+  dupes_fixture 100 "$DIVERSE"
+  run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r
+  [ "$status" -eq 0 ]
+  [ "${#output}" -lt 2000 ]
+  [ "$(printf '%s\n' "$output" | grep -vc '^# ')" = 3 ]
+  first=$(printf '%s\n' "$output" | head -1)
+  [[ "$first" == $'1\t1\t2,3,4,5,6,7,8,9,10,11,+89\tFix shared device session recovery failure\t(same title words)' ]]
+  [[ "$output" == *$'\t901\t902\t'* ]]
+  [[ "$output" == *$'\t903\t904\t'* ]]
+  [[ "$output" == *"# shown 3 of 3 leads (1 clusters, 2 pairs"* ]]
+  full=$(printf '%s\n' "$output" | sed -n 's/^# .*; all: //p')
+  [ -f "$full" ]
+  [[ "$(head -1 "$full")" == $'1\t1\t2,3,'* ]]
+}
+
+@test "dupes stays bounded and stable at the 400-issue fetch limit" {
+  stub_gh_router
+  dupes_fixture 400 "$DIVERSE"
+  run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r
+  [ "$status" -eq 0 ]
+  [ "${#output}" -lt 2000 ]
+  first=$output
+  ORCHESTRATE_NOW=1790510401 run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r
+  [ "$(printf '%s\n' "$output" | grep -v '^# ')" = "$(printf '%s\n' "$first" | grep -v '^# ')" ]
+}
+
+@test "dupes caps rows per issue and in total, and reports what it omitted" {
+  stub_gh_router
+  # One hub title that shares most words with each of six distinct variants.
+  jq -n '[{number: 1, title: "alpha beta gamma delta epsilon"}]
+    + [range(2; 8) | {number: ., title: "alpha beta gamma delta variant\(.)"}]' >"$FX/issues.json"
+  run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r --per-issue 2
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -v '^# ' | cut -f2,3 | grep -c '^1	')" = 2 ]
+  [[ "$output" == *"over the per-issue cap"* ]]
+  run "$SCRIPTS/issue-candidates.sh" dupes --repo o/r --limit 3
+  [ "$(printf '%s\n' "$output" | grep -vc '^# ')" = 3 ]
+  [[ "$output" == *"# shown 3 of "* ]]
 }
 
 @test "issue-close requires verified evidence and refuses protected or unverifiable closes" {
