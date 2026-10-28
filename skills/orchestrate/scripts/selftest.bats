@@ -328,6 +328,94 @@ run_lane() { PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$RUNNER" --mod
   [ "$status" -eq 64 ]
 }
 
+@test "runner caps a 50,000-char message in its progress files and keeps the full log" {
+  runner_env
+  cat >"$FAKEBIN/codex" <<'SH'
+#!/usr/bin/env bash
+out=""; while (($#)); do [[ $1 == --output-last-message ]] && out=$2; shift; done
+cat >/dev/null
+big=$(head -c 50000 /dev/zero | tr '\0' 'm')
+printf '{"type":"item.completed","item":{"text":"%s"}}\n' "$big"
+sleep 2
+echo short >"$out"
+SH
+  printf 'LANE-WORKTREE: %s\ntask\n' "$(cd "$REPO" && pwd -P)" >"$RUNDIR/spec.md"
+  run run_lane "$RUNDIR/spec.md"
+  [ "$status" -eq 0 ]
+  [ "$(wc -c <"$RUNDIR/codex.jsonl.progress.latest")" -lt 4000 ]
+  [ "$(wc -c <"$RUNDIR/codex.jsonl.progress.state")" -lt 4000 ]
+  grep -q 'truncated: 50000 chars' "$RUNDIR/codex.jsonl.progress.state"
+  [ "$(wc -c <"$RUNDIR/codex.jsonl")" -gt 50000 ]
+  [ -s "$RUNDIR/codex.jsonl.progress.rev" ]
+}
+
+WAITER() { "$SCRIPTS/../../../bin/codex-lane-wait.sh" "$@"; }
+
+@test "lane wait: unchanged state gives a small no-change, a new revision wakes it, exit finishes it" {
+  L="$BATS_TEST_TMPDIR/run/codex.jsonl"; mkdir -p "${L%/*}"
+  : >"$L.spec"
+  printf 'Codex alive: yes\nChanged entries: 0\n\nMost recent agent message or command:\nreading\n' >"$L.progress.state"
+  echo rev1 >"$L.progress.rev"
+  run WAITER --log "$L"
+  [ "$status" -eq 10 ]
+  [[ "${lines[0]}" == "progress rev=rev1" ]]
+  run WAITER --log "$L" --since rev1 --timeout 1 --interval 1
+  [ "$status" -eq 11 ]
+  [[ "$output" == "no-change rev=rev1 alive=yes elapsed="* ]]
+  [ "${#output}" -lt 80 ]
+  ( sleep 1; echo rev2 >"$L.progress.rev" ) &
+  run WAITER --log "$L" --since rev1 --timeout 20 --interval 1
+  [ "$status" -eq 10 ]
+  [[ "${lines[0]}" == "progress rev=rev2" ]]
+  head -c 9000 /dev/zero | tr '\0' 'f' >"$L.final"
+  ( sleep 1; echo 0 >"$L.exit" ) &
+  run WAITER --log "$L" --since rev2 --timeout 20 --interval 1
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == "done exit=0" ]]
+  [ "${#output}" -lt 3200 ]
+}
+
+@test "lane wait refuses latest.* symlinks and unknown runs" {
+  L="$BATS_TEST_TMPDIR/run/codex.jsonl"; mkdir -p "${L%/*}"; : >"$L.spec"
+  ln -s "$L" "$BATS_TEST_TMPDIR/run/latest.jsonl"
+  run WAITER --log "$BATS_TEST_TMPDIR/run/latest.jsonl"
+  [ "$status" -eq 2 ]
+  ln -s "$L" "$BATS_TEST_TMPDIR/run/alias.jsonl"
+  run WAITER --log "$BATS_TEST_TMPDIR/run/alias.jsonl"
+  [ "$status" -eq 2 ]
+  run WAITER --log "$BATS_TEST_TMPDIR/run/nothing.jsonl"
+  [ "$status" -eq 2 ]
+}
+
+@test "lane wait follows a real run to completion; a stalled run still ends at the stall limit" {
+  runner_env
+  cat >"$FAKEBIN/codex" <<'SH'
+#!/usr/bin/env bash
+out=""; while (($#)); do [[ $1 == --output-last-message ]] && out=$2; shift; done
+cat >/dev/null; sleep 3; echo finished >"$out"
+SH
+  printf 'LANE-WORKTREE: %s\ntask\n' "$(cd "$REPO" && pwd -P)" >"$RUNDIR/spec.md"
+  run_lane "$RUNDIR/spec.md" >/dev/null 2>&1 &
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$RUNDIR/codex.jsonl.spec" ] && break; sleep 0.5; done
+  rev=""; st=10
+  while [ "$st" -eq 10 ]; do
+    run WAITER --log "$RUNDIR/codex.jsonl" --since "$rev" --timeout 30 --interval 1
+    st=$status; rev=$(printf '%s' "${lines[0]}" | sed -n 's/^progress rev=//p')
+  done
+  [ "$st" -eq 0 ]
+  [[ "$output" == "done exit=0"*"finished"* ]]
+  wait
+  cat >"$FAKEBIN/codex" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null; exec sleep 30
+SH
+  run env PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$RUNNER" --model gpt-6-luna --spec "$RUNDIR/spec.md" \
+    --final "$RUNDIR/final2.md" --log "$RUNDIR/stall.jsonl" --cd "$REPO" --poll 1 --stall 2
+  [ "$status" -eq 125 ]
+  run WAITER --log "$RUNDIR/stall.jsonl" --timeout 1
+  [[ "${lines[0]}" == "done exit=125" ]]
+}
+
 # --- campaign scripts: readiness, merge, main health, issues, lanes, device lock ---------------
 
 # gh stub that answers by subcommand from fixture files and records every call.
