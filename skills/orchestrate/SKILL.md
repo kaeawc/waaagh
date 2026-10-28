@@ -424,8 +424,17 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   mutation re-checks live state (`pr-merge.sh` re-reads head, author, draft and mergeability).
   `threads=unknown` or `truncated=yes` means the data is incomplete, never that it is empty.
 - **Polling.** In the Claude desktop app, bind the PR with the host PR tools and let its monitor
-  notify you; do not self-poll a bound PR. Elsewhere, poll unchanged pending status with bounded
-  snapshots at increasing intervals (30s, 60s, then 120s) and advance other lanes between polls.
+  notify you; do not self-poll a bound PR. The calls, exactly:
+  1. `bind_pr` with `url` = the full PR URL (`https://github.com/<owner>/<repo>/pull/<n>`), not a
+     number or `owner/repo#n`;
+  2. `set_monitor` with the same `url` plus at least one of `auto_fix: true` (CI failures and
+     review comments wake you) and `auto_archive_on_close: true`; with neither it is refused.
+
+  Elsewhere, poll unchanged pending status with bounded snapshots at increasing intervals (30s,
+  60s, then 120s) and advance other lanes between polls.
+- **Monitor events that need nothing.** A bot's summary comment with no findings (a clean review
+  summary, a "no issues found", a coverage or size report within budget) needs no fix pass and no
+  reply; note it and move on. Only actionable findings start work.
 - Do not create scheduled automation (cron, `/loop`, wakeups) unless the user asked for ongoing
   monitoring. Never spawn a continuous polling agent.
 

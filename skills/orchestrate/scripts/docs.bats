@@ -54,3 +54,10 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$SKILL" "\`pr-merge.sh --main-fix\`"
   has "$SKILL" "A lane saying \"infra\" is not evidence."
 }
+
+@test "the desktop PR monitor call sequence is documented exactly (#27)" {
+  has "$SKILL" "\`bind_pr\` with \`url\` = the full PR URL"
+  has "$SKILL" "\`set_monitor\` with the same \`url\` plus at least one of \`auto_fix: true\`"
+  has "$SKILL" "\`auto_archive_on_close: true\`"
+  has "$SKILL" "needs no fix pass and no"
+}
