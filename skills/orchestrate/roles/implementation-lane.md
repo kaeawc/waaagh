@@ -30,7 +30,8 @@ file path, the files in scope, files owned by other lanes, and `REASONING: mediu
    for neighbouring behaviour that must not change.
 6. **Verification, inline and synchronous** — the suites for the touched area by explicit,
    non-empty file list (echo the list; refuse to run when it is empty), then the repo's
-   format, typecheck and lint gates.
+   format, typecheck and lint gates. Every gate runs through `{{SCRIPTS}}/gate-slot.sh --` so the
+   host is not overloaded; exit 75 means no slot came free: report it, do not loop.
 7. `REASONING: <effort>`.
 
 Record the PIDs of every process you start (suites, servers) and kill exactly those before you

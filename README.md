@@ -51,6 +51,8 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid` |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
 | `validate.sh` | Run a validation command into a receipt outside the checkout; `check` says whether an independent, passing receipt for the exact current key can be reused |
+| `gate-slot.sh`, `heavy-build-slot.sh` | Host-wide gate semaphore (default 3) with a per-repo gate environment; Gradle/Xcode builds run alone with capped workers; bounded waits, stale-holder reclaim |
+| `wt-cleanup.sh` | Conservative worktree cleanup: only clean, idle, pushed, unprotected worktrees no process is in; dry run by default |
 | `gh-read.sh` | Bounded, typed GitHub reads: per-call timeout, backoff inside a time budget, Retry-After and rate-limit reset handling with a cooldown shared by local lanes; refuses writes |
 | `job-log.sh` | One Actions job's log via the job-scoped endpoint (works while the workflow still runs), saved per run/attempt/job and excerpted, with explicit not-available outcomes |
 | `usage-report.sh` | Codex usage per model and verified lane status, from per-run receipts (`bin/codex-lane-usage.sh`) |
