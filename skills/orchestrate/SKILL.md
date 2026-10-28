@@ -317,7 +317,14 @@ against its PR's own changes.
   `conflict`, `checkfail`, `error`, which park the item until `retry <id>`. Ids are never reused (`add`
   refuses). Stacked `name-N` branches: the parent of `-2` is the bare name (`parent <branch>`).
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
-  every stacked merge: take the default branch's copy and regenerate it, never hand-merge. A
+  every stacked merge: take the default branch's copy and regenerate it, never hand-merge.
+  `"$SCRIPTS/regen-merge.sh"` does this from `<state dir>/generated-files.tsv` and refuses an
+  unstable regeneration; the merge queue and the rebase bot use it.
+- **Generated-heavy repositories** (a schema source of truth with generated code and fixtures in
+  several languages): every sibling merge re-conflicts the others. Merge the base immediately
+  before each push (`regen-merge.sh`), rely on fast local checks and let CI be the full verifier,
+  and send PRs that share one generated surface through `merge-queue.sh` one at a time rather
+  than as parallel lanes. A
   change that marks a check intentional or allow-listed can hide a fail-open gate, so review such
   edits by asking what they now let through.
 - **Run local pre-merge checks serially** (one slot) on a loaded host. Parallel checks cause

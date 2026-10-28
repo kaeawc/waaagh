@@ -42,3 +42,9 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$ROLES/implementation-lane.md" "Search the open PRs for the issue number"
   has "$ROLES/_common.md" "re-read it with"
 }
+
+@test "generated-file conflicts go through regen-merge.sh (#25)" {
+  has "$ROLES/rebase-bot.md" "regen-merge.sh --worktree"
+  has "$SKILL" "Merge the base immediately"
+  has "$ROLES/README.md" "generated-files.tsv"
+}
