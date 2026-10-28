@@ -19,7 +19,9 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    `origin/{{BASE}}` in (never rebase, never force-push). Generated-file conflicts
    ({{GENERATED_FILES}}): take `{{BASE}}`'s side and regenerate. Anything else: resolve only when
    both sides' intent is unambiguous, otherwise abort and report.
-4. **CI failures.** Classify each with {{CI_CLASSIFIER}}: caused by the diff → fix; known flake or
+4. **CI failures.** Get each failed job's log with `{{SCRIPTS}}/job-log.sh --repo {{REPO}} --pr <n>
+   --check <check>` (job-scoped, so it works before the whole workflow finishes; it prints an
+   excerpt and the saved path, or why the log is not available yet). Classify each with {{CI_CLASSIFIER}}: caused by the diff → fix; known flake or
    infrastructure → rerun the failed jobs ONCE and record it (an unnamed or anonymous failure on a
    slow platform is usually setup or hook timeout headroom, not a regression; a run cancelled by a
    concurrency group is a cancellation); stale base → step 3. Never fix a

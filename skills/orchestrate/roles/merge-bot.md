@@ -19,9 +19,11 @@ red `{{BASE}}`.
    others changes: it fetches everything fresh but prints only rows that changed (or `no-change`),
    so work from the rows you already hold plus the delta. Always pass the head from the newest row
    you have; `pr-merge.sh` re-checks the live PR, so a row is a lead, never authority to merge.
-4. `BLOCK fail:<checks>` rows — only in `fast` mode: for each failed check, get its run id
-   (`gh pr checks <n> --repo {{REPO}} --json name,state,link`), save the job log under
-   `{{STATE}}/logs/`, and classify it with {{CI_CLASSIFIER}}. Merge with
+4. `BLOCK fail:<checks>` rows — only in `fast` mode: for each failed check, fetch its job log with
+   `{{SCRIPTS}}/job-log.sh --repo {{REPO}} --pr <n> --check <check>` (works while sibling jobs still
+   run; saves under `{{STATE}}/logs/` and prints an excerpt), and classify the excerpt with
+   {{CI_CLASSIFIER}}. `not-yet-available`, `transient` or `running`: the failure is unclassified
+   for this pass. Merge with
    `pr-merge.sh … --admin --evidence "<check>: <flake entry or classifier verdict>"` only when
    EVERY failed check is a classified known flake or infrastructure failure, nothing is pending
    except checks in {{IGNORE_CHECKS}}, and the row has no other block reason. One unclassified
