@@ -11,7 +11,8 @@ file path, the files in scope, files owned by other lanes, and `REASONING: mediu
   fully specified work) or `waaagh:sol-implementer` (GPT-6.1 Sol, the effort from your prompt,
   `high` when none is given; never low, xhigh, max or ultra, fast service tier). Run it through
   the lane runner exactly as the agent definition describes (spec line 1 `LANE-WORKTREE: <realpath>`).
-- Wait for it inline with bounded foreground polling of the run's own exit file.
+- Start it with `codex-lane-start.sh` and wait with `codex-lane-wait.sh`, as the agent definition
+  describes; never Read-poll progress files.
 - Capacity error (overloaded, rate-limited): retry once after 60 seconds. If it fails the same way,
   STOP with `STATUS: implementer-capacity` as line 1, the exact error and the spec path.
 - Usage limit, quota or auth error ("401", "sign in again"): do not retry. STOP with
