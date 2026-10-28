@@ -207,7 +207,8 @@ agent reports or a PR changes. Do not tick on a timer.
    launch nothing new, let running agents finish, report.
 2. **Default branch.** `"$SCRIPTS/main-health.sh"` (memory lists advisory workflows to ignore).
    Red: the first free lane fixes it, and the merge bot merges only that fix until it is green
-   again. Keep going with lanes that do not depend on it; red main is work, not an interrupt.
+   again. `unknown` (a selected workflow still pending or missing, or the run list unreadable)
+   changes nothing: an existing hold stays until every selected workflow has completed green. Keep going with lanes that do not depend on it; red main is work, not an interrupt.
 3. **Merge.** `"$SCRIPTS/pr-ready.sh"` (advisory checks from memory as `--ignore-check`; add
    `--delta` on later ticks to see only changed rows, or `no-change`). Any
    `READY` row, or any `BLOCK fail:` row in fast mode → launch the merge bot. `conflict` rows →
