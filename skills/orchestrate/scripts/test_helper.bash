@@ -24,3 +24,5 @@ CFG
   unset GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
 }
 hermetic_git
+# gh-read.sh in tests: log waits instead of sleeping, no jitter.
+export GH_READ_FAKE_SLEEP=1 GH_READ_JITTER=0

@@ -33,11 +33,17 @@ orch_journal() {
   printf '%s\n' "$2" >"$1.tmp.$$" && mv "$1.tmp.$$" "$1"
 }
 
-# orch_read_retry N CMD...: run a read up to N times (ORCHESTRATE_READ_SLEEP seconds apart, default 2);
-# prints the first successful output. Only for reads: never wrap a mutation in it.
+# orch_read_retry N CMD...: a bounded read. A `gh ...` read goes through gh-read.sh (typed errors,
+# backoff, rate-limit handling, at most N attempts, refuses writes); anything else is run up to N
+# times, ORCHESTRATE_READ_SLEEP seconds apart (default 2). Never wrap a mutation in it.
 orch_read_retry() {
   local n=$1 i out
   shift
+  if [[ "$1" == gh ]]; then
+    shift
+    "$(dirname "${BASH_SOURCE[0]}")/gh-read.sh" --tries "$n" --budget "${ORCHESTRATE_READ_BUDGET:-60}" -- "$@" 2>/dev/null
+    return
+  fi
   for ((i = 1; i <= n; i++)); do
     if out=$("$@" 2>/dev/null); then printf '%s\n' "$out"; return 0; fi
     ((i == n)) || sleep "${ORCHESTRATE_READ_SLEEP:-2}"

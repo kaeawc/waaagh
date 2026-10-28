@@ -9,7 +9,7 @@ setup() {
   export ORCHESTRATE_NOW=1790510400 JOB_LOG_RETRY_SECONDS=0   # 2026-09-27T12:00:00Z
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-all="$*"
+all="$*"; all=${all% --include}
 echo "$all" >>"$FX/calls"
 case "$all" in
   "api repos/o/r/actions/jobs/"*/logs)
@@ -27,7 +27,7 @@ case "$all" in
       500) echo "gh: Server Error (HTTP 500)" >&2; exit 1 ;;
     esac ;;
   "api repos/o/r/actions/jobs/"*) cat "$FX/job-${all#api repos/o/r/actions/jobs/}.json" ;;
-  "api repos/o/r/actions/runs/"*"--jq .run_attempt") echo "${RUN_ATTEMPT:-1}" ;;
+  "api repos/o/r/actions/runs/"*"--jq .run_attempt"*) echo "${RUN_ATTEMPT:-1}" ;;
   "api --paginate repos/o/r/actions/runs/"*) # pages of jobs, one JSON object per line per page
     a=${all#*attempts/}; a=${a%%/*}; cat "$FX/jobs-attempt-$a.jsonl" ;;
   "pr view"*) cat "$FX/rollup.json" ;;

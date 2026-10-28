@@ -55,22 +55,22 @@ unresolved() { echo "unresolved $*"; exit 15; }
 
 # --- resolve the job id ------------------------------------------------------------------------
 if [[ -z "$job" && -n "$pr" ]]; then
-  rollup=$(gh pr view "$pr" --repo "$repo" --json statusCheckRollup 2>/dev/null) || unresolved "PR $pr not readable"
+  rollup=$("$here/gh-read.sh" --json -- pr view "$pr" --repo "$repo" --json statusCheckRollup 2>/dev/null) || unresolved "PR $pr not readable"
   job=$(jq -r --arg c "$check" '[.statusCheckRollup[]? | select((.name // .context) == $c)
           | (.detailsUrl // .targetUrl // "") | (capture("/actions/runs/[0-9]+/job/(?<j>[0-9]+)") | .j)?]
         | last // empty' <<<"$rollup")
   [[ -n "$job" ]] || unresolved "no Actions job for check '$check' on PR $pr"
 elif [[ -z "$job" ]]; then
   if [[ -z "$attempt" ]]; then
-    attempt=$(gh api "repos/$repo/actions/runs/$run" --jq .run_attempt 2>/dev/null) || unresolved "run $run not readable"
+    attempt=$("$here/gh-read.sh" -- api "repos/$repo/actions/runs/$run" --jq .run_attempt 2>/dev/null) || unresolved "run $run not readable"
   fi
   # Every page of the attempt's jobs; a name that ran more than once resolves to the newest job.
-  job=$(gh api --paginate "repos/$repo/actions/runs/$run/attempts/$attempt/jobs?per_page=100" --jq '.jobs[]' 2>/dev/null |
+  job=$("$here/gh-read.sh" -- api --paginate "repos/$repo/actions/runs/$run/attempts/$attempt/jobs?per_page=100" --jq '.jobs[]' 2>/dev/null |
     jq -rs --arg n "$name" '[.[] | select(.name == $n)] | max_by(.id) | .id // empty') || unresolved "jobs of run $run not readable"
   [[ -n "$job" ]] || unresolved "no job named '$name' in run $run attempt $attempt"
 fi
 
-meta=$(gh api "repos/$repo/actions/jobs/$job" 2>/dev/null) || unresolved "job $job not readable"
+meta=$("$here/gh-read.sh" --json -- api "repos/$repo/actions/jobs/$job" 2>/dev/null) || unresolved "job $job not readable"
 run=$(jq -r .run_id <<<"$meta")
 attempt=$(jq -r '.run_attempt // 1' <<<"$meta")
 dir="$out/$run/$attempt"
