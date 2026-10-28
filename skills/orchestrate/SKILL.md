@@ -372,6 +372,19 @@ A job that only passes on retry, or only from a build-cache hit, hides a red mai
 fix lane must check whether the greens were real: look for a failed first attempt, a cache restore
 that skipped the work, or a rerun, before declaring the branch healthy.
 
+**Per-test timing budgets.** A test that breaches its own time budget (for example a 100 ms cap)
+on the default branch, and still breaches it when re-run alone, is a real red, not a flake: the
+classifier's INVESTIGATE is right. Handle it like any red main: `main-health.sh` holds merges, the
+first free lane takes it (make the code fast enough, or, as an owner decision recorded in
+`decisions.md`, change the budget with the measured numbers), and the merge bot merges only that
+fix (`pr-merge.sh --main-fix`) until main is green. A breach that passes when re-run alone twice
+is the bounded timeout case under Merge queue lessons, not this one.
+
+**Failing checks are never waved through by assertion.** `pr-merge.sh` refuses to merge past a
+check that is failing on the head (marked advisory with `--ignore-check`, in an admin merge, or in
+direct mode) unless `--evidence` names the classifier verdict or flake entry; the evidence goes to
+`merges.log`. A lane saying "infra" is not evidence.
+
 ### Interrupts — when to come back to the user
 
 Keep the loop running through ordinary trouble. Stop refilling and report when:
