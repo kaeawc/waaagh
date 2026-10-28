@@ -30,3 +30,9 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$ROLES/implementation-lane.md" "never background one"
   ! grep -q "backgrounded its work and idled has done nothing" "$SKILL"
 }
+
+@test "the campaign loop documents wrap-up (#23)" {
+  has "$SKILL" "\`\"\$SCRIPTS/campaign.sh\" wrap-up on\`"
+  has "$SKILL" "skip Plan (4) and Fill (6)"
+  has "$SKILL" "drained=yes"
+}
