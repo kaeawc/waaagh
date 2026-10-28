@@ -155,8 +155,12 @@ Act on it or surface the disagreement to the user.
 
 ## Evidence discipline
 
-- Key local results by fingerprint (base commit + working-tree diff hash) + command + environment:
-  `"$SCRIPTS/fingerprint.sh" --key "<command>"`. Reuse a result only when its key matches exactly.
+- Key local results by fingerprint (base commit + working-tree diff hash) + command + declared
+  environment: `"$SCRIPTS/fingerprint.sh" --key "<command>" --env-manifest <file>` (or `--env NAME`,
+  `--tool "node --version"`, `--input <ignored install marker>`). Declare every variable, toolchain
+  and installed-dependency marker the command depends on; values are hashed, never printed. Reuse a
+  result only when its `v2|…` key matches exactly. A command that depends on undeclared external
+  state (network, services, caches, devices) is not eligible for reuse.
 - Never hand full logs, complete diffs or validation transcripts to yourself or a costly model.
   Save them, excerpt with `"$SCRIPTS/excerpt.sh" <log> [context] [max-lines] [max-bytes]` (bounded: per-line and total byte caps, first and last failures kept, repeats folded), and pass the path.
 - Label results `verified-local` or `verified-ci`. While CI is backlogged, "fixed" means
