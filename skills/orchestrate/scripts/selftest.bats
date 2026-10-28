@@ -47,6 +47,65 @@ fp() { "$SCRIPTS/fingerprint.sh" --dir "$REPO" "$@"; }
   [ "$(fp --key "bun test")" = "$k1" ]
 }
 
+@test "--key is versioned and keeps working-tree and untracked sensitivity" {
+  k=$(fp --key "npm test")
+  [[ "$k" == v2\|* ]]
+  [ "$(printf '%s' "$k" | tr '|' '\n' | wc -l | tr -d ' ')" -eq 4 ]
+  echo edit >>"$REPO/a.txt"
+  [ "$(fp --key "npm test")" != "$k" ]
+  git -C "$REPO" checkout -q a.txt
+  echo src >"$REPO/new.ts"
+  [ "$(fp --key "npm test")" != "$k" ]
+}
+
+@test "--key changes with a declared variable and ignores undeclared ones" {
+  dev=$(NODE_ENV=development fp --key 'test "$NODE_ENV" = development' --env NODE_ENV)
+  prod=$(NODE_ENV=production fp --key 'test "$NODE_ENV" = development' --env NODE_ENV)
+  [ "$dev" != "$prod" ]
+  unset_k=$(env -u NODE_ENV "$SCRIPTS/fingerprint.sh" --dir "$REPO" --key x --env NODE_ENV)
+  empty_k=$(NODE_ENV= fp --key x --env NODE_ENV)
+  [ "$unset_k" != "$empty_k" ]
+  a=$(UNRELATED=1 NODE_ENV=production fp --key x --env NODE_ENV)
+  b=$(UNRELATED=2 NODE_ENV=production fp --key x --env NODE_ENV)
+  [ "$a" = "$b" ]
+  # Declaration order does not matter.
+  [ "$(A=1 B=2 fp --key x --env A --env B)" = "$(A=1 B=2 fp --key x --env B --env A)" ]
+}
+
+@test "--key changes with a declared toolchain version and dependency-install marker" {
+  mkdir -p "$BATS_TEST_TMPDIR/tc"
+  printf '#!/bin/sh\necho v20.1.0\n' >"$BATS_TEST_TMPDIR/tc/node"; chmod +x "$BATS_TEST_TMPDIR/tc/node"
+  k20=$(PATH="$BATS_TEST_TMPDIR/tc:$PATH" fp --key "npm test" --tool "node --version")
+  printf '#!/bin/sh\necho v22.3.0\n' >"$BATS_TEST_TMPDIR/tc/node"
+  k22=$(PATH="$BATS_TEST_TMPDIR/tc:$PATH" fp --key "npm test" --tool "node --version")
+  [ "$k20" != "$k22" ]
+  echo "node_modules/" >"$REPO/.gitignore"; git -C "$REPO" add .gitignore; git -C "$REPO" commit -qm ignore
+  mkdir -p "$REPO/node_modules"; echo one >"$REPO/node_modules/.package-lock.json"
+  i1=$(fp --key "npm test" --input node_modules/.package-lock.json)
+  [ "$(fp)" = "$(fp)" ]
+  echo two >"$REPO/node_modules/.package-lock.json"
+  i2=$(fp --key "npm test" --input node_modules/.package-lock.json)
+  [ "$i1" != "$i2" ]
+  # The ignored file does not change the tree fingerprint itself.
+  [ "$(echo "$i1" | cut -d'|' -f2)" = "$(echo "$i2" | cut -d'|' -f2)" ]
+}
+
+@test "--env-manifest matches the same flags and --show-env never prints values" {
+  printf '# validation inputs\nenv NODE_ENV\ntool echo v1\n\ninput missing.lock  # absent\n' >"$BATS_TEST_TMPDIR/env.manifest"
+  m=$(NODE_ENV=production fp --key x --env-manifest "$BATS_TEST_TMPDIR/env.manifest")
+  f=$(NODE_ENV=production fp --key x --env NODE_ENV --tool "echo v1" --input missing.lock)
+  [ "$m" = "$f" ]
+  run env SECRET_TOKEN=hunter2-very-secret "$SCRIPTS/fingerprint.sh" --dir "$REPO" --env SECRET_TOKEN --show-env --key x
+  [ "$status" -eq 0 ]
+  [[ "$output" != *hunter2* ]]
+  [[ "$output" == *"env SECRET_TOKEN set"* ]]
+  printf 'bogus line\n' >"$BATS_TEST_TMPDIR/bad.manifest"
+  run fp --key x --env-manifest "$BATS_TEST_TMPDIR/bad.manifest"
+  [ "$status" -eq 2 ]
+  run fp --key x --env 'BAD-NAME'
+  [ "$status" -ne 0 ]
+}
+
 @test "excerpt keeps failure lines, strips ANSI, and prints the log path" {
   log="$BATS_TEST_TMPDIR/ci.log"
   {

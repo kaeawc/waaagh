@@ -47,7 +47,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `issue-close.sh` | Close an issue as fixed or duplicate, with required evidence, and log it |
 | `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid` |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
-| `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content; excerpt long logs |
+| `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
 
 ## Defaults
 
