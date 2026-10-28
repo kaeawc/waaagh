@@ -36,3 +36,9 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$SKILL" "skip Plan (4) and Fill (6)"
   has "$SKILL" "drained=yes"
 }
+
+@test "lanes are claimed against duplicates and lanes re-verify state before asserting it (#24)" {
+  has "$SKILL" "lane-claim.sh\" add"
+  has "$ROLES/implementation-lane.md" "Search the open PRs for the issue number"
+  has "$ROLES/_common.md" "re-read it with"
+}

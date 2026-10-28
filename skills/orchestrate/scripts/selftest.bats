@@ -1169,6 +1169,50 @@ run_json() { # workflow status conclusion sha id createdAt
   [ "$status" -eq 2 ]
 }
 
+@test "lane-claim refuses a lane whose issue or files another lane or an open PR already has" {
+  stub_gh_router
+  echo '[{"number":45,"title":"Fix login crash (#12)","body":"","closingIssuesReferences":[],"files":[{"path":"src/auth/login.ts"}]},
+         {"number":46,"title":"Docs","body":"Fixes #30","closingIssuesReferences":[{"number":31}],"files":[{"path":"docs/a.md"}]}]' >"$FX/prs.json"
+  lc() { run "$SCRIPTS/lane-claim.sh" "$@" --repo o/r; }
+  lc add --worktree wt-a --branch lane/a --issues 20 --files src/cart/,lib/x.ts --agent sol
+  [ "$status" -eq 0 ]
+  # Same issue as an active lane; a file under a lane's directory; an issue an open PR covers
+  # (closing reference, or "#N" in title or body); a file an open PR touches.
+  lc check --issues 20 --files other.ts
+  [ "$status" -eq 3 ]; [[ "$output" == "conflict: lane wt-a has issue 20" ]]
+  lc check --issues 99 --files src/cart/total.ts
+  [ "$status" -eq 3 ]; [[ "$output" == "conflict: lane wt-a owns src/cart/total.ts" ]]
+  lc check --issues 31 --files z.ts
+  [[ "$output" == "conflict: PR 46 covers issue 31" ]]
+  lc check --issues 12 --files z.ts
+  [[ "$output" == "conflict: PR 45 covers issue 12" ]]
+  lc check --issues 30 --files z.ts
+  [[ "$output" == "conflict: PR 46 covers issue 30" ]]
+  lc check --issues 1 --files src/auth/
+  [[ "$output" == "conflict: PR 45 touches src/auth/" ]]
+  # #12 does not match issue 1 or 123; disjoint work passes and add refuses a conflict.
+  lc check --issues 123 --files src/other.ts
+  [ "$status" -eq 0 ]; [ "$output" = ok ]
+  lc add --worktree wt-b --branch lane/b --issues 20 --files q.ts
+  [ "$status" -eq 3 ]
+  [ "$(grep -c . "$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv")" -eq 1 ]
+  # A finished lane no longer blocks.
+  lc set --worktree wt-a --status merged
+  [ "$status" -eq 0 ]
+  lc check --issues 20 --files src/cart/total.ts
+  [ "$status" -eq 0 ]
+  lc set --worktree nope --status merged
+  [ "$status" -eq 3 ]
+}
+
+@test "lane-claim gives no verdict when open PRs cannot be read" {
+  stub_gh_router
+  echo 'not json' >"$FX/prs.json"
+  run "$SCRIPTS/lane-claim.sh" add --worktree wt-a --branch lane/a --issues 20 --files a.ts --repo o/r
+  [ "$status" -eq 4 ]
+  [ ! -s "$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv" ]
+}
+
 @test "issues-ranked puts priority bugs first, then bugs, newest first, and marks issues in a PR" {
   stub_gh_router
   echo '[{"number":50,"closingIssuesReferences":[{"number":3}]}]' >"$FX/prs.json"

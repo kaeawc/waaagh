@@ -238,8 +238,10 @@ agent reports or a PR changes. Do not tick on a timer.
 5. **Verify.** `verification_due=yes` and the repository has a verification skill → launch one
    verification batch over everything merged since the last one. Sooner when a risky change lands.
    No verification skill: skip this phase and say so once.
-6. **Fill lanes** up to the cap (below) from the ranked lane list, taking only lanes whose file
-   sets are disjoint from every active lane and open PR. Record them in `lanes.tsv`.
+6. **Fill lanes** up to the cap (below) from the ranked lane list. Start each through
+   `"$SCRIPTS/lane-claim.sh" add --worktree … --branch … --issues … --files …`, which refuses a lane
+   whose issue or files an active lane or an open PR already has, and records it in `lanes.tsv`;
+   mark it ended with `lane-claim.sh set --status merged|closed|abandoned`.
 7. **Report** only what changed: merged, opened, blocked, decisions queued.
 
 Findings feed back: verification and review findings become issues, and the next plan ranks them.
