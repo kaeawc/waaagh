@@ -34,8 +34,8 @@ file path, the files in scope, files owned by other lanes, and `REASONING: mediu
    host is not overloaded; exit 75 means no slot came free: report it, do not loop.
 7. `REASONING: <effort>`.
 
-Record the PIDs of every process you start (suites, servers) and kill exactly those before you
-report. Commit and push nothing: the orchestrator holds that authority.
+Run every gate inline and wait for it; never background one. Record the PIDs of every process you
+start (suites, servers) and kill exactly those before you report. Commit and push nothing: the orchestrator holds that authority.
 
 ## After codex exits (no code edits by you)
 - The diff touches only the intended files, and codex's final message is about THIS issue. A
