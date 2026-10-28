@@ -546,14 +546,26 @@ echo "$*" >>"$FX/calls"
 case "$*" in
   "api user") echo '{"login":"me"}' ;;
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
-  *rules/branches*) cat "$FX/rules.json" ;;
-  *graphql*) # threads.json maps PR number -> thread nodes, "null" (no data) or "more" (next page)
+  *rules/branches*) [ -f "$FX/rules-fails" ] && { echo "HTTP 403: Resource not accessible" >&2; exit 1; }; cat "$FX/rules.json" ;;
+  "api repos/o/r/branches/"*) [ -f "$FX/branch-fails" ] && { echo "HTTP 403" >&2; exit 1; }; cat "$FX/branch.json" ;;
+  *graphql*) # threads.json maps PR number -> thread nodes, "null" (no data), "more" (a next page
+    # without a cursor) or {"pages": [[nodes], [nodes], ...]} (served through real cursors c1, c2, ...)
     [ -f "$FX/graphql-fails" ] && exit 1
-    jq -n --argjson t "$(cat "$FX/threads.json")" --args '{data: {repository: (reduce $ARGS.positional[] as $n ({};
-      .["p" + $n] = ($t[$n] // [] | if . == "null" then null
-        elif . == "more" then {reviewThreads: {pageInfo: {hasNextPage: true}, nodes: []}}
-        else {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: .}} end)))}}' \
-      $(printf '%s\n' "$*" | grep -oE ' p[0-9]+:' | tr -dc '0-9\n') ;;
+    if [[ "$*" == *"cursor=c"* ]]; then
+      n=$(printf '%s\n' "$*" | sed -nE 's/.*-F pr=([0-9]+).*/\1/p')
+      c=$(printf '%s\n' "$*" | sed -nE 's/.*-f cursor=c([0-9]+).*/\1/p')
+      echo "page $n $c" >>"$FX/pages"
+      jq -n --argjson t "$(cat "$FX/threads.json")" --arg n "$n" --argjson c "$c" '$t[$n].pages as $p
+        | {data: {repository: {pullRequest: {reviewThreads: {pageInfo: {hasNextPage: (($c + 1) < ($p | length)),
+           endCursor: ("c" + (($c + 1) | tostring))}, nodes: $p[$c]}}}}}'
+    else
+      jq -n --argjson t "$(cat "$FX/threads.json")" --args '{data: {repository: (reduce $ARGS.positional[] as $n ({};
+        .["p" + $n] = ($t[$n] // [] | if . == "null" then null
+          elif . == "more" then {reviewThreads: {pageInfo: {hasNextPage: true}, nodes: []}}
+          elif type == "object" then {reviewThreads: {pageInfo: {hasNextPage: ((.pages | length) > 1), endCursor: "c1"}, nodes: .pages[0]}}
+          else {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: .}} end)))}}' \
+        $(printf '%s\n' "$*" | grep -oE ' p[0-9]+:' | tr -dc '0-9\n')
+    fi ;;
   "pr merge"*) [ -f "$FX/merge-fails" ] && { echo "blocked"; exit 1; }; echo MERGED >"$FX/merged" ;;
   "pr view"*) if [ -f "$FX/merged" ]; then cat "$FX/pr-merged.json"; else cat "$FX/pr.json"; fi ;;
   "pr list"*merged*) cat "$FX/prs-merged.json" ;;
@@ -570,6 +582,7 @@ STUB
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_NOW=1790510400
   echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"build"}]}}]' >"$FX/rules.json"
   echo '{}' >"$FX/threads.json"
+  echo '{"protected":false}' >"$FX/branch.json"
   echo '[]' >"$FX/pause.json"
   echo '[]' >"$FX/prs-merged.json"
 }
@@ -639,6 +652,54 @@ OKC='[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}
   [[ "$output" == *"ready=0"* ]]
 }
 
+@test "pr-ready never reports READY when the required-check policy is unreadable or malformed" {
+  stub_gh_router
+  pr_row 7 me false false MERGEABLE '[{"name":"lint","conclusion":"SUCCESS"}]' | jq -s . >"$FX/prs.json"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'7\tBLOCK'*"missing-required:build"* ]]
+  echo '[]' >"$FX/rules.json"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'7\tREADY'* ]]
+  touch "$FX/rules-fails"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'7\tBLOCK'*"policy=unknown"* ]]
+  [[ "$output" == *"policy=unknown diagnostics="* ]]
+  diag=$(printf '%s\n' "$output" | sed -n 's/.*diagnostics=//p')
+  grep -q 'HTTP 403' "$diag"
+  rm "$FX/rules-fails"
+  echo '{"message":"oops"}' >"$FX/rules.json"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'7\tBLOCK'*"policy=unknown"* ]]
+  echo '[]' >"$FX/rules.json"
+  touch "$FX/branch-fails"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'7\tBLOCK'*"policy=unknown"* ]]
+}
+
+@test "pr-ready reads required checks from classic branch protection too" {
+  stub_gh_router
+  echo '[]' >"$FX/rules.json"
+  echo '{"protected":true,"protection":{"required_status_checks":{"contexts":["ci/legacy"],"checks":[{"context":"build"}]}}}' >"$FX/branch.json"
+  pr_row 7 me false false MERGEABLE "$OKC" | jq -s . >"$FX/prs.json"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'7\tBLOCK'*"missing-required:ci/legacy"* ]]
+}
+
+@test "pr-ready follows review-thread pages: an unresolved 101st thread blocks, all resolved passes" {
+  stub_gh_router
+  pr_row 7 me false false MERGEABLE "$OKC" | jq -s . >"$FX/prs.json"
+  jq -n '{"7": {pages: [[range(0; 100) | {isResolved: true, isOutdated: false}], [{isResolved: false, isOutdated: false}]]}}' >"$FX/threads.json"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'7\tBLOCK'*"threads=1"* ]]
+  [ "$(cat "$FX/pages")" = "page 7 1" ]
+  jq -n '{"7": {pages: [[range(0; 100) | {isResolved: true, isOutdated: false}], [range(0; 100) | {isResolved: true, isOutdated: false}], [{isResolved: true, isOutdated: false}]]}}' >"$FX/threads.json"
+  : >"$FX/pages"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'7\tREADY'* ]]
+  [ "$(wc -l <"$FX/pages")" -eq 2 ]
+}
+
 ready_prs() { # n: n mergeable, green PRs by me
   for i in $(seq 1 "$1"); do pr_row "$i" me false false MERGEABLE "$OKC"; done | jq -s . >"$FX/prs.json"
 }
@@ -650,7 +711,7 @@ ready_prs() { # n: n mergeable, green PRs by me
   [ "$status" -eq 0 ]
   [[ "$output" == *"open=20 ready=20"* ]]
   [ "$(grep -c graphql "$FX/calls")" -eq 1 ]
-  [ "$(wc -l <"$FX/calls")" -eq 3 ]
+  [ "$(wc -l <"$FX/calls")" -eq 4 ]
   : >"$FX/calls"
   ready_prs 100
   run "$SCRIPTS/pr-ready.sh" --repo o/r --base main

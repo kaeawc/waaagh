@@ -9,19 +9,23 @@
 #          unresolved review thread
 #   WAIT   checks still pending (detail lists them)
 #   BLOCK  detail gives the reasons: conflict | fail:<checks> | missing-required:<checks>
-#          | threads=<n> | threads=unknown (unreadable or over 100 threads) | few-checks=<n>
+#          | threads=<n> | threads=unknown (a page of review threads was unreadable)
+#          | policy=unknown (required checks could not be read) | few-checks=<n>
 #   SKIP   draft | fork | hold
 # A cancelled check counts as failed unless its workflow started a later run (superseded).
 # --author defaults to the authenticated gh user; repeat it to add e.g. app/dependabot.
 # --ignore-check drops an advisory check from every count (repeatable). --min-pass (default 1)
 # guards against a PR whose checks have not been reported yet. Review threads of every otherwise
-# READY PR are read in one batched GraphQL call (50 PRs per call).
+# READY PR are read in one batched GraphQL call (50 PRs per call), following every further page.
+# Required checks come from rulesets and classic branch protection; a failed or malformed read of
+# either blocks every otherwise READY PR. Read problems are written to
+# <state dir>/diagnostics/pr-ready-<time>.log, named on the summary line.
 # --delta prints only rows that differ from this invocation's previous run (same arguments; kept
 # under <state dir>/snapshots/), a "<n> GONE" row for a PR no longer listed, or one "no-change"
 # line. Everything is still fetched fresh; the delta only trims output. A snapshot is never
 # authority to merge: pr-merge.sh re-checks the live PR.
 # Last line on stderr: "open=<n> ready=<n>" (+ " changed=<n>" with --delta, + " truncated=yes"
-# when the PR list hit its 300-row limit).
+# when the PR list hit its 300-row limit, + " policy=unknown", + " diagnostics=<path>").
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
@@ -41,7 +45,7 @@ while (($#)); do
     --min-pass) min_pass=$2; shift 2 ;;
     --no-threads) threads=no; shift ;;
     --delta) delta=yes; shift ;;
-    -h | --help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "pr-ready.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -54,11 +58,32 @@ authors_json=$(json_list "${authors[@]}")
 ignores_json=$(json_list ${ignores[@]+"${ignores[@]}"})
 holds_json=$(json_list ${holds[@]+"${holds[@]}"})
 
-# Required check names from the rulesets that apply to the base branch (none found -> []).
-required=$(gh api "repos/$repo/rules/branches/$base" 2>/dev/null |
-  jq -c '[.[]? | select(.type == "required_status_checks")
-          | .parameters.required_status_checks[].context] | unique' 2>/dev/null) || required='[]'
-[[ -n "$required" ]] || required='[]'
+diag_dir="$(orch_state_dir "$repo")/diagnostics"
+diag="$diag_dir/pr-ready-$(orch_iso "$(orch_now)" | tr -d ':')-$$.log"
+note() { # record a read problem in a diagnostics file; the verdicts carry only its category
+  mkdir -p "$diag_dir"
+  printf '%s\n' "$*" >>"$diag"
+}
+
+# Required check names from both protection mechanisms: repository rulesets and classic branch
+# protection (the branch endpoint shows it to anyone with read access). A read that fails or
+# returns something malformed is "unknown", never "none": the PR cannot be judged READY.
+policy=known required='[]'
+if out=$(gh api "repos/$repo/rules/branches/$base" 2>&1) &&
+  r=$(jq -ce 'if type == "array" then [.[] | select(.type == "required_status_checks")
+              | .parameters.required_status_checks[].context] else error("not an array") end' <<<"$out" 2>/dev/null); then
+  required=$r
+else
+  policy=unknown; note "rulesets read failed for $base: ${out:0:500}"
+fi
+if out=$(gh api "repos/$repo/branches/$base" 2>&1) &&
+  r=$(jq -ce 'if type == "object" and has("protected") then
+                ((.protection.required_status_checks // {}) | [(.contexts // [])[], ((.checks // [])[] | .context)])
+              else error("no protected field") end' <<<"$out" 2>/dev/null); then
+  required=$(jq -cn --argjson a "$required" --argjson b "$r" '$a + $b | unique')
+else
+  policy=unknown; note "branch protection read failed for $base: ${out:0:500}"
+fi
 
 list_limit=300
 prs=$(gh pr list --repo "$repo" --state open --limit "$list_limit" \
@@ -101,14 +126,14 @@ rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" 
        end) as $v
     | [.number, $v[0], .headRefOid[0:9], .mergeable, ($pass | length), $v[1]] | @tsv' <<<"$prs" | sort -n)
 
-# Unresolved, current review threads per otherwise READY PR, in batched GraphQL calls.
-# Prints "number<TAB>count", where count is "unknown" when GitHub returned no data for that PR or
-# it has more threads than one page holds.
+# Unresolved, current review threads per otherwise READY PR, in batched GraphQL calls; a PR with
+# more than one page is followed page by page through its cursor. Prints "number<TAB>count", where
+# count is "unknown" when any page of that PR could not be read.
 thread_counts() {
   local q n
   q='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){'
   for n in "$@"; do
-    q+=" p$n: pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated}}}"
+    q+=" p$n: pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated}}}"
   done
   q+='}}'
   # shellcheck disable=SC2016  # GraphQL variables, not shell expansions
@@ -116,10 +141,31 @@ thread_counts() {
     jq -r --args '
       (.data.repository // {}) as $r
       | $ARGS.positional[] as $n | ($r["p" + $n] // null) as $pr
-      | [$n, (if $pr == null or $pr.reviewThreads == null then "unknown"
-              else ([$pr.reviewThreads.nodes[] | select((.isResolved | not) and (.isOutdated | not))] | length) as $c
-                | if $c == 0 and $pr.reviewThreads.pageInfo.hasNextPage then "unknown" else $c end
-              end)] | @tsv' "$@" 2>/dev/null || printf '%s\tunknown\n' "$@"
+      | if $pr == null or $pr.reviewThreads == null then [$n, "unknown", ""]
+        else [$n, ([$pr.reviewThreads.nodes[] | select((.isResolved | not) and (.isOutdated | not))] | length),
+              (if $pr.reviewThreads.pageInfo.hasNextPage then ($pr.reviewThreads.pageInfo.endCursor // "?") else "" end)]
+        end | @tsv' "$@" 2>/dev/null || printf '%s\tunknown\t\n' "$@"
+}
+
+# more_threads N COUNT CURSOR: add the unresolved threads on the pages after CURSOR.
+more_threads() {
+  local n=$1 count=$2 cursor=$3 page
+  while [[ -n "$cursor" ]]; do
+    [[ "$cursor" != "?" ]] || { note "PR $n: thread page without a cursor"; echo unknown; return; }
+    # shellcheck disable=SC2016  # GraphQL variables, not shell expansions
+    page=$(gh api graphql -F owner="${repo%%/*}" -F name="${repo##*/}" -F pr="$n" -f cursor="$cursor" -f query='
+      query($owner:String!,$name:String!,$pr:Int!,$cursor:String!){repository(owner:$owner,name:$name){
+        pullRequest(number:$pr){reviewThreads(first:100,after:$cursor){pageInfo{hasNextPage endCursor}
+        nodes{isResolved isOutdated}}}}}' 2>/dev/null |
+      jq -r '.data.repository.pullRequest.reviewThreads
+        | [([.nodes[] | select((.isResolved | not) and (.isOutdated | not))] | length),
+           (if .pageInfo.hasNextPage then (.pageInfo.endCursor // "?") else "" end)] | @tsv' 2>/dev/null) ||
+      { note "PR $n: review thread page after $cursor unreadable"; echo unknown; return; }
+    [[ -n "$page" ]] || { note "PR $n: empty review thread page"; echo unknown; return; }
+    count=$((count + ${page%%$'\t'*}))
+    cursor=${page#*$'\t'}
+  done
+  echo "$count"
 }
 
 # Bash 3.2 compatible (macOS): no associative arrays or mapfile.
@@ -128,7 +174,12 @@ if [[ "$threads" == yes ]]; then
   ready_nums=()
   while IFS= read -r n; do ready_nums+=("$n"); done < <(awk -F'\t' '$2 == "READY" { print $1 }' <<<"$rows")
   for ((i = 0; i < ${#ready_nums[@]}; i += 50)); do
-    tcounts+=$(thread_counts "${ready_nums[@]:i:50}")$'\n'
+    while IFS=$'\t' read -r n count cursor; do
+      [[ -n "$n" ]] || continue
+      if [[ "$count" == unknown ]]; then note "PR $n: review threads not returned"
+      elif [[ -n "$cursor" ]]; then count=$(more_threads "$n" "$count" "$cursor"); fi
+      tcounts+="$n"$'\t'"$count"$'\n'
+    done < <(thread_counts "${ready_nums[@]:i:50}")
   done
 fi
 
@@ -137,7 +188,9 @@ out=""
 while IFS=$'\t' read -r num verdict head mergeable passed detail; do
   [[ -n "$num" ]] || continue
   open=$((open + 1))
-  if [[ "$verdict" == READY && "$threads" == yes ]]; then
+  if [[ "$verdict" == READY && "$policy" == unknown ]]; then
+    verdict=BLOCK detail="policy=unknown"
+  elif [[ "$verdict" == READY && "$threads" == yes ]]; then
     n=$(awk -F'\t' -v n="$num" '$1 == n { print $2; exit }' <<<"$tcounts")
     n=${n:-unknown}
     if [[ "$n" != 0 ]]; then verdict=BLOCK detail="threads=$n"; fi
@@ -169,4 +222,6 @@ else
   printf '%s' "$out"
 fi
 [[ "$truncated" == no ]] || summary+=" truncated=yes"
+[[ "$policy" == known ]] || summary+=" policy=unknown"
+[[ ! -f "$diag" ]] || summary+=" diagnostics=$diag"
 echo "$summary" >&2
