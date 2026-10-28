@@ -416,6 +416,64 @@ SH
   [[ "${lines[0]}" == "done exit=125" ]]
 }
 
+@test "lane start writes the spec with header and preamble, starts the run detached, and the waiter finishes it" {
+  runner_env
+  START="$SCRIPTS/../../../bin/codex-lane-start.sh"
+  cd "$REPO"
+  out=$(PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna --effort "" <<<"my task")
+  log=$(printf '%s\n' "$out" | sed -n 's/^LOG=//p')
+  run_dir=$(printf '%s\n' "$out" | sed -n 's/^RUN_DIR=//p')
+  [ -n "$log" ] && [ -f "$run_dir/spec.md" ]
+  [ "$(head -1 "$run_dir/spec.md")" = "LANE-WORKTREE: $(pwd -P)" ]
+  grep -q 'explicit opt-out' "$run_dir/spec.md"
+  [ "$(tail -1 "$run_dir/spec.md")" = "my task" ]
+  run "$SCRIPTS/../../../bin/codex-lane-wait.sh" --log "$log" --timeout 30 --interval 1
+  while [ "$status" -eq 10 ]; do run "$SCRIPTS/../../../bin/codex-lane-wait.sh" --log "$log" --since "${lines[0]#progress rev=}" --timeout 30 --interval 1; done
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == "done exit=0" ]]
+  ! grep -q model_reasoning_effort "$log.args"
+  out=$(PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna --effort high <<<"task two")
+  log=$(printf '%s\n' "$out" | sed -n 's/^LOG=//p')
+  grep -q 'model_reasoning_effort=high' "$log.args"
+}
+
+@test "lane start refuses an empty spec and reports a runner that stopped at once" {
+  runner_env
+  START="$SCRIPTS/../../../bin/codex-lane-start.sh"
+  cd "$REPO"
+  run env HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna <<<"   "
+  [ "$status" -eq 2 ]
+  run env PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna --soft nope <<<"task"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Usage: codex-lane-run.sh"* ]]
+}
+
+@test "both implementer agents carry one compact, consistent contract" {
+  A="$SCRIPTS/../../../agents"
+  for f in "$A/codex-implementer.md" "$A/sol-implementer.md"; do
+    [ "$(wc -c <"$f")" -lt 6500 ]
+    for must in codex-lane-start.sh codex-lane-wait.sh "validate.sh run" -- "--independent" "empty diff" \
+                "never implement the task yourself" "STATUS: unavailable" "cross-lane spec" "kill by pattern" \
+                "codex-lane-reference.md" "JUDGMENT CALLS" "never wait on \`latest.*\`"; do
+      [ "$must" = -- ] && continue
+      grep -qF -- "$must" "$f" || { echo "missing in $f: $must"; false; }
+    done
+    ! grep -qiE 'progress\.latest|run_in_background|verbatim|include its actual output' "$f"
+  done
+  # The two variants differ only in model-specific lines.
+  diff <(sed -E 's/codex-implementer|sol-implementer/LANE/g; s/gpt-6-luna|gpt-6-sol/SLUG/g' "$A/codex-implementer.md" | grep -v -E '^(description|# )|GPT-6|is fixed|architect.s call') \
+       <(sed -E 's/codex-implementer|sol-implementer/LANE/g; s/gpt-6-luna|gpt-6-sol/SLUG/g' "$A/sol-implementer.md" | grep -v -E '^(description|# )|GPT-6|is fixed|architect.s call')
+  [ -f "$SCRIPTS/../../../lanes/codex-lane-reference.md" ]
+}
+
+@test "role briefs agree with the agents on waiting and evidence" {
+  R="$SCRIPTS/../roles"
+  grep -q 'codex-lane-wait.sh' "$R/_common.md"
+  grep -q 'codex-lane-wait.sh' "$R/implementation-lane.md"
+  ! grep -q 'polling of the run' "$R/implementation-lane.md"
+  ! grep -q "worktree's \`scratch/\`" "$R/_common.md"
+}
+
 # --- campaign scripts: readiness, merge, main health, issues, lanes, device lock ---------------
 
 # gh stub that answers by subcommand from fixture files and records every call.
