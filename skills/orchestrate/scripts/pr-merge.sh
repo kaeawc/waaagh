@@ -46,6 +46,9 @@
 #       not merged, not failed: do not merge by other means, run again later to reconcile
 #       | 11 stale: touches a merge-sensitive path and the base moved past the head
 #       | 12 busy: another PR's merge holds the lock of a merge-sensitive path it touches
+#       | 13 needs review: the owner's bot-review policy (review-gate.sh check) is not met
+# Review policy: when <state dir>/review-policy is set and not off, review-gate.sh check must say
+# ok for the head; a merge it allowed without a review is added to the unreviewed-merges ledger.
 # GitHub outages: success is read from the PR state, never from the merge's exit code. A 5xx or
 # "merge already in progress" is pending, not success or failure: githubstatus.com is read
 # (gh-status.sh) and its non-operational components logged; then the PR state is re-read after
@@ -77,11 +80,11 @@ while (($#)); do
     --main-fix) main_fix=yes; shift ;;
     --worktree) mwt=$2; shift 2 ;;
     --merge-check) mcheck=$2; shift 2 ;;
-    -h | --help) sed -n '2,57p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,60p' "$0"; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,57p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,60p' "$0" >&2; exit 2; }
 [[ -z "$mwt" && -z "$mcheck" || -n "$mwt" && -n "$mcheck" ]] ||
   { echo "pr-merge.sh: --worktree and --merge-check go together" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
@@ -225,6 +228,18 @@ if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERG
   fi
 fi
 
+# Bot-review policy (review-gate.sh; no review-policy file or policy off: no reads, no effect).
+review=""
+if [[ -f "$state/review-policy" && "$(awk 'NR == 1 { print $1 }' "$state/review-policy")" != off ]]; then
+  src=0
+  review=$("$here/review-gate.sh" check --repo "$repo" --pr "$pr" --head "$full") || src=$?
+  case "$src" in
+    0) ;;
+    3) log "refused review: $review"; echo "needs review: $review (review-gate.sh policy)"; exit 13 ;;
+    *) log "refused: review state unreadable: $review"; echo "unverified: review state of PR $pr unreadable; nothing was attempted"; exit 9 ;;
+  esac
+fi
+
 # Merge-sensitive paths: lock each touched pattern, then require a head that contains the base or a
 # passing merge-result check. Locks are taken before the check so no other merge moves the base
 # over the same path between the check and this merge.
@@ -323,7 +338,11 @@ done
 if [[ "$final" == MERGED* ]]; then
   rm -f "$state/GITHUB_OUTAGE"
   jset merged "${final#MERGED }"
-  log "merged ${final#MERGED } method=$method admin=$admin${evidence:+ evidence=$evidence}"
+  log "merged ${final#MERGED } method=$method admin=$admin${evidence:+ evidence=$evidence}${review:+ review=$review}"
+  if [[ "$review" == "ok unreviewed"* ]]; then
+    "$here/review-gate.sh" ledger add --repo "$repo" --pr "$pr" --head "$full" --note "${review#ok unreviewed }" >/dev/null ||
+      echo "warning: merged PR $pr without a review but the unreviewed-merges ledger write failed" >&2
+  fi
   echo "merged $pr ${final#MERGED }"
 elif [[ "$(jq -r '.headRefOid // ""' <<<"$after")" != "$full" ]]; then
   now=$(jq -r '.headRefOid // "-"' <<<"$after")

@@ -31,6 +31,8 @@ red `{{BASE}}`.
    merge it by other means; hand it to the rebase bot (merge `{{BASE}}` in, wait for a green run),
    or, if your prompt gives a merge-result check, re-run with `--worktree <checkout> --merge-check
    '<cmd>'`. Exit 12 (`busy:` another merge holds that path's lock): skip it this pass.
+   Exit 13 (`needs review:` the owner's bot-review policy is not met): record it as waiting for a
+   review; never re-request the review yourself (requests go through `review-gate.sh request`).
    After each successful merge re-run step 2 with `--delta` added, because mergeability of the
    others changes: it fetches everything fresh but prints only rows that changed (or `no-change`),
    so work from the rows you already hold plus the delta. Always pass the head from the newest row
