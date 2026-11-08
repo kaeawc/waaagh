@@ -599,7 +599,8 @@ the main session (subagents lack `RemoteTrigger`) creates one run-once routine p
 recorded through `"$SCRIPTS/cloud-dispatch.sh"`: `roles/cloud-dispatch.md`. Results come back only
 as PRs and issue comments, which the triage loop reads. A cloud-ready follow-up split from local
 work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
-`device-cloud-handoff.md`.
+`device-cloud-handoff.md`. The standard implement and repair briefs live in the target repository
+(`.claude/briefs/`, installed from `briefs/`, changed by PR), so each dispatched prompt is one line.
 
 **Session topology.** A campaign split over an owner-facing orchestrator, a triage session, a
 manual-test session, cloud routines and local lanes follows `session-topology.md`: who owns what
