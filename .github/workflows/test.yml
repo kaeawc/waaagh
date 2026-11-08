@@ -34,5 +34,8 @@ jobs:
         run: |
           git config --global commit.gpgsign true
           git config --global gpg.program false
-      - name: Self-test (every suite, in parallel)
-        run: dev/test.sh -j "$(nproc)"
+      # With bashcov's exported SHELLOPTS (errexit, nounset, pipefail; no xtrace), so a test that
+      # fails only under the main-branch Coverage job fails here, before merge (#152, #153). Measured
+      # at about the plain run's wall time (+6%), so it replaces the plain run instead of adding a job.
+      - name: Self-test (every suite, in parallel, with bashcov's SHELLOPTS)
+        run: dev/test.sh -j "$(nproc)" --bashcov-shellopts

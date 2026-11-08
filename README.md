@@ -127,13 +127,14 @@ and from `<state dir>/lane-rules.md`.
 shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh bin/*.sh dev/*.sh
 dev/test.sh                 # every suite, in parallel (-j N); or dev/test.sh path/to/one.bats
 dev/test.sh --ignore-sigpipe   # the same with SIGPIPE ignored, as on GitHub's runners
+dev/test.sh --bashcov-shellopts   # the same with bashcov's exported errexit/nounset/pipefail (CI runs this)
 dev/coverage.sh             # line coverage per script (needs: gem install bashcov)
 dev/coverage.sh --check dev/coverage-floor.tsv   # floors vs the last run; CI runs both on main and on PRs that change scripts (coverage.yml)
 claude --plugin-dir .
 ```
 
 Every suite isolates its state under `$BATS_TEST_TMPDIR`, so suites can run in parallel; CI runs
-`dev/test.sh -j "$(nproc)"`. `cli-contract.bats` holds every script to the same command line: `-h`
+`dev/test.sh -j "$(nproc)" --bashcov-shellopts`. `cli-contract.bats` holds every script to the same command line: `-h`
 prints exactly its header comment, and an unknown flag exits 2 before any GitHub call.
 
 ## License
