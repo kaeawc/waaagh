@@ -205,7 +205,7 @@ JSON
   run rf file --pr 7 --thread PRRT_later --title "Last page dropped"
   [ "$status" -eq 0 ]
   [[ "$output" == *"already-filed #55"* ]]
-  ! grep -q create "$FX/writes"
+  run ! grep -q create "$FX/writes"
   [[ "$(jq -r '.[0]' "$FX/replies.json")" == "follow-up #55"* ]]
 }
 
@@ -217,7 +217,7 @@ JSON
   [[ "$output" == *"route=needs-local:research (kept)" ]]
   [[ "$(jq -r '.[0]' "$FX/icomments.json")" == "Same root cause, from a later-round review thread on #7 (Add a)."*"<!-- waaagh:followup pr=7 thread=PRRT_later -->" ]]
   [[ "$(jq -r '.[0]' "$FX/replies.json")" == "follow-up #40"* ]]
-  ! grep -q edit "$FX/writes"
+  run ! grep -q edit "$FX/writes"
   run rf file --pr 7 --thread PRRT_later --append 40
   [ "$status" -eq 0 ]
   [[ "$output" == *"already-appended #40"* ]]

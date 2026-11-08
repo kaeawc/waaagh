@@ -172,7 +172,7 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   run "$SCRIPTS/triage-tick.sh" rerun --repo o/r --run 11 --issue 42
   [ "$status" -eq 5 ]
   [ ! -f "$ST/MAIN_RED" ]
-  ! grep -q 'issue comment' "$FX/calls"
+  run ! grep -q 'issue comment' "$FX/calls"
   rm "$FX/rerun-fails"; touch "$FX/comment-fails"
   run "$SCRIPTS/triage-tick.sh" rerun --repo o/r --run 11 --issue 42
   [ "$status" -eq 6 ]

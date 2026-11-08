@@ -93,8 +93,8 @@ merge_calls() { grep -c '^pr merge' "$FX/calls" || true; }
   [[ "$output" != *"merged 1"* ]]
   [ "$(merge_calls)" -eq 1 ]
   [ "$(jq -r .state "$J")" = pending ]
-  ! grep -q $'\tmerged' "$LOG"
-  ! grep -q 'failed:' "$LOG"
+  run ! grep -q $'\tmerged' "$LOG"
+  run ! grep -q 'failed:' "$LOG"
   # GitHub completes it later: the rerun sees MERGED and does not merge again.
   echo 1 >"$FX/merged-at"; rm -f "$FX/views"
   merge

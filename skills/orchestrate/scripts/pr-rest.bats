@@ -71,7 +71,7 @@ verdict_both() { # checks... -> both paths agree; prints the REST verdict and de
   # One refused GraphQL list, one REST page, and no per-PR read for drafts, forks or other authors.
   [ "$(grep -c '^pr list' "$FX/rest-calls")" -eq 1 ]
   [ "$(grep -c 'pulls?state=open' "$FX/rest-calls")" -eq 1 ]
-  ! grep -qE 'pulls/(5|6|7)( |$)|abcdef0123456789(5|6|7)/' "$FX/rest-calls"
+  run ! grep -qE 'pulls/(5|6|7)( |$)|abcdef0123456789(5|6|7)/' "$FX/rest-calls"
   # Workflow names are read only for heads whose checks name an Actions run.
   [ "$(grep -c 'actions/runs?head_sha=' "$FX/rest-calls")" -eq 2 ]
 }
@@ -189,7 +189,7 @@ verdict_both() { # checks... -> both paths agree; prints the REST verdict and de
   : >"$FX/rest-calls"
   ORCHESTRATE_GH_API=rest run "$SCRIPTS/pr-ready.sh" --repo o/r
   [[ "$output" == *"open=2 ready=2 api=rest"* ]]
-  ! grep -q '^pr ' "$FX/rest-calls"
+  run ! grep -q '^pr ' "$FX/rest-calls"
   ORCHESTRATE_GH_API=graphql run "$SCRIPTS/pr-ready.sh" --repo o/r
   [ "$status" -eq 3 ]
   ORCHESTRATE_GH_API=sometimes run "$SCRIPTS/pr-ready.sh" --repo o/r
@@ -360,7 +360,7 @@ STUB
   : >"$FX/rest-calls"
   lc check --issues 123
   [ "$status" -eq 0 ]
-  ! grep -q '/files' "$FX/rest-calls"
+  run ! grep -q '/files' "$FX/rest-calls"
   echo 'not json' >"$FX/prs.json"
   lc add --worktree wt-a --branch lane/a --issues 20 --files a.ts
   [ "$status" -eq 4 ]

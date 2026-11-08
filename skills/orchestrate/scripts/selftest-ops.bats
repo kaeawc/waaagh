@@ -283,7 +283,7 @@ JSON
   echo '{"state":"MERGED"}' >"$FX/pr.json"
   run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as fixed --pr 9 --evidence "$E" --dry-run
   [ "$status" -eq 0 ]
-  ! grep -q 'issue close' "$FX/calls"
+  run ! grep -q 'issue close' "$FX/calls"
   run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as fixed --pr 9 --evidence "$E"
   [ "$status" -eq 0 ]
   grep -q 'issue close 5 --repo o/r --reason completed' "$FX/calls"
@@ -334,7 +334,7 @@ JSON
   close
   [ "$status" -eq 0 ]
   [[ "$output" == *"(earlier attempt)"* ]]
-  ! grep -q 'issue close' "$FX/calls"
+  run ! grep -q 'issue close' "$FX/calls"
   [ "$(jq length "$FX/comments-5")" -eq 1 ]
   [ "$(grep -c 'issue=5' "$ORCHESTRATE_STATE_DIR/o__r/hygiene-actions.log")" -eq 1 ]
   # And once done, a further run refuses: the issue is closed and nothing is pending.

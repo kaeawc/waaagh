@@ -65,6 +65,7 @@ Never re-ask every waiting PR on a timer. Every review request goes through the 
 ```bash
 "$SCRIPTS/review-gate.sh" request --bot coderabbit --pr N [--priority high]
 "$SCRIPTS/review-gate.sh" request --bot coderabbit          # drain: post the next one if due
+"$SCRIPTS/review-gate.sh" request --pr N                    # first listed bot not out of quota
 ```
 
 At most one request per bot every `ORCHESTRATE_REVIEW_EVERY` seconds (default 1200, i.e. 20
@@ -72,7 +73,14 @@ minutes) across all PRs; while the bot is out of quota, one probe every
 `ORCHESTRATE_REVIEW_PROBE_EVERY` (default 3600). `--priority high` puts PRs that gate other work
 (release blockers, manual-test gates, a red-main fix) ahead of the rest; otherwise oldest first.
 `throttled` means the request is queued: do nothing more for it this pass. Requests are logged in
-`review-requests.log`.
+`review-requests.log`. Without `--bot`, an out-of-quota bot is never asked; with every bot out it
+prints `out-of-quota all pr=N` and queues nothing.
+
+A PR refused with `pr-merge.sh` exit 13 (`needs review:`) gets exactly one `request --pr N` per
+head, never one per pass. `merge-queue.sh run-once` does this itself and records the answer in the
+item's outcome detail (`review requested from <bot>`, `review throttled until <iso>`); after a
+`throttled`, it only drains that bot's queue (`request --bot <bot>`) on later passes, so the PR
+keeps its place. A merge bot outside the queue follows the same rule (`roles/merge-bot.md`).
 
 ## State
 

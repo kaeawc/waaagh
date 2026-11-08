@@ -68,7 +68,7 @@ close_completed() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as comp
   close_completed --pr 9 --platforms none
   [ "$status" -eq 3 ]
   [[ "$output" == *"owner-only: no owner decision"* ]]
-  ! grep -q 'issue close' "$FX/calls"
+  run ! grep -q 'issue close' "$FX/calls"
   echo '[{"body":"Owner decision (2026-09-26): close it once #9 merges.\n\nmore"}]' >"$FX/comments-5"
   close_completed --pr 9
   [ "$status" -eq 0 ]
@@ -91,7 +91,7 @@ close_completed() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as comp
   close_completed --pr 9 --platforms none
   [ "$status" -eq 3 ] && [[ "$output" == *"not merged"* ]]
   echo '{"state":"MERGED"}' >"$FX/pr.json"
-  ! grep -q 'issue close' "$FX/calls"
+  run ! grep -q 'issue close' "$FX/calls"
   close_completed --pr 9 --platforms android,ios --device "android=Pixel 8, API 35: retry shown, PASS" \
     --device "ios=iPhone 15 sim, iOS 18: retry shown, PASS"
   [ "$status" -eq 0 ]

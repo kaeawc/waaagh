@@ -187,8 +187,8 @@ verdict() { printf '%s\n' "$output" | awk -F'\t' -v p="$BATS_TEST_TMPDIR/$1" '$2
 }
 
 @test "the new host scripts kill nothing and document their exits in the -h header" {
-  ! grep -nE '\b(pkill|killall|renice)\b' "$SCRIPTS"/host-load.sh "$SCRIPTS"/wt-cleanup.sh
-  ! grep -n '\bkill\b' "$SCRIPTS"/host-load.sh "$SCRIPTS"/wt-cleanup.sh
+  run ! grep -nE '\b(pkill|killall|renice)\b' "$SCRIPTS"/host-load.sh "$SCRIPTS"/wt-cleanup.sh
+  run ! grep -n '\bkill\b' "$SCRIPTS"/host-load.sh "$SCRIPTS"/wt-cleanup.sh
   run "$SCRIPTS/host-load.sh" -h
   [[ "$output" == *"Exit: 0 ADMIT | 3 HOLD"* && "$output" != *"set -euo"* ]]
   run "$SCRIPTS/wt-cleanup.sh" -h

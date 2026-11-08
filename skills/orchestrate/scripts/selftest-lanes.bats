@@ -22,7 +22,7 @@ setup() {
   printf '#!/bin/sh\nexit 1\n' >"$BATS_TEST_TMPDIR/hooks/pre-commit"; chmod +x "$BATS_TEST_TMPDIR/hooks/pre-commit"
   printf '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n[core]\n\thooksPath = %s\n' "$BATS_TEST_TMPDIR/hooks" >"$hostile"
   GIT_CONFIG_GLOBAL="$hostile"
-  ! (cd "$REPO" && echo x >>a.txt && git commit -qam signed 2>/dev/null)
+  if (cd "$REPO" && echo x >>a.txt && git commit -qam signed 2>/dev/null); then false; fi
   git -C "$REPO" checkout -q a.txt
   hermetic_git
   [ "$GIT_CONFIG_GLOBAL" != "$hostile" ]

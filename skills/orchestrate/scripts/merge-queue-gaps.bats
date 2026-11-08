@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # merge-queue.sh paths merge-queue.bats does not reach: every pr-merge.sh exit code mapped to a queue
-# outcome (driven through the real pr-merge.sh), the base-merge and PR lookup/create failure arms,
+# outcome (driven through the real pr-merge.sh), the bot-review request on exit 13 (one per head,
+# through review-gate.sh's throttle, never to an out-of-quota bot), the base-merge and PR lookup/create failure arms,
 # a dirty worktree, an unreadable known PR, a SKIP readiness row, and status/retry edge cases.
 # Real git against a local bare origin, stubbed gh. Run: bats scripts/merge-queue-gaps.bats
 
@@ -8,7 +9,7 @@ setup() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1790510400 ORCHESTRATE_READ_SLEEP=0
-  unset MERGE_QUEUE_CHECK_CMD MERGE_QUEUE_ADMIN_EVIDENCE MERGE_QUEUE_ADMIN_CHECKS ORCHESTRATE_DIRECT_MERGE \
+  unset ORCHESTRATE_REVIEW_BOTS ORCHESTRATE_REVIEW_EVERY ORCHESTRATE_REVIEW_PROBE_EVERY MERGE_QUEUE_CHECK_CMD MERGE_QUEUE_ADMIN_EVIDENCE MERGE_QUEUE_ADMIN_CHECKS ORCHESTRATE_DIRECT_MERGE \
     ORCHESTRATE_MERGE_SENSITIVE ORCHESTRATE_GENERATED_FILES ORCHESTRATE_FAST_PATH_OVER ORCHESTRATE_ADMIN_MERGE
   git init -q --bare -b main "$BATS_TEST_TMPDIR/origin.git"
   git clone -q "$BATS_TEST_TMPDIR/origin.git" "$BATS_TEST_TMPDIR/seed" 2>/dev/null
@@ -28,6 +29,7 @@ setup() {
   #   view-fails          `pr view` answers HTTP 502 this many more times
   #   files-fail, behind  merge-sensitive reads: PR files unreadable; commits behind the base
   #   reviews.json        bot reviews (review-gate.sh)
+#   comment-fails       `pr comment` (a review request) answers HTTP 502
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 all="$*"
@@ -53,6 +55,7 @@ case "$all" in
     jq -n --arg h "$(head_of)" --argjson c "$(cat "$c")" --argjson l "$(cat "$FX/labels.json")" \
       '[{number: 5, author: {login: "me"}, isDraft: false, isCrossRepository: false, baseRefName: "main",
          headRefOid: $h, mergeable: "MERGEABLE", labels: $l, statusCheckRollup: $c}]' ;;
+  "pr comment"*) [ ! -f "$FX/comment-fails" ] || { echo "HTTP 502" >&2; exit 1; } ;;
   "pr create"*) [ ! -f "$FX/create-fails" ] || { echo "GraphQL: something went wrong" >&2; exit 1; } ;;
   "pr merge"*) case "$(cat "$FX/merge-mode" 2>/dev/null)" in
       queued) touch "$FX/auto"; echo "! Pull request will be automatically merged when all requirements are met" ;;
@@ -197,7 +200,7 @@ CASES
   run mq run-once
   [ "$(outcome a)" = error ]
   [[ "$(reason a)" == "worktree dirty or not on a" ]]
-  ! git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a
+  run ! git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a
   rm "$BATS_TEST_TMPDIR/a/untracked.txt"
   git -C "$BATS_TEST_TMPDIR/a" switch -q -c elsewhere
   mq retry a >/dev/null
@@ -214,7 +217,7 @@ CASES
   [ "$status" -eq 0 ]
   [ "$(outcome a)" = waiting ]
   [[ "$(reason a)" == "PR 5 unreadable (transient); will re-check" ]]
-  ! grep -qE '^pr (list|create|merge)' "$FX/calls"
+  run ! grep -qE '^pr (list|create|merge)' "$FX/calls"
   ! git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a
 }
 
@@ -225,7 +228,7 @@ CASES
   run mq run-once
   [ "$(outcome a)" = waiting ]
   [[ "$(reason a)" == "PR lookup failed (transient)" ]]
-  ! grep -q '^pr create' "$FX/calls"
+  run ! grep -q '^pr create' "$FX/calls"
   rm "$FX/merged-list-fails"
   touch "$FX/create-fails"
   run mq run-once
@@ -261,4 +264,83 @@ CASES
   [ "$status" -eq 0 ]
   [ "$output" = "a has no outcome; nothing to retry" ]
   [ ! -f "$Q/a.outcome" ]
+}
+
+# review_comments: how many review requests (`gh pr comment`) the queue posted.
+review_comments() { grep -c '^pr comment' "$FX/calls" || true; }
+review_policy() { mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"; echo review-at-head >"$ORCHESTRATE_STATE_DIR/o__r/review-policy"; }
+WHY="waiting for a bot review (review-gate.sh policy)"
+
+@test "exit 13 asks for one bot review per head, not per pass; a throttled ask names the next window" {
+  review_policy
+  wt a
+  enqueue a
+  run mq run-once
+  [ "$status" -eq 0 ]
+  [ "$(outcome a)" = waiting ]
+  [ "$(reason a)" = "$WHY: review requested from codex" ]
+  [ "$(review_comments)" -eq 1 ]
+  grep -q '^pr comment 5 --repo o/r --body @codex review$' "$FX/calls"
+  # Two more passes at the same head: no second request, even once the window has reopened.
+  run mq run-once
+  ORCHESTRATE_NOW=1790520000 run mq run-once
+  [ "$status" -eq 0 ]
+  [ "$(review_comments)" -eq 1 ]
+  [ "$(reason a)" = "$WHY: review requested from codex" ]
+  # A new head asks again, but the bot's window (last request at 12:00, every 1200 s) is shut.
+  echo more >"$BATS_TEST_TMPDIR/a/a.txt"
+  git -C "$BATS_TEST_TMPDIR/a" commit -qam more
+  ORCHESTRATE_NOW=1790510500 run mq run-once
+  [ "$status" -eq 0 ]
+  [ "$(reason a)" = "$WHY: review throttled until 2026-09-27T12:20:00Z (codex)" ]
+  [ "$(review_comments)" -eq 1 ]
+  # Still shut: the next pass only drains, so the PR is not re-queued behind itself.
+  ORCHESTRATE_NOW=1790510600 run mq run-once
+  [ "$(review_comments)" -eq 1 ]
+  [ "$(wc -l <"$ORCHESTRATE_STATE_DIR/o__r/review-queue/codex.tsv" | tr -d ' ')" -eq 1 ]
+  [ "$(grep -c 'review-gate.sh request --pr 5:' "$Q/logs/a.log" || true)" -eq 2 ]  # first head, new head
+  [ "$(grep -c 'review-gate.sh request --bot codex:' "$Q/logs/a.log" || true)" -eq 1 ]
+  # Window open: the queued request is posted once, and only once.
+  ORCHESTRATE_NOW=1790511600 run mq run-once
+  [ "$(reason a)" = "$WHY: review requested from codex" ]
+  ORCHESTRATE_NOW=1790520000 run mq run-once
+  [ "$(review_comments)" -eq 2 ]
+}
+
+@test "exit 13 never asks an out-of-quota bot; with every bot out, nothing is posted" {
+  review_policy
+  "$SCRIPTS/review-gate.sh" notice --repo o/r --author chatgpt-codex-connector <<<"You have reached your Codex usage limits" >/dev/null
+  wt a
+  enqueue a
+  run mq run-once
+  [ "$status" -eq 0 ]
+  [ "$(reason a)" = "$WHY: review requested from coderabbit" ]
+  [ "$(grep -c '^pr comment.*@codex' "$FX/calls" || true)" -eq 0 ]
+  [ "$(review_comments)" -eq 1 ]
+  export ORCHESTRATE_REVIEW_BOTS=codex
+  wt b
+  enqueue b
+  : >"$FX/calls"
+  run mq run-once
+  [ "$status" -eq 0 ]
+  [ "$(outcome b)" = waiting ]
+  [ "$(reason b)" = "$WHY: no review requested: every review bot is out of quota" ]
+  [ "$(review_comments)" -eq 0 ]
+  run test -e "$ORCHESTRATE_STATE_DIR/o__r/review-queue/codex.tsv"
+  [ "$status" -ne 0 ]
+}
+
+@test "exit 13 with a failed review request stays waiting and asks again next pass" {
+  review_policy
+  touch "$FX/comment-fails"
+  wt a
+  enqueue a
+  run mq run-once
+  [ "$status" -eq 0 ]
+  [ "$(outcome a)" = waiting ]
+  [[ "$(reason a)" == "$WHY: review request failed (exit 5), see "* ]]
+  rm "$FX/comment-fails"
+  run mq run-once
+  [ "$(reason a)" = "$WHY: review requested from codex" ]
+  [ "$(review_comments)" -eq 2 ]
 }

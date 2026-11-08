@@ -89,7 +89,7 @@ decide() { ft decide --pr 5 --head "${HEAD:0:9}" "$@"; }
   run ft rerun --pr 5 --head "${HEAD:0:9}" --check lint --run 77
   [ "$status" -eq 4 ]
   [[ "$output" == stale:* ]]
-  ! grep -q '^run rerun' "$FX/calls"
+  run ! grep -q '^run rerun' "$FX/calls"
 
   echo "$HEAD" >"$FX/head"; touch "$FX/rerun-fails"
   run ft rerun --pr 5 --head "${HEAD:0:9}" --check lint --run 77

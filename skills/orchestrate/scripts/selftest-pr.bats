@@ -263,7 +263,7 @@ setup() {
   mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"; echo "red abc" >"$ORCHESTRATE_STATE_DIR/o__r/MAIN_RED"
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
   [ "$status" -eq 4 ]
-  ! grep -q 'pr merge' "$FX/calls"
+  run ! grep -q 'pr merge' "$FX/calls"
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --main-fix
   [ "$status" -eq 0 ]
 }
@@ -276,7 +276,7 @@ setup() {
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --except-check sim --evidence "known flake: sim timeout"
   [ "$status" -eq 6 ]
   [[ "$output" == *"fast-path only"* ]]
-  ! grep -q 'pr merge' "$FX/calls"
+  run ! grep -q 'pr merge' "$FX/calls"
   ORCHESTRATE_FAST_PATH_OVER=0 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --admin --evidence "known flake: sim timeout"
   [ "$status" -eq 6 ]
   [[ "$output" == *"needs --except-check"* ]]
@@ -330,7 +330,7 @@ setup() {
   adm --except-check sim
   [ "$status" -eq 6 ]
   [[ "$output" == *"policy=unknown"* ]]
-  ! grep -q 'pr merge' "$FX/calls"
+  run ! grep -q 'pr merge' "$FX/calls"
   rm "$FX/rules-fails"
   adm --except-check sim
   [ "$status" -eq 0 ]
@@ -346,7 +346,7 @@ setup() {
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
   [ "$status" -eq 7 ]
   [[ "$output" == "not ready: WAIT pending:build"* ]]
-  ! grep -q 'pr merge' "$FX/calls"
+  run ! grep -q 'pr merge' "$FX/calls"
   ORCHESTRATE_DIRECT_MERGE=1 run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
   [ "$status" -eq 0 ]
 }
@@ -390,7 +390,7 @@ setup() {
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --ignore-check sim
   [ "$status" -eq 6 ]
   [[ "$output" == "refused: sim failing on this head"* ]]
-  ! grep -q 'pr merge' "$FX/calls"
+  run ! grep -q 'pr merge' "$FX/calls"
   run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --ignore-check sim --evidence "sim: classifier INFRA run 77 (device farm 503)"
   [ "$status" -eq 0 ]
   grep -q 'evidence=sim: classifier INFRA run 77' "$ORCHESTRATE_STATE_DIR/o__r/merges.log"

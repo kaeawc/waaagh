@@ -31,3 +31,5 @@ unset ORCHESTRATE_GH_BUDGET GH_BUDGET_ACTIVE
 # No suite reaches githubstatus.com (gh-status.sh): an unreadable fixture unless a test writes it,
 # and pr-merge.sh outage waits are logged ("pr-merge: wait <s>"), not slept.
 export GITHUB_STATUS_URL="file://$BATS_TEST_TMPDIR/githubstatus.json" ORCHESTRATE_MERGE_FAKE_SLEEP=1
+# `run ! cmd` is how a mid-test negative assertion fails (#134); bats >= 1.5 has it.
+bats_require_minimum_version 1.5.0

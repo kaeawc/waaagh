@@ -23,12 +23,17 @@
 #              because the PR touches a merge-sensitive path and the base moved past it (the next
 #              pass merges the base in again, re-runs the check and pushes, so it merges only
 #              after a fresh green run) or because another merge holds that path's lock, a merge
-#              refused for want of a bot review (review-gate.sh), or a transient read failure. The next run-once
+#              refused for want of a bot review, or a transient read failure. The next run-once
 #              first re-checks the item's known PR (MERGED -> merged, without any new push, PR or
 #              merge), then resumes, skipping the base merge, check and push when nothing moved
 #   blocked    readiness found a real blocker (failed check, review thread, conflict, unknown
 #              policy...); parked until `retry`
 #   conflict | checkfail | error   parked until `retry`
+# Bot review (pr-merge.sh exit 13): the item asks `review-gate.sh request --pr N` once per pushed
+# head; the gate's throttle decides whether a request is posted and never asks an out-of-quota bot.
+# The answer is in the outcome detail: `review requested from <bot>`, `review throttled until
+# <iso>` (later passes only drain that bot's queue, so the PR keeps its place), or `no review
+# requested: every review bot is out of quota` (asked again next pass). <id>.review records it.
 # The merge is never attempted for an item that is not READY on a fresh pr-ready.sh row for the
 # exact pushed head, whatever the server's branch protection would allow; pr-merge.sh re-checks.
 # Logs of the check and of errors are under <state dir>/merge-queue/logs/.
@@ -49,7 +54,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-case "${1:-}" in -h | --help) sed -n '2,45p' "$0"; exit 0 ;; -*) echo "merge-queue.sh: unknown argument: $1" >&2; exit 2 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,50p' "$0"; exit 0 ;; -*) echo "merge-queue.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 
@@ -70,7 +75,7 @@ fi
 repo="" id="" worktree="" branch="" title="" body="" requires="-" arg=""
 case "$cmd" in
   add | run-once | status | retry) ;;
-  *) sed -n '2,45p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,50p' "$0" >&2; exit 2 ;;
 esac
 while (($#)); do
   case "$1" in
@@ -97,6 +102,48 @@ touch "$queue"
 outcome_of() { [[ -f "$qdir/$1.outcome" ]] && head -1 "$qdir/$1.outcome" || true; }
 set_outcome() { printf '%s\n%s\n' "$2" "${3:-}" >"$qdir/$1.outcome"; echo "$1: $2${3:+ ($3)}"; }
 
+# review_detail ID PR HEAD -> the outcome detail for a PR waiting on a bot review. Asks
+# review-gate.sh once per head (a throttled ask only drains its bot's queue on later passes) and
+# records "head<TAB>bot<TAB>state" in <id>.review (state: requested | throttled | quota | failed).
+review_detail() {
+  local rpr=$2 rhead=$3 rec="$qdir/$1.review" rlog="$qdir/logs/$1.log" phead="" pbot="" pstate="" line rrc=0
+  local -a rargs
+  if [[ -f "$rec" ]]; then
+    IFS=$'\t' read -r phead pbot pstate <"$rec" || true
+    [[ "$phead" == "$rhead" ]] || { pbot=""; pstate=""; }
+  fi
+  if [[ "$pstate" == requested ]]; then echo "review requested from $pbot"; return 0; fi
+  if [[ "$pstate" == throttled ]]; then rargs=(--bot "$pbot"); else rargs=(--pr "$rpr"); fi
+  line=$("$here/review-gate.sh" request --repo "$repo" "${rargs[@]}" 2>>"$rlog") || rrc=$?
+  echo "review-gate.sh request ${rargs[*]}: ${line:-exit $rrc}" >>"$rlog"
+  line=$(awk 'END { print }' <<<"$line")
+  case "$line" in
+    "requested "*)
+      local got=${line#requested }; got=${got%% *}
+      if [[ "$pstate" == throttled && "$line" != *" pr=$rpr "* ]]; then
+        # The drain posted an older queued PR; this one keeps its place for the next window.
+        printf '%s\t%s\tthrottled\n' "$rhead" "$got" >"$rec"
+        echo "review queued for $got behind another PR"; return 0
+      fi
+      printf '%s\t%s\trequested\n' "$rhead" "$got" >"$rec"
+      echo "review requested from $got" ;;
+    "empty "*) # Queue drained elsewhere: the request for this PR was posted.
+      printf '%s\t%s\trequested\n' "$rhead" "$pbot" >"$rec"
+      echo "review requested from $pbot" ;;
+    "throttled "*)
+      local tbot=${line#throttled }; tbot=${tbot%% *}
+      local next=${line#*next=}; next=${next%% *}
+      printf '%s\t%s\tthrottled\n' "$rhead" "$tbot" >"$rec"
+      echo "review throttled until $next ($tbot)" ;;
+    "out-of-quota all"*)
+      printf '%s\t-\tquota\n' "$rhead" >"$rec"
+      echo "no review requested: every review bot is out of quota" ;;
+    *)
+      printf '%s\t%s\tfailed\n' "$rhead" "${pbot:--}" >"$rec"
+      echo "review request failed (exit $rrc), see $rlog" ;;
+  esac
+}
+
 # unmet_deps REQUIRES -> the ids in the list whose outcome is not `merged`.
 unmet_deps() {
   local dep missing=() deps
@@ -112,7 +159,7 @@ unmet_deps() {
 case "$cmd" in
   add)
     [[ "$id" =~ ^[A-Za-z0-9._-]+$ && -n "$worktree" && -n "$branch" && -n "$title" && -n "$body" ]] ||
-      { sed -n '2,45p' "$0" >&2; exit 2; }
+      { sed -n '2,50p' "$0" >&2; exit 2; }
     if cut -f1 "$queue" | grep -Fxq -- "$id"; then
       echo "refused: id '$id' is already queued; ids are never reused" >&2; exit 3
     fi
@@ -262,7 +309,7 @@ case "$cmd" in
         9) set_outcome "$qid" waiting "merge outcome unknown; will reconcile" ;;
         11) set_outcome "$qid" waiting "base moved past a merge-sensitive path; next pass merges it in again" ;;
         12) set_outcome "$qid" waiting "another merge holds a merge-sensitive path lock" ;;
-        13) set_outcome "$qid" waiting "waiting for a bot review (review-gate.sh policy), see $log" ;;
+        13) set_outcome "$qid" waiting "waiting for a bot review (review-gate.sh policy): $(review_detail "$qid" "$pr" "$head")" ;;
         10) set_outcome "$qid" waiting "merge pending on GitHub (5xx, in progress or outage); will reconcile"
           if [[ -f "$(orch_state_dir "$repo")/GITHUB_OUTAGE" ]]; then echo "paused: GitHub outage; pass stopped"; break; fi ;;
         *) set_outcome "$qid" error "pr-merge exit $rc, see $log" ;;
