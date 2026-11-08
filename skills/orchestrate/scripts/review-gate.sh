@@ -19,6 +19,10 @@
 #   check    read-only verdict: "ok reviewed <why>", "ok unreviewed <why>" (merge, then ledger it)
 #            or "wait <why>" (exit 3). A review counts when a listed bot submitted it (not pending)
 #            and it is not a quota notice; a bot comment "Reviewed commit: <sha>" counts for that sha.
+#            A fresh gh-snapshot.sh row for the PR (pr-snapshot/<head>.json, written in the last
+#            ORCHESTRATE_SNAPSHOT_TTL seconds, default 300; with --head, for exactly that head)
+#            stands in for the head read, and for the reviews read when it shows no review at all;
+#            otherwise check reads them itself. Comments are always read.
 #   notice   classify one PR comment: "quota <id> new|known" (a quota notice; the outage flag is
 #            set, or its last-seen time moved), "bot <id>" or "other". A quota notice needs no
 #            orchestrator turn; "new" means ask the owner once: `outage ask`.
@@ -36,7 +40,7 @@
 #            out of quota one probe every ORCHESTRATE_REVIEW_PROBE_EVERY (default 3600).
 #            Prints "requested <id> pr=<n>", "throttled <id> next=<iso> queued=<n>" or "empty <id>".
 # State (<state dir>): review-policy, review-exempt.tsv, reviewer-out-of-quota.tsv,
-#   unreviewed-merges.tsv, review-queue/<id>.tsv and <id>.last, review-requests.log.
+#   unreviewed-merges.tsv, review-queue/<id>.tsv and <id>.last, review-requests.log; pr-snapshot/ read.
 # Exit: 0 ok | 2 usage | 3 check: a review is still needed | 4 a read failed | 5 a write failed
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -44,10 +48,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 
-usage() { sed -n '2,40p' "$0" >&2; exit 2; }
+usage() { sed -n '2,44p' "$0" >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
-  -h | --help) sed -n '2,40p' "$0"; exit 0 ;;
+  -h | --help) sed -n '2,44p' "$0"; exit 0 ;;
   -*) echo "review-gate.sh: unknown argument: $cmd" >&2; exit 2 ;;
 esac
 if [[ -n "$cmd" ]]; then shift; fi
@@ -66,7 +70,7 @@ while (($#)); do
     --force) force=yes; shift ;;
     --dry-run) dry=yes; shift ;;
     --list) list=yes; shift ;;
-    -h | --help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,44p' "$0"; exit 0 ;;
     -*) echo "review-gate.sh: unknown argument: $1" >&2; exit 2 ;;
     *) [[ -z "$sub" ]] || { echo "review-gate.sh: unexpected argument: $1" >&2; exit 2; }; sub=$1; shift ;;
   esac
@@ -158,9 +162,26 @@ fetch_comments() {
   orch_read_retry 3 gh api "repos/$repo/issues/$pr/comments?per_page=100" --paginate | jq -cs 'add // []'
 }
 
+# snapshot_row: the PR's gh-snapshot.sh row when it is fresh (written in the last
+# ORCHESTRATE_SNAPSHOT_TTL seconds) and, with --head, for exactly that head; nothing otherwise.
+snapshot_row() {
+  local dir="$state/pr-snapshot" f="" t ttl=${ORCHESTRATE_SNAPSHOT_TTL:-300}
+  [[ "$ttl" =~ ^[0-9]+$ ]] || ttl=300
+  [[ -d "$dir" ]] || return 0
+  if [[ -n "$head" ]]; then
+    [[ "$head" =~ ^[0-9a-f]{40}$ ]] && f="$dir/$head.json"
+  else
+    f=$(grep -l "\"number\":${pr}[,}]" "$dir"/*.json 2>/dev/null | sed -n '1p') || f=""
+  fi
+  [[ -n "$f" && -f "$f" ]] || return 0
+  t=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null) || return 0
+  [[ "$t" =~ ^[0-9]+$ ]] && ((now - t <= ttl)) || return 0
+  jq -ce --argjson n "$pr" 'select(.number == $n and (.head | type == "string") and (.review | type == "string"))' "$f" 2>/dev/null || true
+}
+
 cmd_check() {
   [[ -n "$pr" ]] || usage
-  local policy reviews comments verdict
+  local policy reviews comments verdict snap
   policy=$(read_policy)
   if [[ -f "$exempts" ]] && awk -F'\t' -v p="$pr" '$1 == p { f = 1 } END { exit !f }' "$exempts"; then
     echo "ok unreviewed exempt"; return 0
@@ -171,11 +192,17 @@ cmd_check() {
     review-at-head | reviewed-once) ;;
     *) echo "review-gate.sh: unknown policy '$policy' in $state/review-policy" >&2; exit 2 ;;
   esac
+  snap=$(snapshot_row)
+  [[ -z "$snap" || -n "$head" ]] || head=$(jq -r .head <<<"$snap")
   if [[ -z "$head" ]]; then
     head=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json headRefOid | jq -r .headRefOid) ||
       { echo "unverified: PR $pr could not be read"; exit 4; }
   fi
-  reviews=$(fetch_reviews) || { echo "unverified: reviews of PR $pr could not be read"; exit 4; }
+  if [[ -n "$snap" && "$(jq -r .review <<<"$snap")" == NONE ]]; then
+    reviews='[]'
+  else
+    reviews=$(fetch_reviews) || { echo "unverified: reviews of PR $pr could not be read"; exit 4; }
+  fi
   comments=$(fetch_comments) || { echo "unverified: comments of PR $pr could not be read"; exit 4; }
   verdict=$(jq -rn --argjson r "$reviews" --argjson c "$comments" --argjson bots "$(logins_json)" \
     --arg head "$head" --arg re "$quota_re" '

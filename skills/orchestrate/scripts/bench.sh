@@ -16,10 +16,28 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/fx"
 cat >"$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-echo "$*" >>"$FX/calls"
+printf '%s\n' "$(printf '%s' "$*" | tr '\n' ' ')" >>"$FX/calls"   # one line per call
 case "$*" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   *rules/branches*) echo '[]' ;;
+  # gh-snapshot.sh's open-PR query, and thread-sweep.sh's (pages of 25 by cursor), from prs.json;
+  # both refused like a cloud session while $FX/rest exists (#118).
+  *"api graphql"*"pullRequests(states: OPEN"* | *"api graphql"*"pullRequests(states:OPEN"*)
+    if [ -f "$FX/rest" ]; then echo "HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the REST API" >&2; exit 1; fi
+    case "$*" in
+      *"states: OPEN"*) jq '{data: {repository: {pullRequests: {pageInfo: {hasNextPage: false, endCursor: null},
+          nodes: map({number, headRefOid, isDraft, commits: {nodes: [{commit: {statusCheckRollup: {state: "SUCCESS"}}}]},
+            reviews: {nodes: (if .number % 2 == 0 then [{state: "COMMENTED", commit: {oid: .headRefOid}}] else [] end)}})}}}}' "$FX/prs.json" ;;
+      *) c=$(printf '%s\n' "$*" | sed -nE 's/.* cursor=([0-9]+).*/\1/p')
+        jq --argjson c "${c:-0}" '{data: {repository: {pullRequests: {pageInfo: {hasNextPage: (length > $c + 25), endCursor: ($c + 25 | tostring)},
+          nodes: [.[$c:($c + 25)][] | {number, commits: {nodes: []}, reviewThreads: {pageInfo: {hasNextPage: false}, nodes: []}}]}}}}' "$FX/prs.json" ;;
+    esac ;;
+  "api repos/o/r/actions/runs?branch="*) echo '{"workflow_runs":[{"name":"Test","status":"completed","conclusion":"success","head_sha":"aaaaaaaaaaaa","id":10,"created_at":"2026-09-27T01:00:00Z"}]}' ;;
+  *"/pulls/"*"/reviews"*) n=$(printf '%s\n' "$*" | sed -nE 's#.*/pulls/([0-9]+)/reviews.*#\1#p')
+    jq --argjson n "$n" '[.[] | select(.number == $n and .number % 2 == 0)
+      | {user: {login: "someone"}, state: "COMMENTED", commit_id: .headRefOid, body: "ok", submitted_at: "2026-09-27T01:00:00Z"}]' "$FX/prs.json" ;;
+  *"/issues/"*"/comments"*) echo '[]' ;;
+  "pr view"*"--json headRefOid") n=${3}; jq --argjson n "$n" '.[] | select(.number == $n) | {headRefOid}' "$FX/prs.json" ;;
   "api repos/o/r/branches/"*) echo '{"protected":false}' ;;
   *graphql*) jq -n --args '{data: {repository: (reduce $ARGS.positional[] as $n ({};
       .["p" + $n] = {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: []}}))}}' \
@@ -85,6 +103,21 @@ measure pr-ready-rest-20-ready "$here/pr-ready.sh" --repo o/r --base main
 pr_rows 100 >"$FX/prs.json"
 measure pr-ready-rest-100-ready "$here/pr-ready.sh" --repo o/r --base main
 rm -f "$FX/rest"
+
+# triage-tick.sh snapshot with 50 open PRs (#118): the open count and last reviews come from one
+# gh-snapshot.sh call. Then the same where GraphQL is refused, where the snapshot goes REST per PR.
+pr_rows 50 >"$FX/prs.json"
+echo '[{"number":900,"labels":[]}]' >"$FX/issues.json"
+measure triage-tick-50-open "$here/triage-tick.sh" snapshot --repo o/r --branch main
+touch "$FX/rest"
+measure triage-tick-rest-50-open "$here/triage-tick.sh" snapshot --repo o/r --branch main
+rm -f "$FX/rest"
+# review-gate.sh check for one PR: its own reads, then with a fresh snapshot row for its head.
+"$here/review-gate.sh" policy review-at-head --repo o/r >/dev/null
+rm -rf "$ORCHESTRATE_STATE_DIR/o__r/pr-snapshot"
+measure review-gate-check-cold env -u ORCHESTRATE_NOW "$here/review-gate.sh" check --repo o/r --pr 7
+"$here/gh-snapshot.sh" --repo o/r >/dev/null 2>&1 || true
+measure review-gate-check-snapshot env -u ORCHESTRATE_NOW "$here/review-gate.sh" check --repo o/r --pr 7
 
 # codex-lane-wait.sh (#7): an unchanged run.
 run="$work/run/codex.jsonl"

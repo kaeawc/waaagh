@@ -210,7 +210,8 @@ if [[ "$api" == rest ]]; then
     note "PR $n: REST checks or mergeable unreadable: $(awk 'NR<=3' "$restdir/view-$n.err")"
     unread+="$n "
   done
-  prs=$(cat "$restdir"/view-*.out 2>/dev/null | jq -sc --argjson prs "$prs" '
+  # No candidate (no open PR, or only drafts, forks and other authors): no view-*.out exists.
+  prs=$({ cat "$restdir"/view-*.out 2>/dev/null || true; } | jq -sc --argjson prs "$prs" '
     (map(select(type == "object" and has("number")) | {key: (.number | tostring), value: del(.state)}) | from_entries) as $by
     | $prs | map($by[.number | tostring] // .)')
 fi
