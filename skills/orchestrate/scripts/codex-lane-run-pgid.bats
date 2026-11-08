@@ -3,6 +3,9 @@
 # before codex's setpgrp and report the runner's group, which is its caller's group. Each test runs
 # the runner in a fresh process group next to a sentinel that records any INT or TERM, so a signal
 # to the runner's group shows up as a sentinel hit and never reaches bats.
+# No test races a sleep against the runner's wall-clock budgets (#164): the stubs and group scripts
+# wait (bounded at 30 s) for events, codex's "started" mark, the runner's "not confirmed" line or
+# its first process-group CPU query, so a slow runner (bashcov's xtrace) only makes a test slower.
 # Run: bats scripts/codex-lane-run-pgid.bats
 
 setup() {
@@ -51,10 +54,16 @@ SH
 }
 
 # A ps whose pgid answers name the caller's (the runner's) group: the stub runs in that group.
-# With a count file, only the first N pgid answers lie.
+# With a count file, only the first N pgid answers lie. CPU queries (time=) come only from the
+# runner's poll loop and wait for codex's mark, so a 1 s stall or hard cap cannot stop codex before
+# its INT handler is installed.
 lying_ps() {
   cat >"$FAKEBIN/ps" <<SH
 #!/usr/bin/env bash
+case "\$*" in
+  *time=*)
+    for _ in \$(seq 1 300); do [ -s "\$MARK" ] && break; sleep 0.1; done ;;
+esac
 case "\$*" in
   *pgid=*)
     if [[ -n "\${LIES:-}" ]]; then
@@ -92,14 +101,39 @@ SH
 }
 
 @test "codex's setpgrp delayed past the 2 s wait: pid-only signals until a later poll confirms its group" {
-  # perl (which calls setpgrp) starts 2.5 s late, so the initial bounded wait gives up.
-  printf '#!/usr/bin/env bash\nsleep 2.5\nexec %s "$@"\n' "$REAL_PERL" >"$FAKEBIN/perl"
-  chmod +x "$FAKEBIN/perl"
-  run_in_group --poll 1 --stall 60 --hard 4
-  [ "$rc" -eq 124 ]
+  # perl (which calls setpgrp) waits for a release file that the group script creates only after the
+  # runner's initial bounded wait has given up. ps logs every call; a CPU query by group (-g) about
+  # codex's pid shows a later poll confirmed the group, and only then does the runner get a TERM.
+  RELEASE="$BATS_TEST_TMPDIR/release" PSLOG="$BATS_TEST_TMPDIR/ps.log" ERR="$BATS_TEST_TMPDIR/stderr"
+  export RELEASE PSLOG ERR
+  printf '#!/usr/bin/env bash\nfor _ in $(seq 1 300); do [ -e "$RELEASE" ] && break; sleep 0.1; done\nexec %s "$@"\n' "$REAL_PERL" >"$FAKEBIN/perl"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$PSLOG"\nexec %s "$@"\n' "$REAL_PS" >"$FAKEBIN/ps"
+  chmod +x "$FAKEBIN/perl" "$FAKEBIN/ps"
+  cat >"$BATS_TEST_TMPDIR/group.sh" <<'SH'
+#!/usr/bin/env bash
+"$REAL_PERL" -e '$SIG{INT} = $SIG{TERM} = sub { open my $f, ">>", $ENV{HIT}; print $f "hit\n"; exit 0 }; sleep 1 while 1' &
+sentinel=$!
+"$@" 2>"$ERR" & runner=$!
+for _ in $(seq 1 300); do [[ "$(cat "$ERR" 2>/dev/null)" == *"not confirmed"* ]] && break; sleep 0.1; done
+: >"$RELEASE"
+for _ in $(seq 1 300); do [ "$(cat "$MARK" 2>/dev/null)" = started ] && break; sleep 0.1; done
+codex=$(cat "$MARK.pid" 2>/dev/null || true)
+for _ in $(seq 1 300); do [[ "$(cat "$PSLOG" 2>/dev/null)" == *"-g $codex"* ]] && break; sleep 0.1; done
+kill -TERM "$runner"; rc=0; wait "$runner" || rc=$?
+kill -KILL "$sentinel" 2>/dev/null; wait "$sentinel" 2>/dev/null || true
+exit "$rc"
+SH
+  chmod +x "$BATS_TEST_TMPDIR/group.sh"
+  rc=0
+  PATH="$FAKEBIN:$PATH" "$REAL_PERL" -e 'setpgrp(0, 0); exec @ARGV or die' "$BATS_TEST_TMPDIR/group.sh" \
+    "$RUNNER" --model gpt-6-luna --spec "$SPEC" --final "$BATS_TEST_TMPDIR/final.md" --log "$L" --cd "$CD" --poll 1 \
+    >/dev/null 2>&1 3>&- || rc=$?
+  [ "$rc" -eq 143 ]
+  [ "$(cat "$L.exit")" = 143 ]
   [ ! -e "$HIT" ]
   [ "$(cat "$MARK")" = interrupted ]
   [[ "$(cat "$ERR")" == *"process group is not confirmed"* ]]
+  [[ "$(cat "$PSLOG")" == *"-g $(cat "$MARK.pid")"* ]]
 }
 
 @test "a TERM to the runner before codex's group is confirmed interrupts codex by pid, not the caller's group" {
@@ -110,7 +144,7 @@ SH
 "$REAL_PERL" -e '$SIG{INT} = $SIG{TERM} = sub { open my $f, ">>", $ENV{HIT}; print $f "hit\n"; exit 0 }; sleep 1 while 1' &
 sentinel=$!
 "$@" & runner=$!
-for _ in $(seq 1 50); do [ "$(cat "$MARK" 2>/dev/null)" = started ] && break; sleep 0.1; done
+for _ in $(seq 1 300); do [ "$(cat "$MARK" 2>/dev/null)" = started ] && break; sleep 0.1; done
 kill -TERM "$runner"; rc=0; wait "$runner" || rc=$?
 kill -KILL "$sentinel" 2>/dev/null; wait "$sentinel" 2>/dev/null || true
 exit "$rc"
