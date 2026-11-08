@@ -153,6 +153,31 @@ count() { grep -c -- "$1" "$FX/calls" 2>/dev/null || true; }
   [ "$(count '^api rate_limit')" -eq 0 ]
 }
 
+@test "the gh shim passes local-only commands straight to gh; API commands stay paced (#128)" {
+  rate 1000 1000   # every normal call is at its floor: a paced call would wait past the bound
+  export PATH="$SCRIPTS/gh-shim:$PATH" GH_BUDGET_MAX_WAIT=0
+  run gh config get git_protocol
+  [ "$status" -eq 0 ]; [ "$output" = "ok config get git_protocol" ]
+  run gh --version
+  [ "$status" -eq 0 ]; [ "$output" = "gh version 2.0" ]
+  for c in "auth token" "auth setup-git" "help" "version" "alias list" "completion -s bash" \
+    "extension list" "ext ls" "api rate_limit"; do
+    # shellcheck disable=SC2086 # word-split the subcommand on purpose
+    run gh $c
+    [ "$status" -eq 0 ]; [[ "$output" != *gh-budget* ]]
+  done
+  [ "$(count '^api rate_limit')" -eq 1 ]   # only the explicit `gh api rate_limit` itself
+  [ ! -e "$ORCHESTRATE_STATE_DIR/gh-budget" ]
+  rm -f "$FX/calls"
+  for c in "api repos/o/r" "pr list" "auth status" "extension install o/gh-x" "unknown-cmd"; do
+    # shellcheck disable=SC2086
+    run gh $c
+    [ "$status" -eq 75 ]; [[ "$output" == *"gh-budget: out-of-budget"* ]]
+  done
+  [ "$(count '^api rate_limit')" -eq 1 ]
+  [ "$(wc -l <"$FX/calls" | tr -d ' ')" -eq 1 ]
+}
+
 @test "gh-read reports a pacer refusal as budget (exit 9), keeps pacing waits inside its timeout" {
   export PATH="$SCRIPTS/gh-shim:$PATH"
   rate 2400

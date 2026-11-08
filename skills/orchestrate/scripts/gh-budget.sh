@@ -11,7 +11,9 @@
 #   (remaining - floor); slots are reserved per priority under a lock, shared by every caller.
 # Resource (approximate): `api graphql` and pr/issue/repo/label/project commands count against
 #   graphql, `search` against search, everything else (REST `api`, run, workflow, release) core.
-#   `api rate_limit`, version, help, auth, config, alias and completion are never paced.
+# Local-only (never paced, no /rate_limit read, no state touched): `api rate_limit`, version,
+#   --version, help, --help, config, alias, completion, `extension list`, and auth except
+#   `auth status` (which calls the API). The list is explicit; anything else is paced.
 # Out of budget: high waits for the reset (at most GH_BUDGET_HIGH_MAX_WAIT, default 3900 s); normal
 #   and low wait at most GH_BUDGET_MAX_WAIT (default 60 s), else exit 75 and the caller skips the
 #   pass. Refusals log "gh-budget: out-of-budget priority=<p> resource=<r> remaining=<n>
@@ -27,7 +29,7 @@
 #   20), GH_BUDGET_FAKE_SLEEP=1 (tests: waits logged as "gh-budget: wait <s>"), ORCHESTRATE_NOW.
 set -euo pipefail
 
-usage() { sed -n '2,27p' "$0"; }
+usage() { sed -n '2,29p' "$0"; }
 cmd=${1:-}
 case "$cmd" in
   -h | --help) usage; exit 0 ;;
@@ -38,6 +40,23 @@ case "$cmd" in
   status) shift ;;
   *) usage >&2; exit 2 ;;
 esac
+
+# --- local-only gh commands: straight to gh, before any state is read or written ---------------
+local_only() { # GH_ARGS...: 0 when the command makes no budgeted API call
+  case "${1:-}" in
+    "" | --version | version | help | --help | -h | config | alias | completion) return 0 ;;
+    auth) [[ "${2:-}" != status ]] ;;
+    extension | extensions | ext) [[ "${2:-}" == list || "${2:-}" == ls ]] ;;
+    api) [[ "${2:-}" == rate_limit || "${2:-}" == /rate_limit ]] ;;
+    *) return 1 ;;
+  esac
+}
+if [[ "$cmd" == run ]] && (($#)) && local_only "$@"; then
+  case "$prio" in
+    high | normal | low) exec gh "$@" ;;
+    *) echo "gh-budget: unknown priority: $prio (high|normal|low)" >&2; exit 2 ;;
+  esac
+fi
 
 state_root=${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}
 dir="$state_root/gh-budget"
@@ -118,13 +137,6 @@ resource_of() { # COMMAND ENDPOINT
     *) echo core ;;
   esac
 }
-exempt() { # COMMAND ENDPOINT: commands that make no budgeted API call
-  case "$1" in
-    "" | --version | version | help | --help | -h | auth | config | alias | completion) return 0 ;;
-    api) [[ "$2" == rate_limit ]] ;;
-    *) return 1 ;;
-  esac
-}
 endpoint_file() { printf '%s/endpoint-%s' "$dir" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"; }
 
 # --- status -----------------------------------------------------------------------------------
@@ -148,7 +160,6 @@ fi
 base=$(floor_base "$prio") || { echo "gh-budget: unknown priority: $prio (high|normal|low)" >&2; exit 2; }
 (($#)) || { usage >&2; exit 2; }
 endpoint=$(endpoint_of "$@")
-exempt "$1" "$endpoint" && exec gh "$@"
 resource=$(resource_of "$1" "$endpoint")
 limit_wait=$(max_wait "$prio")
 
