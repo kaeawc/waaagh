@@ -27,6 +27,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | Path | What |
 |---|---|
 | `skills/orchestrate/SKILL.md` | The doctrine: roles and routing, isolation, briefs, evidence, the campaign loop, lane cap, merge policy, interrupts, PR lifecycle and takeover |
+| `skills/orchestrate/subagent-hygiene.md` | Background subagent hygiene: premise-first, monitor-free, line-budgeted briefs; stop message vs `TaskStop` for closed or noisy lanes; model choice by role |
 | `skills/orchestrate/roles/` | Brief templates for the standing roles: merge bot, rebase bot, hygiene bot, local sweep, verify batch, verification, implementation lane, PR doctor, conflict lane, reviewer |
 | `skills/orchestrate/scripts/` | The scripts below, with stubbed-`gh` self-tests |
 | `agents/codex-implementer.md` | Routine implementation lane (GPT-6 Luna, `medium`): wraps one supervised `codex exec` run and verifies it |
