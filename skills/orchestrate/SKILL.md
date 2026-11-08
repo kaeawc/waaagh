@@ -505,6 +505,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
    the first review round become follow-up issues, are answered `follow-up #N` and resolved, so
    they never block the merge line (`scripts/review-followup.sh`; the PR doctor's later-round
    step). `scripts/thread-resolve.sh` replies on and resolves any one thread.
+   **Only the local orchestrator resolves threads** (`thread-resolution.md`): cloud sessions
+   cannot, so cloud briefs say reply on each thread and do not resolve; after each repair,
+   `scripts/thread-sweep.sh resolve` settles threads whose last reply links an issue or names a
+   pushed fix.
 6. **Merge** per the policy table, through `pr-merge.sh`.
 
 ## PR watch and takeover (the user's own PRs only)

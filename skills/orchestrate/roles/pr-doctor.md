@@ -49,7 +49,9 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
 6. **Commit and push** after green local gates and a clean, intended-files-only status. Plain
    push; a rejected push means someone else is writing — stop on that PR.
 7. **Reply** in one short comment per PR saying what changed, and one line for each class-(c)
-   item worth a reason. Do not resolve threads you did not address.
+   item worth a reason. Do not resolve threads you did not address. End each thread reply with
+   `fixed in <sha>` (pushed) or `follow-up #N`; then `{{SCRIPTS}}/thread-sweep.sh resolve --repo
+   {{REPO}} --pr <n>` resolves the answered threads (`{{SCRIPTS}}/../thread-resolution.md`).
 
 ## Report (under 450 words)
 One line per PR: number — green / pending / red: <check> / conflicting / needs owner / skipped —
