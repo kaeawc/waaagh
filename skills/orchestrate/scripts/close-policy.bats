@@ -53,7 +53,8 @@ close_completed() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as comp
 
 @test "campaign close-policy defaults to owner-only, is set in the ledger and refuses other values" {
   run "$SCRIPTS/campaign.sh" close-policy --repo o/r
-  [ "$status" -eq 0 ] && [ "$output" = owner-only ]
+  [ "$status" -eq 0 ]
+  [ "$output" = owner-only ]
   run "$SCRIPTS/campaign.sh" close-policy verified --repo o/r
   [ "$output" = verified ]
   [ "$(jq -r .close_policy "$ST/campaign.json")" = verified ]
@@ -82,14 +83,18 @@ close_completed() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as comp
 @test "verified: a merged PR plus device evidence for every touched platform closes; gaps are refused" {
   "$SCRIPTS/campaign.sh" close-policy verified --repo o/r >/dev/null
   close_completed --platforms android
-  [ "$status" -eq 3 ] && [[ "$output" == *"needs a merged --pr"* ]]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"needs a merged --pr"* ]]
   close_completed --pr 9
-  [ "$status" -eq 3 ] && [[ "$output" == *"needs --platforms"* ]]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"needs --platforms"* ]]
   close_completed --pr 9 --platforms android,ios --device "android=Pixel 8, API 35: retry shown, PASS"
-  [ "$status" -eq 3 ] && [[ "$output" == *"no device evidence for ios"* ]]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"no device evidence for ios"* ]]
   echo '{"state":"OPEN"}' >"$FX/pr.json"
   close_completed --pr 9 --platforms none
-  [ "$status" -eq 3 ] && [[ "$output" == *"not merged"* ]]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"not merged"* ]]
   echo '{"state":"MERGED"}' >"$FX/pr.json"
   run ! grep -q 'issue close' "$FX/calls"
   close_completed --pr 9 --platforms android,ios --device "android=Pixel 8, API 35: retry shown, PASS" \
@@ -112,7 +117,8 @@ close_completed() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as comp
   [ "$status" -eq 0 ]
   [ "$output" = "stop: lane wt-a branch work/5-x agent codex issue 5" ]
   run "$SCRIPTS/lane-claim.sh" on-issue --issues 8 --repo o/r
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
   echo '[{"body":"Owner decision (2026-09-26): yes, close"}]' >"$FX/comments-5"
   close_completed
   [ "$status" -eq 0 ]
@@ -160,7 +166,8 @@ close_completed() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as comp
   rm "$FX/edit-fails"
   run "$SCRIPTS/decision.sh" record --repo o/r --issue 6 --text "ship it" --date 2026-09-20
   [ "$status" -eq 0 ]
-  [ "$(jq length "$FX/comments-6")" -eq 1 ] && [ "$(jq -c . "$FX/labels-6")" = '[]' ]
+  [ "$(jq length "$FX/comments-6")" -eq 1 ]
+  [ "$(jq -c . "$FX/labels-6")" = '[]' ]
   run "$SCRIPTS/decision.sh" record --repo o/r --issue 6 --text "x" --date 26-9-20
   [ "$status" -eq 2 ]
 }
@@ -206,9 +213,11 @@ MD
 @test "doctrine: owner-decisions.md covers the policy, record format, batch, steps and stop-on-close" {
   D="$ROOT/skills/orchestrate/owner-decisions.md"
   grep -q 'close-policy' "$D"
-  grep -q 'owner-only' "$D" && grep -q 'verified' "$D"
+  grep -q 'owner-only' "$D"
+  grep -q 'verified' "$D"
   grep -q 'Owner decision (YYYY-MM-DD):' "$D"
-  grep -q 'decision.sh batch' "$D" && grep -q 'decision.sh steps' "$D"
+  grep -q 'decision.sh"\? batch' "$D"
+  grep -q 'decision.sh"\? steps' "$D"
   grep -q 'lane-claim.sh" closed' "$D"
   grep -q 'owner-decisions.md' "$ROOT/skills/orchestrate/SKILL.md"
   grep -q 'decision.sh' "$ROOT/README.md"

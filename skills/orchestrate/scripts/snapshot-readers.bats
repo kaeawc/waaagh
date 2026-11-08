@@ -92,7 +92,8 @@ calls() { grep -c "$1" "$FX/calls" || true; }
   "$SCRIPTS/gh-snapshot.sh" --repo o/r >/dev/null
   : >"$FX/calls"
   run rg check --pr 72
-  [ "$status" -eq 3 ] && [ "$output" = "wait never-reviewed" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "wait never-reviewed" ]
   [ "$(calls '^pr view')" -eq 0 ]
   [ "$(calls '/reviews')" -eq 0 ]
   [ "$(calls '/comments')" -eq 1 ]
@@ -108,7 +109,8 @@ calls() { grep -c "$1" "$FX/calls" || true; }
   : >"$FX/calls"
   jq -n --arg h "$H70" '[{user: {login: "chatgpt-codex-connector[bot]"}, state: "COMMENTED", commit_id: $h, body: "fine"}]' >"$FX/reviews.json"
   run rg check --pr 70
-  [ "$status" -eq 0 ] && [ "$output" = "ok reviewed at-head" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok reviewed at-head" ]
   [ "$(calls '^pr view')" -eq 0 ]
   [ "$(calls '/reviews')" -eq 1 ]
 }
@@ -126,7 +128,8 @@ calls() { grep -c "$1" "$FX/calls" || true; }
   touch -t 202001010000 "$ST/pr-snapshot/$H72.json"
   : >"$FX/calls"
   run rg check --pr 72
-  [ "$status" -eq 3 ] && [ "$output" = "wait never-reviewed" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "wait never-reviewed" ]
   [ "$(calls '^pr view')" -eq 1 ]
   [ "$(calls '/reviews')" -eq 1 ]
   # a long TTL makes the same row fresh again
@@ -136,6 +139,9 @@ calls() { grep -c "$1" "$FX/calls" || true; }
 }
 
 @test "the readers' snapshot use is documented in their headers" {
-  "$SCRIPTS/triage-tick.sh" -h | grep -q 'one gh-snapshot.sh call'
-  "$SCRIPTS/review-gate.sh" -h | grep -q 'ORCHESTRATE_SNAPSHOT_TTL'
+  run "$SCRIPTS/triage-tick.sh" -h
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'one gh-snapshot.sh call'* ]]
+  run "$SCRIPTS/review-gate.sh" -h
+  [ "$status" -eq 0 ] && [[ "$output" == *'ORCHESTRATE_SNAPSHOT_TTL'* ]]
 }

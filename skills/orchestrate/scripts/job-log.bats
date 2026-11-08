@@ -97,7 +97,7 @@ jl() { "$SCRIPTS/job-log.sh" --repo o/r "$@"; }
   [ "$status" -eq 12 ]
   [ "${lines[0]}" = expired ]
   [ ! -e "$ORCHESTRATE_STATE_DIR/o__r/logs/900/1/14.log" ]
-  ! ls "$ORCHESTRATE_STATE_DIR/o__r/logs/900/1/" | grep -q '\.tmp$'
+  [ "$(ls "$ORCHESTRATE_STATE_DIR/o__r/logs/900/1/" | grep -c '\.tmp$' || true)" -eq 0 ]
 }
 
 @test "an expired signed redirect or a 5xx is retried once, then reported as transient" {

@@ -37,7 +37,7 @@ STUB
 
 # --- host-load.sh -----------------------------------------------------------------------------
 hl() { ORCHESTRATE_HOST_CPUS=16 "$SCRIPTS/host-load.sh" "$@"; }
-row() { printf '%s\n' "$output" | awk -F'\t' -v k="$1" '$1 == k { sub("^[^\t]*\t", ""); print; exit }'; }
+row() { printf '%s\n' "$output" | awk -F'\t' -v k="$1" '$1 == k && !done { sub("^[^\t]*\t", ""); print; done = 1 }'; }
 
 @test "host-load holds on load and names Spotlight indexing as the cause, with the owner action" {
   R="$BATS_TEST_TMPDIR/wt"; mkdir -p "$R/lane-a/src"

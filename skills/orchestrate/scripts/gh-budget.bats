@@ -182,7 +182,7 @@ count() { grep -c -- "$1" "$FX/calls" 2>/dev/null || true; }
   missing=""
   for f in "$SCRIPTS"/*.sh; do
     case "${f##*/}" in _lib.sh | gh-read.sh | gh-budget.sh | bench.sh) continue ;; esac
-    grep -vE '^[[:space:]]*#' "$f" | grep -qE '(^|[^-a-z_])gh (api|pr|issue|run|repo|label|search|release|workflow)|gh-read\.sh|orch_read_retry|orch_repo|orch_author|orch_default_branch' || continue
+    grep -vE '^[[:space:]]*#' "$f" | grep -cE '(^|[^-a-z_])gh (api|pr|issue|run|repo|label|search|release|workflow)|gh-read\.sh|orch_read_retry|orch_repo|orch_author|orch_default_branch' >/dev/null || continue
     grep -qE '^[[:space:]]*(if declare -F orch_gh_priority >/dev/null; then )?orch_gh_priority (high|normal|low)(; fi)?$' "$f" || missing="$missing ${f##*/}"
   done
   [ -z "$missing" ] || { echo "no orch_gh_priority in:$missing"; false; }

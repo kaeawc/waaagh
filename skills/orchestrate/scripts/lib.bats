@@ -80,7 +80,8 @@ author() { (source "$SCRIPTS/_lib.sh" && orch_author); }
 @test "orch_author asks gh once within the TTL and again once it expires" {
   author_stub
   ORCHESTRATE_NOW=1000 run author
-  [ "$status" = 0 ] && [ "$output" = alice ]
+  [ "$status" = 0 ]
+  [ "$output" = alice ]
   echo bob >"$BATS_TEST_TMPDIR/login"
   ORCHESTRATE_NOW=4599 run author
   [ "$output" = alice ]
@@ -100,7 +101,8 @@ author() { (source "$SCRIPTS/_lib.sh" && orch_author); }
   author_stub
   touch "$BATS_TEST_TMPDIR/gh-fail"
   ORCHESTRATE_NOW=1000 run author
-  [ "$status" != 0 ] && [ "$output" = "HTTP 502" ]
+  [ "$status" != 0 ]
+  [ "$output" = "HTTP 502" ]
   [ ! -e "$ORCHESTRATE_STATE_DIR/.author" ]
   rm "$BATS_TEST_TMPDIR/gh-fail"
   ORCHESTRATE_NOW=1001 run author

@@ -12,7 +12,7 @@
 #                measured is reported as stale but does not fail.
 #   --resultset  the resultset --check reads (default coverage/.resultset.json)
 # Env: GITHUB_STEP_SUMMARY  when set, the table (or the check's findings) is appended to it as Markdown.
-# Needs: bashcov (gem install bashcov; not for --check), jq.
+# Needs: bashcov (gem install bashcov, on PATH; not for --check), jq.
 # Reading the numbers: xtrace reports only the first line of a command, so the continuation lines
 # of a multi-line command (a jq program, a `\`-continued call) count as uncovered even when the
 # command ran. The real figure is a few points above the total printed here.
@@ -85,7 +85,22 @@ if [[ -n "$floor" ]]; then
   exit 0
 fi
 
-command -v bashcov >/dev/null || { echo "dev/coverage.sh: bashcov not found (gem install bashcov)" >&2; exit 2; }
+if ! command -v bashcov >/dev/null; then
+  # gem installs executables into its EXECUTABLE DIRECTORY, which is often not on PATH (rbenv,
+  # --user-install): name it, and say whether bashcov is already there.
+  gembin=""
+  if command -v gem >/dev/null; then
+    gembin=$(gem environment 2>/dev/null | sed -n 's/^[[:space:]]*- EXECUTABLE DIRECTORY: //p') || gembin=""
+  fi
+  if [[ -n "$gembin" && -x "$gembin/bashcov" ]]; then
+    echo "dev/coverage.sh: bashcov not on PATH, but it is in gem's executable directory: PATH=\"$gembin:\$PATH\" dev/coverage.sh" >&2
+  elif [[ -n "$gembin" ]]; then
+    echo "dev/coverage.sh: bashcov not found (gem install bashcov, then put gem's executable directory $gembin on PATH)" >&2
+  else
+    echo "dev/coverage.sh: bashcov not found (gem install bashcov, then put the EXECUTABLE DIRECTORY from 'gem environment' on PATH)" >&2
+  fi
+  exit 2
+fi
 
 cd "$root"
 rm -rf coverage
