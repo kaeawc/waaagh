@@ -2,14 +2,18 @@
 # Line coverage of the scripts under the BATS suites, measured with bashcov (Bash xtrace).
 # Writes coverage/.resultset.json and prints one line per script, least covered first, then the total.
 #
-# Usage: dev/coverage.sh [-j N]
+# Usage: dev/coverage.sh [-j N] [FILE.bats...]
 #        dev/coverage.sh --check FLOOR [--resultset FILE]
 #   -j N         suites to run at once (passed to dev/test.sh; default 1: bashcov reads every trace
 #                line through one pipe, so parallel suites only contend for it and run slower)
+#   FILE         run only these suites (passed to dev/test.sh; default every suite). The numbers are
+#                partial: a script another suite also exercises reads low. The table says so, and the
+#                suites run are listed in coverage/subset.txt beside the resultset.
 #   --check F    run no suites: compare an existing resultset to the floors in F (script<TAB>min%,
 #                # comments and blank lines allowed). Fails when a script is below its floor or a
 #                measured script has no row, and names each one. A row for a script that was not
-#                measured is reported as stale but does not fail.
+#                measured is reported as stale but does not fail. A resultset with a subset.txt
+#                beside it is judged the same way, and the check says plainly the numbers are partial.
 #   --resultset  the resultset --check reads (default coverage/.resultset.json)
 # Env: GITHUB_STEP_SUMMARY  when set, the table (or the check's findings) is appended to it as Markdown.
 # Needs: bashcov (gem install bashcov, on PATH; not for --check), jq.
@@ -20,14 +24,14 @@
 # A command continues past a line that ends in \, |, && or || or inside an open quote, and a
 # heredoc runs to its terminator. An unbalanced command stays raw, and so does a script whose source
 # is neither at the resultset's path nor under the repo root.
-# Exit: 0 report printed, or every floor held | 1 a suite failed (report still printed) | 2 usage or
-#       bashcov missing | 3 --check: a script below its floor or with no floor row | 4 --check: the
+# Exit: 0 report printed, or every floor held | 1 a suite failed (report still printed) | 2 usage,
+#       a FILE missing, or bashcov missing | 3 --check: a script below its floor or with no floor row | 4 --check: the
 #       resultset or floor file is missing or malformed
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 jobs=(-j 1)
-floor="" resultset=""
+floor="" resultset="" suites=()
 while (($#)); do
   case "$1" in
     -j) jobs=(-j "${2:-}"); shift 2 ;;
@@ -35,11 +39,15 @@ while (($#)); do
       floor=$2; shift 2 ;;
     --resultset) [[ -n "${2:-}" ]] || { echo "dev/coverage.sh: --resultset needs a file" >&2; exit 2; }
       resultset=$2; shift 2 ;;
-    -h | --help) sed -n '2,25p' "$0"; exit 0 ;;
-    *) echo "dev/coverage.sh: unknown argument: $1" >&2; exit 2 ;;
+    -h | --help) sed -n '2,29p' "$0"; exit 0 ;;
+    -*) echo "dev/coverage.sh: unknown argument: $1" >&2; exit 2 ;;
+    *) [[ -f "$1" ]] || { echo "dev/coverage.sh: no such suite: $1" >&2; exit 2; }
+      # Absolute, since the run starts from the repo root.
+      suites+=("$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"); shift ;;
   esac
 done
 [[ -z "$resultset" || -n "$floor" ]] || { echo "dev/coverage.sh: --resultset needs --check" >&2; exit 2; }
+[[ -z "$floor" || ${#suites[@]} -eq 0 ]] || { echo "dev/coverage.sh: --check runs no suites; drop the suite files" >&2; exit 2; }
 
 # The measured scripts as [{f, rel, hit, raw}], paths relative to the repo root whatever root the
 # resultset was written under (so a resultset from CI or a fixture checks the same way). hit counts
@@ -141,6 +149,12 @@ if [[ -n "$floor" ]]; then
        | "below\t\(.key)\t\(.value)\t\($min[.key])"),
       ($min | keys[] | select(. as $k | $got | has($k) | not) | "stale\t\(.)")' "$resultset" 2>/dev/null) \
     || { echo "dev/coverage.sh: cannot read $resultset as a bashcov resultset" >&2; exit 4; }
+  # A subset run's resultset: same verdicts, but say plainly that the numbers are partial.
+  partial=""
+  if [[ -f "$(dirname "$resultset")/subset.txt" ]]; then
+    partial="partial resultset: only $(grep -c . "$(dirname "$resultset")/subset.txt" || true) suite(s) ran ($(dirname "$resultset")/subset.txt), so a script another suite exercises reads low"
+    echo "dev/coverage.sh: $partial" >&2
+  fi
   report=$(awk -F'\t' '
     $1 == "below"   { print "below floor: " $2 " at " $3 "% (floor " $4 "%)" }
     $1 == "missing" { print "no floor row: " $2 " at " $3 "% (add a row to the floor file)" }
@@ -149,12 +163,12 @@ if [[ -n "$floor" ]]; then
   if ((fails > 0)); then
     printf '%s\n' "$report" >&2
     echo "dev/coverage.sh: $fails coverage floor failure(s) against $floor" >&2
-    { echo "### Coverage floor: $fails failure(s)"; echo; sed 's/^/- /' <<<"$report"; } | summary
+    { echo "### Coverage floor: $fails failure(s)"; [[ -z "$partial" ]] || { echo; echo "_${partial}_"; }; echo; sed 's/^/- /' <<<"$report"; } | summary
     exit 3
   fi
   [[ -z "$report" ]] || printf '%s\n' "$report" >&2
   echo "coverage floors held ($floor)"
-  { echo "### Coverage floor: every script at or above its floor"; [[ -z "$report" ]] || { echo; sed 's/^/- /' <<<"$report"; }; } | summary
+  { echo "### Coverage floor: every script at or above its floor"; [[ -z "$partial" ]] || { echo; echo "_${partial}_"; }; [[ -z "$report" ]] || { echo; sed 's/^/- /' <<<"$report"; }; } | summary
   exit 0
 fi
 
@@ -178,9 +192,15 @@ fi
 cd "$root"
 rm -rf coverage
 rc=0
-bashcov --root "$root" -- dev/test.sh ${jobs[@]+"${jobs[@]}"} >coverage.log 2>&1 || rc=$?
+bashcov --root "$root" -- dev/test.sh ${jobs[@]+"${jobs[@]}"} ${suites[@]+"${suites[@]}"} >coverage.log 2>&1 || rc=$?
 mkdir -p coverage && mv coverage.log coverage/test.log
 [[ -f coverage/.resultset.json ]] || { echo "dev/coverage.sh: bashcov wrote no results (see coverage/test.log)" >&2; exit 1; }
+subset=""
+if ((${#suites[@]})); then
+  printf '%s\n' "${suites[@]#"$root"/}" >coverage/subset.txt
+  all=("$root"/skills/orchestrate/scripts/*.bats)
+  subset="subset: ${#suites[@]} of ${#all[@]} suites ran (coverage/subset.txt); a script another suite exercises reads low"
+fi
 ((rc == 0)) || echo "dev/coverage.sh: a suite failed under coverage (see coverage/test.log)" >&2
 
 ext=$(mktemp)
@@ -193,9 +213,11 @@ table=$(jq -r --arg root "$root/" --slurpfile ext "$ext" "$ROWS"'
      | "\(pct | p)\t\(.hit)/\(.rel)\traw \(rawpct | p)\t\(.f)"),
     "total\t\($h)/\($r)\t\(($h * 1000 / $r | floor) / 10)%\traw \(($w * 1000 / $r | floor) / 10)%"' coverage/.resultset.json)
 printf '%s\n' "$table"
+[[ -z "$subset" ]] || echo "$subset"
 {
   echo "### Line coverage (bashcov)"
   echo
+  [[ -z "$subset" ]] || { echo "_${subset}_"; echo; }
   awk -F'\t' '$1 == "total" { sub(/^raw /, "", $4); print "**Total: " $3 " credited, " $4 " raw** (" $2 " lines)\n\n| Credited | Lines | Raw | Script |\n|---:|---:|---:|---|"; exit }' <<<"$table"
   awk -F'\t' '$1 != "total" { sub(/^raw /, "", $3); print "| " $1 " | " $2 " | " $3 " | `" $4 "` |" }' <<<"$table"
 } | summary
