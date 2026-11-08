@@ -34,8 +34,7 @@ same_bytes() {
            '1e1000' '[1][2]\n' '[1]\n[2]\n' '"x" "y"' 'true' '0' '""' '{"a":"caf\xc3\xa9 \xf0\x9f\x98\x80"}\n'; do
     printf "$b" >"$FX/body"
     same_bytes -- pr list --repo o/r
-    # api reads split off the headers with awk, which ends the body with a newline if it has none
-    [[ "$b" != *'\n' ]] || same_bytes -- api repos/o/r/pulls
+    same_bytes -- api repos/o/r/pulls   # with or without a final newline (#186)
   done
 }
 

@@ -126,14 +126,15 @@ while :; do
   (perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$timeout" gh "${args[@]}" >"$work/out" 2>"$work/err"; exit $?) 2>/dev/null || rc=$?
 
   # Split headers (api --include) from the body in one pass. Every read of every helper comes
-  # through here, so the success path spawns as few processes as it can (#112).
+  # through here, so the success path spawns as few processes as it can (#112). perl copies the
+  # body byte for byte, as the other reads pass it: awk would end it with a newline it lacks (#186).
   first="" headers=no body="$work/out"
   IFS= read -r first <"$work/out" || true
   if [[ "$is_api" == yes && "$first" =~ ^HTTP/[0-9.]+\ [0-9]{3} ]]; then
     headers=yes body="$work/body"
-    : >"$work/headers"; : >"$body"
-    awk -v h="$work/headers" -v b="$body" 'NR == 1 { next } found { print >b; next }
-      /^\r?$/ { found = 1; next } { gsub(/\r/, ""); print >h }' "$work/out"
+    perl -e 'open(I, "<", $ARGV[0]) && open(H, ">", $ARGV[1]) && open(B, ">", $ARGV[2]) or die "$!\n";
+      binmode $_ for *I, *H, *B; <I>; while (<I>) { last if /^\r?$/; tr/\r//d; print H } print B while <I>;
+      close(H) && close(B) or die "$!\n"' "$work/out" "$work/headers" "$body"
   fi
   if ((rc == 0)) && [[ "$want_json" == no ]]; then
     cat "$body"

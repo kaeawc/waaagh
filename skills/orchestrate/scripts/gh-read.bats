@@ -142,3 +142,25 @@ read_() { "$SCRIPTS/gh-read.sh" "$@"; }
   [[ "$output" != *ghp_abcdef* ]]
   [[ "$output" == *"[REDACTED]"* ]]
 }
+
+@test "an api body comes out byte for byte like a non-api one, final newline or not (#186)" {
+  resp 1 'cat "$FX/resp"'
+  for b in '{"a":1}' '{"a":1}\n' 'line1\r\n\r\nline3' '' '\n\n'; do
+    printf "$b" >"$FX/body"
+    printf 'HTTP/2.0 200 OK\r\nX-GitHub-Request-Id: AB:1\r\n\r\n' >"$FX/resp"
+    cat "$FX/body" >>"$FX/resp"
+    read_ -- api repos/o/r >"$FX/out-api"
+    cp "$FX/body" "$FX/resp"
+    read_ -- pr list --repo o/r >"$FX/out-pr"
+    cmp "$FX/body" "$FX/out-api"
+    cmp "$FX/body" "$FX/out-pr"
+  done
+  # The headers are still split off and read when the body has no final newline.
+  cat >"$FX/r1" <<'R'
+printf 'HTTP/2.0 404 X\r\nX-GitHub-Request-Id: NF:9\r\n\r\n{"message":"Not Found"}'
+exit 1
+R
+  run read_ -- api repos/o/r
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"gh-read: not-found status=404 request-id=NF:9 "*"Not Found"* ]]
+}
