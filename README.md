@@ -69,6 +69,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `usage-report.sh` | Codex usage per model and verified lane status, from per-run receipts (`bin/codex-lane-usage.sh`) |
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
+| `review-gate.sh` | The owner's bot-review policy (off, review-at-head, reviewed-once, green-only) enforced by `pr-merge.sh`; review-bot quota outages detected and asked once; unreviewed-merges ledger; one review request per bot per window across all PRs, gating PRs first |
 
 ## Defaults
 

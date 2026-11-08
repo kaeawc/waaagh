@@ -22,8 +22,8 @@
 #              progress" (an outage also stops the pass: `paused:`, exit 0), a merge refused
 #              because the PR touches a merge-sensitive path and the base moved past it (the next
 #              pass merges the base in again, re-runs the check and pushes, so it merges only
-#              after a fresh green run) or because another merge holds that path's lock, or a
-#              transient read failure. The next run-once
+#              after a fresh green run) or because another merge holds that path's lock, a merge
+#              refused for want of a bot review (review-gate.sh), or a transient read failure. The next run-once
 #              first re-checks the item's known PR (MERGED -> merged, without any new push, PR or
 #              merge), then resumes, skipping the base merge, check and push when nothing moved
 #   blocked    readiness found a real blocker (failed check, review thread, conflict, unknown
@@ -260,6 +260,7 @@ case "$cmd" in
         9) set_outcome "$qid" waiting "merge outcome unknown; will reconcile" ;;
         11) set_outcome "$qid" waiting "base moved past a merge-sensitive path; next pass merges it in again" ;;
         12) set_outcome "$qid" waiting "another merge holds a merge-sensitive path lock" ;;
+        13) set_outcome "$qid" waiting "waiting for a bot review (review-gate.sh policy), see $log" ;;
         10) set_outcome "$qid" waiting "merge pending on GitHub (5xx, in progress or outage); will reconcile"
           if [[ -f "$(orch_state_dir "$repo")/GITHUB_OUTAGE" ]]; then echo "paused: GitHub outage; pass stopped"; break; fi ;;
         *) set_outcome "$qid" error "pr-merge exit $rc, see $log" ;;
