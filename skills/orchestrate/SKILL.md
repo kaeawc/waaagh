@@ -197,6 +197,7 @@ Everything a campaign must remember lives in one directory per repository:
 |---|---|---|
 | `campaign.json` | `campaign.sh` | start time, last verification time and SHA |
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
+| `GITHUB_OUTAGE` | `pr-merge.sh` | present while githubstatus.com reports Pull Requests down; pauses merges |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
 | `ops/` | `pr-merge.sh`, `issue-close.sh` | journal of each GitHub write (intent, attempt, state) and its raw output, so a lost answer is reconciled, never replayed |
@@ -330,6 +331,11 @@ against its PR's own changes.
   next `run-once` resumes it without redoing the base merge, check or push), and `blocked`,
   `conflict`, `checkfail`, `error`, which park the item until `retry <id>`. Ids are never reused (`add`
   refuses). Stacked `name-N` branches: the parent of `-2` is the bare name (`parent <branch>`).
+- **GitHub outages: a 5xx or "merge already in progress" is pending, never done.** `pr-merge.sh`
+  verifies by reading the PR state, logs githubstatus.com's non-operational components
+  (`"$SCRIPTS/gh-status.sh"`), re-reads after waits of 60 s or more, and exits 10 if still OPEN.
+  While Pull Requests is in an outage it writes `GITHUB_OUTAGE` and every merge pauses (the queue
+  stops its pass) until the status is operational, instead of logging a failure each pass.
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
   every stacked merge: take the default branch's copy and regenerate it, never hand-merge.
   `"$SCRIPTS/regen-merge.sh"` does this from `<state dir>/generated-files.tsv` and refuses an
