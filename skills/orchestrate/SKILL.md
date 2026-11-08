@@ -133,6 +133,10 @@ review on every poll or push.
   first, stop all monitors before finishing, report in N lines. A lane whose issue closed elsewhere
   gets a stop message; one that holds nothing but noise (no answer, or its only notifications come
   from stale monitors it armed) gets `TaskStop`, never a resume.
+- **Lane drivers wait once and own their devices** (`subagent-hygiene.md`, "Lane drivers"). A
+  backgrounded gate gets one blocking wait, never a repeating monitor; a driver is not resumed on
+  a monitor expiry alone. Before any `adb` or `simctl` command a driver runs `device-lock.sh
+  check` against the serial or UDID its claim recorded. Check `blocked by` links before dispatch.
 - With many lanes the host saturates and whole-suite gates hit their wall caps. Lanes run targeted
   suites; CI's clean runners carry the full suite. Say so in the PR.
 
@@ -512,7 +516,8 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
 ## PR lifecycle
 
 1. **Open a ready PR** once implementation and required pre-PR validation pass, unless the user
-   asked for a draft.
+   asked for a draft. Missing device evidence is no reason for a draft: open ready once the
+   CI-verifiable work is complete and list the missing evidence in the body (drafts skip bot review).
 2. **Feedback snapshot.** A complete, current snapshot across paginated conversation comments,
    reviews, inline comments and review threads (use `github-pr-feedback` if present). Triage the
    actionable items together.
