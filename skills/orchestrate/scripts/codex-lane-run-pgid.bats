@@ -40,7 +40,7 @@ run_in_group() {
 "$REAL_PERL" -e '$SIG{INT} = $SIG{TERM} = sub { open my $f, ">>", $ENV{HIT}; print $f "hit\n"; exit 0 }; sleep 1 while 1' &
 sentinel=$!
 rc=0; "$@" || rc=$?
-kill -KILL "$sentinel" 2>/dev/null; wait "$sentinel" 2>/dev/null
+kill -KILL "$sentinel" 2>/dev/null; wait "$sentinel" 2>/dev/null || true
 exit "$rc"
 SH
   chmod +x "$BATS_TEST_TMPDIR/group.sh"
@@ -112,7 +112,7 @@ sentinel=$!
 "$@" & runner=$!
 for _ in $(seq 1 50); do [ "$(cat "$MARK" 2>/dev/null)" = started ] && break; sleep 0.1; done
 kill -TERM "$runner"; rc=0; wait "$runner" || rc=$?
-kill -KILL "$sentinel" 2>/dev/null; wait "$sentinel" 2>/dev/null
+kill -KILL "$sentinel" 2>/dev/null; wait "$sentinel" 2>/dev/null || true
 exit "$rc"
 SH
   chmod +x "$BATS_TEST_TMPDIR/group.sh"
