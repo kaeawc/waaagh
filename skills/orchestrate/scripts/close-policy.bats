@@ -206,9 +206,11 @@ MD
 @test "doctrine: owner-decisions.md covers the policy, record format, batch, steps and stop-on-close" {
   D="$ROOT/skills/orchestrate/owner-decisions.md"
   grep -q 'close-policy' "$D"
-  grep -q 'owner-only' "$D" && grep -q 'verified' "$D"
+  grep -q 'owner-only' "$D"
+  grep -q 'verified' "$D"
   grep -q 'Owner decision (YYYY-MM-DD):' "$D"
-  grep -q 'decision.sh batch' "$D" && grep -q 'decision.sh steps' "$D"
+  grep -q 'decision.sh"\? batch' "$D"
+  grep -q 'decision.sh"\? steps' "$D"
   grep -q 'lane-claim.sh" closed' "$D"
   grep -q 'owner-decisions.md' "$ROOT/skills/orchestrate/SKILL.md"
   grep -q 'decision.sh' "$ROOT/README.md"

@@ -17,7 +17,8 @@ one word ("none") or left out; the order never changes.
 3. **Dispatches** — lanes started (issue, route, model) and lanes ended without a PR.
 4. **Closes** — issues closed, each with how (`fixed`, `duplicate`, `completed` with its owner
    decision or evidence).
-5. **Owner blockers** — every open owner-only step, in the format below, newest first.
+5. **Owner blockers** — every open owner-only step, in the format below, newest first; then every
+   default taken instead of asking (`decision.sh defaults`), so the owner can override it.
 
 End with the cumulative line from the ledger, never from recall:
 `"$SCRIPTS/counters.sh" show` → "today: 4 merged, 7 dispatched, 3 closed; campaign: 31 merged,
@@ -75,4 +76,5 @@ When a choice is the owner's, ask with `AskUserQuestion` (where the client has i
 prose: one decision per question, the recommendation first and labelled as such, the other options
 after it, and what each one blocks. Several open decisions go as one batch (`decision.sh batch`),
 still one decision per question. Never bury a question inside a status report; a status may only
-point to the question.
+point to the question. A question with a safe default is not asked as a blocking question: take
+the default and record it (`owner-decisions.md`, "Stated defaults, not blocking questions").

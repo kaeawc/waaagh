@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Owner decisions: record one on its issue, ask the open ones as one batched question, and list the
-# steps only the owner can take. Format and rules: owner-decisions.md.
+# Owner decisions: record one on its issue, ask the open ones as one batched question, take a
+# stated default instead of a blocking question, and list the steps only the owner can take.
+# Format and rules: owner-decisions.md.
 #
 # Usage: decision.sh record --issue N --text TEXT [--step TEXT]... [--date YYYY-MM-DD]
 #                           [--label L] [--repo OWNER/REPO] [--dry-run]
 #        decision.sh batch [--file PATH] [--repo OWNER/REPO]
+#        decision.sh default [--issue N] --question Q --default D [--date YYYY-MM-DD] [--file PATH]
+#        decision.sh defaults [--file PATH]
 #        decision.sh steps --issues N[,M] [--repo OWNER/REPO]
 #   record  posts "Owner decision (DATE): TEXT" on issue N (DATE defaults to today, UTC), with an
 #           "Owner steps:" checklist when --step is given, then removes label L (default
@@ -15,6 +18,14 @@
 #           dir>/decisions.md): option 1 applies every recommendation and lists each, option 2 goes
 #           one at a time, option 3 leaves them. A line names its recommendation in a
 #           "— recommend: X —" field; lines without one are listed apart, for one at a time.
+#   default records a question whose safe default you are taking now instead of asking and
+#           waiting: appends "- [ ] [#N ]Q — default taken (DATE): D — recommend: D — overridable"
+#           to decisions.md (default <state dir>/decisions.md) unless an open line for Q is already
+#           there, and one line to decisions.log. No GitHub call. Q and D must not contain " — ".
+#           The line stays open until the owner answers (record ticks it; an issue-less line is
+#           ticked by hand); batch offers it with D as the recommendation.
+#   defaults prints one "- [#N ]Q → D (taken DATE)" line per open stated default, for the report,
+#           or "no stated defaults".
 #   steps   prints one "- [ ] #N STEP" line per unchecked owner step in the decisions recorded on
 #           the issues, or "no owner steps".
 # Exit: 0 ok | 2 usage | 4 an issue could not be read (steps: the others are still printed)
@@ -25,11 +36,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,21p' "$0" >&2; exit 2; }
-case "${1:-}" in -h | --help) sed -n '2,21p' "$0"; exit 0 ;; -*) echo "decision.sh: unknown argument: $1" >&2; exit 2 ;; esac
+usage() { sed -n '2,32p' "$0" >&2; exit 2; }
+case "${1:-}" in -h | --help) sed -n '2,32p' "$0"; exit 0 ;; -*) echo "decision.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
-repo="" issue="" issues="" text="" date="" label=needs-decision file="" dry=no
+repo="" issue="" issues="" text="" date="" label=needs-decision file="" dry=no question="" dflt=""
 steps=()
 while (($#)); do
   case "$1" in
@@ -37,19 +48,24 @@ while (($#)); do
     --issue) issue=$2; shift 2 ;;
     --issues) issues=$2; shift 2 ;;
     --text) text=$2; shift 2 ;;
+    --question) question=$2; shift 2 ;;
+    --default) dflt=$2; shift 2 ;;
     --step) steps+=("$2"); shift 2 ;;
     --date) date=$2; shift 2 ;;
     --label) label=$2; shift 2 ;;
     --file) file=$2; shift 2 ;;
     --dry-run) dry=yes; shift ;;
-    -h | --help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "decision.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$cmd" in
   record) [[ "$issue" =~ ^[0-9]+$ && -n "$text" ]] || usage
     [[ -z "$date" || "$date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || usage ;;
-  batch) ;;
+  batch | defaults) ;;
+  default) [[ -z "$issue" || "$issue" =~ ^[0-9]+$ ]] || usage
+    [[ -n "$question" && -n "$dflt" && "$question$dflt" != *" — "* && "$question$dflt" != *$'\n'* ]] || usage
+    [[ -z "$date" || "$date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || usage ;;
   steps) [[ -n "$issues" ]] || usage ;;
   *) usage ;;
 esac
@@ -124,6 +140,34 @@ batch() {
     }' "$f"
 }
 
+take_default() {
+  local f=${file:-$state/decisions.md} q
+  [[ -n "$date" ]] || date=$(orch_iso "$(orch_now)" | cut -c1-10)
+  q=$question
+  [[ -z "$issue" ]] || q="#$issue $question"
+  mkdir -p "$(dirname "$f")" "$state"
+  if [[ -f "$f" ]] && awk -v p="- [ ] $q — " 'index($0, p) == 1 { found = 1 } END { exit !found }' "$f"; then
+    echo "already recorded: $q"
+    return 0
+  fi
+  printf -- '- [ ] %s — default taken (%s): %s — recommend: %s — overridable\n' "$q" "$date" "$dflt" "$dflt" >>"$f"
+  printf '%s\tdefault\tissue=%s\t%s\t%s\n' "$(orch_iso "$(orch_now)")" "${issue:--}" "$question" "$dflt" >>"$state/decisions.log"
+  echo "taking default: $q → $dflt (recorded in $f; list it in the next report)"
+}
+
+defaults() {
+  local f=${file:-$state/decisions.md}
+  [[ -f "$f" ]] || { echo "no stated defaults"; return 0; }
+  awk '
+    index($0, "- [ ] ") == 1 && index($0, " — default taken (") > 0 {
+      n = split(substr($0, 7), part, " — ")
+      when = part[2]; sub(/^default taken \(/, "", when); sub(/\).*$/, "", when)
+      d = part[2]; sub(/^default taken \([^)]*\):[ \t]*/, "", d)
+      print "- " part[1] " → " d " (taken " when ")"; c++
+    }
+    END { if (!c) print "no stated defaults" }' "$f"
+}
+
 owner_steps() {
   local i info out="" rc=0
   for i in ${issues//,/ }; do
@@ -143,5 +187,7 @@ owner_steps() {
 case "$cmd" in
   record) record ;;
   batch) batch ;;
+  default) take_default ;;
+  defaults) defaults ;;
   steps) owner_steps ;;
 esac
