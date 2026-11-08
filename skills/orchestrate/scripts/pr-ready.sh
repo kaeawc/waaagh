@@ -285,12 +285,16 @@ fi
 
 open=0 ready=0 skipped_ready=0 skipped_by=""
 out=""
-while IFS=$'\t' read -r num verdict head mergeable passed detail inner; do
+# Each row gains its review-thread count (column 8, empty when not read) in one awk pass, so the
+# loop below starts no process per PR.
+rows=$(awk -F'\t' -v OFS='\t' 'FNR == NR { if ($1 != "" && !($1 in c)) c[$1] = $2; next }
+  { print $0, (($1 in c) ? c[$1] : "") }' <(printf '%s\n' "$tcounts") <(printf '%s\n' "$rows"))
+while IFS=$'\t' read -r num verdict head mergeable passed detail inner tcount; do
   [[ -n "$num" ]] || continue
   open=$((open + 1))
   if [[ "$inner" == READY ]]; then   # excluded, but would be READY: same thread and policy rules
     n=0
-    [[ "$threads" == no ]] || n=$(awk -F'\t' -v n="$num" '$1 == n { print $2; exit }' <<<"$tcounts")
+    [[ "$threads" == no ]] || n=$tcount
     if [[ "$policy" == known && "${n:-unknown}" == 0 ]]; then
       detail+=" ready-but-skipped"
       skipped_ready=$((skipped_ready + 1))
@@ -301,8 +305,7 @@ while IFS=$'\t' read -r num verdict head mergeable passed detail inner; do
     extra=""
     [[ "$policy" == known ]] || extra+=" policy=unknown"
     if [[ "$threads" == yes ]]; then
-      n=$(awk -F'\t' -v n="$num" '$1 == n { print $2; exit }' <<<"$tcounts")
-      n=${n:-unknown}
+      n=${tcount:-unknown}
       [[ "$n" == 0 ]] || extra+=" threads=$n"
     fi
     if [[ -n "$extra" ]]; then
@@ -311,7 +314,8 @@ while IFS=$'\t' read -r num verdict head mergeable passed detail inner; do
     fi
   fi
   [[ "$verdict" == READY ]] && ready=$((ready + 1))
-  out+=$(printf '%s\t%s\t%s\t%s\t%s\t%s' "$num" "$verdict" "$head" "$mergeable" "$passed" "$detail")$'\n'
+  printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$num" "$verdict" "$head" "$mergeable" "$passed" "$detail"
+  out+=$line$'\n'
 done <<<"$rows"
 
 summary="open=$open ready=$ready"
