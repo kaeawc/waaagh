@@ -1,13 +1,20 @@
-# A gh stub for the REST path (#109). rest_wrap puts it in front of the suite's own GraphQL-shaped
-# stub ($BATS_TEST_TMPDIR/bin/gh). While $FX/rest-mode exists it answers like a Claude Code cloud
-# session: every `gh pr ...` and `gh api graphql` call is refused with the real HTTP 403 text, and
-# the REST routes are served from the SAME fixtures the GraphQL stub serves: $FX/prs.json (the
-# `gh pr list --json` rows, plus optional `files` and `reviews`), $FX/view-<n>.json, and review
-# threads read through the GraphQL stub itself (one PR per query, then its cursors). Without
-# $FX/rest-mode every call goes straight to the GraphQL stub. REST calls are logged to
-# $FX/rest-calls. $FX/thread-shape: graphql (default: isResolved/isOutdated) | snake
+# The one gh stub for the REST path (#108, #109, #123), shared by every suite that replays its
+# GraphQL scenarios without GraphQL (issues-rest.bats, pr-rest.bats, gh-api.bats). rest_wrap puts it
+# in front of the suite's own GraphQL-shaped stub ($BATS_TEST_TMPDIR/bin/gh: stub_gh_router, or a
+# suite's inline one). While $FX/rest-mode exists it answers like a Claude Code cloud session: every
+# `gh pr ...`, `gh issue ...` and `gh api graphql` call is refused with the real HTTP 403 text (as
+# the real gh prints it: `issue list --label` without the "HTTP 403:" prefix), and the REST routes
+# are served from the fixtures the GraphQL stub serves. Without $FX/rest-mode every call goes
+# straight to the GraphQL stub. Calls in REST mode are logged to $REST_CALLS (default
+# $FX/rest-calls).
+# PR side: $FX/prs.json (the `gh pr list --json` rows, plus optional `files` and `reviews`),
+# $FX/view-<n>.json, and review threads read through the GraphQL stub itself (one PR per query,
+# then its cursors). $FX/thread-shape: graphql (default: isResolved/isOutdated) | snake
 # (resolved/outdated) | wrapped ({"threads": [...]}). $FX/rest-fails-<sha>: that head's check-runs
 # answer HTTP 404.
+# Issue side (REST-shaped fixtures): $FX/issues.json (/repos/o/r/issues items, pull requests
+# included), $FX/merged.json (search items), $FX/comments-<n>.json, and $FX/pulls.json, which, when
+# it exists, is served as the open pulls instead of prs.json (`_closing` dropped).
 
 rest_wrap() {
   mkdir -p "$BATS_TEST_TMPDIR/restbin"
@@ -15,9 +22,11 @@ rest_wrap() {
 #!/usr/bin/env bash
 real="$BATS_TEST_TMPDIR/bin/gh"
 [ -f "$FX/rest-mode" ] || exec "$real" "$@"
-echo "$*" >>"$FX/rest-calls"
+echo "$*" >>"${REST_CALLS:-$FX/rest-calls}"
 a="$*"; a=${a% --include}; a=${a/api --paginate /api }
 nf() { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+param() { printf '%s\n' "$a" | sed -nE "s/.*[?&]$1=([^&]*).*/\1/p"; }
+decode() { printf '%b' "${1//%/\\x}"; }
 # shellcheck disable=SC2016
 REST='def rest: {number, title: (.title // ""), body: (.body // ""),
     state: (if .state == "MERGED" then "closed" else ((.state // "OPEN") | ascii_downcase) end),
@@ -31,12 +40,26 @@ REST='def rest: {number, title: (.title // ""), body: (.body // ""),
   def status_item: .__typename == "StatusContext" or has("context");
   def rollup($sha): (map(select(.headRefOid == $sha)) | first // {}) | (.statusCheckRollup // []);'
 case "$a" in
-  "pr "* | "api graphql"*)
+  "issue list "*--label*)
+    echo 'non-200 OK status code: 403 Forbidden body: "{\"message\":\"GitHub GraphQL is not available from Claude Code sessions; use the REST API\"}"' >&2
+    exit 1 ;;
+  "pr "* | "issue "* | "api graphql"*)
     echo "HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the REST API (gh api repos/{owner}/{repo}/...). (https://api.github.com/graphql)" >&2
     exit 1 ;;
-  "api repos/o/r/pulls?"*)
-    p=$(printf '%s\n' "$a" | sed -nE 's/.*[?&]page=([0-9]+).*/\1/p')
-    jq --argjson p "${p:-1}" "$REST"'.[(($p - 1) * 100):($p * 100)] | map(rest | del(.mergeable))' "$FX/prs.json" ;;
+  "api repos/o/r/issues?"* | "api repos/o/r/pulls?"* | "api search/issues?"*)
+    page=$(param page); per=$(param per_page); l=$(decode "$(param labels)")
+    case "$a" in
+      "api repos/o/r/issues"*) src=$(jq -c . "$FX/issues.json") ;;
+      "api search/"*) src=$(jq -c . "$FX/merged.json") ;;
+      *) if [ -f "$FX/pulls.json" ]; then src=$(jq -c 'map(del(._closing))' "$FX/pulls.json")
+         else src=$(jq -c "$REST"'map(rest | del(.mergeable))' "$FX/prs.json") || exit 1; fi ;;
+    esac
+    jq -c --arg l "$l" --argjson page "${page:-1}" --argjson per "${per:-30}" --arg s "$a" '
+      [.[] | select($l == "" or any(.labels[]; .name == $l))] | .[($page - 1) * $per:$page * $per]
+      | if ($s | startswith("api search/")) then {total_count: length, items: .} else . end' <<<"$src" ;;
+  "api repos/o/r/issues/"*/comments*)
+    n=${a#api repos/o/r/issues/}; n=${n%%/*}
+    cat "$FX/comments-$n.json" 2>/dev/null || echo '[]' ;;
   "api repos/o/r/pulls/"*/ccr/review_threads)
     n=${a#api repos/o/r/pulls/}; n=${n%%/*}
     q='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){'
@@ -93,24 +116,4 @@ esac
 STUB
   chmod +x "$BATS_TEST_TMPDIR/restbin/gh"
   export PATH="$BATS_TEST_TMPDIR/restbin:$PATH"
-}
-
-# both ARGS...: pr-ready.sh over GraphQL, then over REST (refused GraphQL, own state dir). The exit
-# code, every row and the summary must match; only draft and fork rows may differ in their
-# mergeable and passed columns (REST does not read them), and REST adds " api=rest". Leaves the
-# REST run in $output and $status.
-both() {
-  local gq rs gs rss
-  rm -f "$FX/rest-mode"
-  gq=$(ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state-gq" "$SCRIPTS/pr-ready.sh" "$@" 2>"$FX/gq.err") && gs=0 || gs=$?
-  touch "$FX/rest-mode"
-  rs=$(ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state-rest" "$SCRIPTS/pr-ready.sh" "$@" 2>"$FX/rs.err") && rss=0 || rss=$?
-  norm() { awk -F'\t' -v OFS='\t' '$2 == "SKIP" && ($6 == "draft" || $6 == "fork") { $4 = "-"; $5 = "-" } { print }'; }
-  sum() { tail -1 "$1" | sed -E 's/ diagnostics=[^ ]*//; s/ api=rest//'; }
-  [ "$gs" = "$rss" ] || { echo "exit: graphql=$gs rest=$rss"; cat "$FX/rs.err"; return 1; }
-  [ "$(norm <<<"$gq")" = "$(norm <<<"$rs")" ] || { echo "rows differ:"; diff <(norm <<<"$gq") <(norm <<<"$rs") || true; cat "$FX/rs.err"; return 1; }
-  [ "$(sum "$FX/gq.err")" = "$(sum "$FX/rs.err")" ] || { echo "summary: $(tail -1 "$FX/gq.err") | $(tail -1 "$FX/rs.err")"; return 1; }
-  if [ "$gs" = 0 ]; then grep -q 'api=rest' "$FX/rs.err" || { echo "no api=rest"; return 1; }; fi
-  output="$rs"$'\n'"$(cat "$FX/rs.err")"
-  status=$rss
 }

@@ -16,7 +16,8 @@
 # Cache: <state dir>/pr-snapshot/<head sha>.json, pruned to the heads that are still open.
 # GraphQL refused (Claude Code cloud sessions answer it with HTTP 403): ORCHESTRATE_GH_API=auto
 # (default) falls back to REST on a 403 that names GraphQL, =rest skips the GraphQL attempt,
-# =graphql never falls back. Over REST (gh-rest-pr.sh) the rows are the same but cost per PR: the
+# =graphql never falls back; a refusal is remembered 12 hours (<state root>/gh-no-graphql, see
+# orch_gh_api in _lib.sh), so later passes start over REST. Over REST (gh-rest-pr.sh) the rows are the same but cost per PR: the
 # open list in pages of 100 (oldest first), then for every PR its head's check-runs and status
 # (plus actions/runs when a check names an Actions run) and its reviews. The roll-up state is
 # derived from those: any failed check FAILURE, else ERROR, else pending PENDING, else EXPECTED,
@@ -35,13 +36,12 @@ while (($#)); do
     --repo) repo=$2; shift 2 ;;
     --limit) limit=$2; shift 2 ;;
     --json) json=yes; shift ;;
-    -h | --help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "gh-snapshot.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 [[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "gh-snapshot.sh: --limit must be a positive number" >&2; exit 2; }
-api=${ORCHESTRATE_GH_API:-auto}
-case "$api" in auto | rest | graphql) ;; *) echo "gh-snapshot.sh: ORCHESTRATE_GH_API must be auto, rest or graphql" >&2; exit 2 ;; esac
+api=$(orch_gh_api gh-snapshot.sh) || exit 2
 repo=$(orch_repo "$repo")
 cache="$(orch_state_dir "$repo")/pr-snapshot"
 mkdir -p "$cache"
@@ -69,7 +69,7 @@ while [[ "$api" != rest ]]; do
   [[ -z "$after" ]] || args+=(-f "after=$after")
   rc=0
   page=$("$here/gh-read.sh" --json -- "${args[@]}" 2>"$err") || rc=$?
-  if ((rc == 5)) && [[ "$api" == auto && -z "$after" ]] && grep -q GraphQL "$err"; then api=rest; break; fi
+  if ((rc != 0)) && [[ -z "$after" ]] && orch_gh_refused "$rc" "$(cat "$err")"; then api=rest; break; fi
   ((rc == 0)) || { cat "$err" >&2; exit 3; }
   conn=$(jq -c '.data.repository.pullRequests // empty' <<<"$page")
   [[ -n "$conn" ]] || { echo "gh-snapshot: no pullRequests in the response" >&2; exit 3; }

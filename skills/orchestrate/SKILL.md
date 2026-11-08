@@ -639,6 +639,8 @@ work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
 Cloud sessions refuse GraphQL (HTTP 403, `gh pr list` included): `pr-ready.sh`, `gh-snapshot.sh`
 and `lane-claim.sh` then read the PR side over REST through `gh-rest-pr.sh` on their own
 (`ORCHESTRATE_GH_API=rest` skips the refused attempt); REST costs a few calls per candidate PR.
+One refusal is remembered for 12 hours (`<state root>/gh-no-graphql`), issue side and PR side
+alike; a new script with a REST path uses `orch_gh_api` / `orch_gh_refused` from `_lib.sh`.
 
 **Session topology.** A campaign split over an owner-facing orchestrator, a triage session, a
 manual-test session, cloud routines and local lanes follows `session-topology.md`: who owns what

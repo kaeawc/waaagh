@@ -34,7 +34,8 @@
 #            pulls/<n>/reviews.
 # closingIssuesReferences over REST is parsed from the body: "close(s|d) / fix(es|ed) /
 # resolve(s|d) #N" (or OWNER/REPO#N naming this repository). GraphQL also counts issues linked by
-# hand in the Development sidebar; REST cannot see those.
+# hand in the Development sidebar; REST cannot see those. This script never tries GraphQL; when to
+# use it is the callers' choice, made with orch_gh_api / orch_gh_refused (_lib.sh).
 # Exit: 0 ok | 2 usage | 3 unreadable (the gh-read.sh line or the reason is on stderr)
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -42,7 +43,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,38p' "$0"; }
+usage() { sed -n '2,39p' "$0"; }
 case "${1:-}" in -h | --help) usage; exit 0 ;; -*) echo "gh-rest-pr.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi

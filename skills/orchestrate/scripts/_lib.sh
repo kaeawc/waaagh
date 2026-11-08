@@ -2,7 +2,8 @@
 # Shared helpers for the orchestrate scripts. Source, do not execute.
 # Env: ORCHESTRATE_STATE_DIR (default ~/.claude/orchestrate), ORCHESTRATE_AUTHOR (default: the
 # authenticated gh user, cached an hour: ORCHESTRATE_AUTHOR_TTL), ORCHESTRATE_NOW (epoch seconds; tests only), ORCHESTRATE_GH_BUDGET=1
-# (pace every gh call through gh-budget.sh; see orch_gh_priority below).
+# (pace every gh call through gh-budget.sh; see orch_gh_priority below), ORCHESTRATE_GH_API
+# (auto|rest|graphql; see orch_gh_api below).
 
 orch_now() { echo "${ORCHESTRATE_NOW:-$(date +%s)}"; }
 
@@ -57,6 +58,44 @@ orch_state_dir() {
   local d="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/${1//\//__}"
   mkdir -p "$d"
   echo "$d"
+}
+
+# GraphQL or REST (#108, #109, #123). Claude Code cloud sessions answer every GraphQL call
+# (`gh pr list`, `gh issue list`, `gh api graphql`) with an HTTP 403 that names GraphQL; scripts
+# with a REST path (gh-issues.sh, gh-rest-pr.sh) then read over REST. ORCHESTRATE_GH_API=auto
+# (default: GraphQL first, REST after a refusal) | rest (never try GraphQL) | graphql (never fall
+# back). A refusal is remembered in <state root>/gh-no-graphql (its epoch) for 12 hours, so every
+# later read on this state root, issue side and PR side, goes straight to REST until it expires.
+#
+# orch_gh_api NAME -> graphql | rest: what to try first. Exit 2, with a message naming NAME, when
+# ORCHESTRATE_GH_API is not auto, rest or graphql (callers: `api=$(orch_gh_api x.sh) || exit 2`).
+orch_gh_api() {
+  local mode="${ORCHESTRATE_GH_API:-auto}" at memo
+  case "$mode" in
+    rest | graphql) echo "$mode"; return ;;
+    auto) ;;
+    *) echo "$1: ORCHESTRATE_GH_API must be auto, rest or graphql" >&2; return 2 ;;
+  esac
+  memo="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/gh-no-graphql"
+  if read -r at 2>/dev/null <"$memo" && [[ "$at" =~ ^[0-9]+$ ]] && (($(orch_now) - at < 43200)); then
+    echo rest
+  else
+    echo graphql
+  fi
+}
+
+# orch_gh_refused RC STDERR: true when a failed gh-read.sh call (its exit code and stderr text) is
+# GitHub refusing GraphQL (exit 5, forbidden, and the message names "GraphQL"; the lower-case
+# graphql in gh's "(https://api.github.com/graphql)" suffix does not count) and ORCHESTRATE_GH_API
+# allows the fallback (auto). Then it records the refusal for orch_gh_api. Any other failure is
+# the caller's to report.
+orch_gh_refused() {
+  local root="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}"
+  [[ "${ORCHESTRATE_GH_API:-auto}" == auto && "$1" == 5 && "$2" == *GraphQL* ]] || return 1
+  if mkdir -p "$root" 2>/dev/null && orch_now >"$root/gh-no-graphql.tmp.$$" 2>/dev/null; then
+    mv "$root/gh-no-graphql.tmp.$$" "$root/gh-no-graphql" 2>/dev/null || rm -f "$root/gh-no-graphql.tmp.$$"
+  fi
+  return 0
 }
 
 orch_default_branch() { gh api "repos/$1" | jq -r .default_branch; }

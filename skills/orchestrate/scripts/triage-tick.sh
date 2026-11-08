@@ -88,6 +88,7 @@ case "$cmd" in
   beat) [[ -n "$end" || "$deadline" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; } ;;
   *) usage >&2; exit 2 ;;
 esac
+api=$(orch_gh_api triage-tick.sh) || exit 2
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 now=$(orch_now)
@@ -207,12 +208,13 @@ snap_rc=0
 snap=$("$here/gh-snapshot.sh" --repo "$repo" --limit 300 --json 2>/dev/null) || snap_rc=$?
 ((snap_rc <= 1)) && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$snap" || snap=""
 pr_rc=0 pr_err=$(mktemp)
-if [[ "${ORCHESTRATE_GH_API:-auto}" == rest ]]; then
-  pr_rc=5; echo "GraphQL skipped (ORCHESTRATE_GH_API=rest)" >"$pr_err"
+if [[ "$api" == rest ]]; then
+  pr_rc=5
 else
   prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limit 300 --json number,closingIssuesReferences 2>"$pr_err") || pr_rc=$?
+  ((pr_rc == 0)) || ! orch_gh_refused "$pr_rc" "$(cat "$pr_err")" || api=rest
 fi
-if ((pr_rc == 5)) && grep -q GraphQL "$pr_err" && [[ -n "$snap" ]]; then
+if [[ "$api" == rest && -n "$snap" ]]; then
   open=$(jq -r --argjson t "$snap_rc" 'if $t == 1 or length >= 300 then "300+" else length end' <<<"$snap")
 fi
 rm -f "$pr_err"

@@ -2,43 +2,38 @@
 # Issue-side reads without GraphQL (#108): gh-issues.sh and its callers (campaign.sh status,
 # issues-ranked.sh, issue-candidates.sh, issue-route.sh status) against one fixture set, served
 # either the GraphQL way (`gh issue list` / `gh pr list`) or by a gh that refuses those with the
-# Claude Code cloud 403 and answers only REST. Both must give the same verdicts.
+# Claude Code cloud 403 and answers only REST (rest_stub.bash). Both must give the same verdicts.
 # Run: bats issues-rest.bats
 
 setup() {
   load test_helper
+  load rest_stub
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin" "$BATS_TEST_TMPDIR/nogit"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export ORCHESTRATE_NOW=1790510400 ORCHESTRATE_AUTHOR=me   # 2026-09-27T12:00:00Z
   # Fixtures are REST-shaped: $FX/issues.json (/repos/o/r/issues items, pull requests included),
   # $FX/pulls.json (open pulls; `_closing` = what GraphQL closingIssuesReferences would list),
-  # $FX/merged.json (search items), $FX/comments-N.json. GH_MODE=graphql serves the gh list
-  # commands from them; GH_MODE=rest (default) refuses those, and any graphql call, with the cloud
-  # 403. GH_FORBID=1 makes the gh list commands fail with a 403 that does not name GraphQL.
+  # $FX/merged.json (search items), $FX/comments-N.json. The stub below serves the gh list
+  # commands from them the GraphQL way; rest_wrap (rest_stub.bash) sits in front of it and, while
+  # $FX/rest-mode exists (the default here), refuses those, and any graphql call, with the cloud
+  # 403 and serves the REST routes from the same fixtures. Every call is logged to $FX/calls.
+  # GH_FORBID=1 makes the gh list commands fail with a 403 that does not name GraphQL (=url: one
+  # that ends in gh's "(https://api.github.com/graphql)"), served with $FX/rest-mode removed.
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >>"$FX/calls"
 label="" prev=""
 for a in "$@"; do [ "$prev" = --label ] && label=$a; prev=$a; done
-# Like the real gh: `issue list --label` reports the refusal without the "HTTP 403:" prefix.
-refuse() {
-  if [ -n "$label" ]; then
-    echo 'non-200 OK status code: 403 Forbidden body: "{\"message\":\"GitHub GraphQL is not available from Claude Code sessions; use the REST API\"}"' >&2
-  else
-    echo "HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the REST API (gh api repos/{owner}/{repo}/...)" >&2
-  fi
-  exit 1
-}
-param() { printf '%s\n' "$2" | sed -nE "s/.*[?&]$1=([^&]*).*/\1/p"; }
-decode() { printf '%b' "${1//%/\\x}"; }
 comments() { # issue number -> gh-shaped comments
   if [ -f "$FX/comments-$1.json" ]; then jq '[.[] | {author: {login: .user.login}, body, createdAt: .created_at}]' "$FX/comments-$1.json"; else echo '[]'; fi
 }
 case "$1 $2" in
   "issue list" | "pr list" | "api graphql")
-    [ "${GH_FORBID:-0}" = 1 ] && { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
-    [ "${GH_MODE:-rest}" = graphql ] || refuse ;;
+    case "${GH_FORBID:-0}" in
+      1) echo "HTTP 403: Resource not accessible by integration" >&2; exit 1 ;;
+      url) echo "HTTP 403: Resource not accessible by integration (https://api.github.com/graphql)" >&2; exit 1 ;;
+    esac ;;
 esac
 case "$1 $2" in
   "issue list")
@@ -56,23 +51,13 @@ case "$1 $2" in
     else
       jq '[.[] | {number, title, body, closingIssuesReferences: [(._closing // [])[] | {number: .}]}]' "$FX/pulls.json"
     fi ;;
-  "api repos/o/r/issues?"* | "api repos/o/r/pulls?"* | "api search/issues?"*)
-    page=$(param page "$2"); per=$(param per_page "$2"); l=$(decode "$(param labels "$2")")
-    case "$2" in
-      repos/o/r/issues*) src="$FX/issues.json" ;;
-      repos/o/r/pulls*) src="$FX/pulls.json" ;;
-      *) src="$FX/merged.json" ;;
-    esac
-    jq -c --arg l "$l" --argjson page "${page:-1}" --argjson per "${per:-30}" --arg s "$2" '
-      [.[] | del(._closing) | select($l == "" or any(.labels[]; .name == $l))] | .[($page - 1) * $per:$page * $per]
-      | if ($s | startswith("search/")) then {total_count: length, items: .} else . end' "$src" ;;
-  "api repos/o/r/issues/"*)
-    n=$(printf '%s\n' "$2" | sed -nE 's#repos/o/r/issues/([0-9]+)/comments.*#\1#p')
-    cat "$FX/comments-$n.json" 2>/dev/null || echo '[]' ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+  export REST_CALLS="$FX/calls"
+  rest_wrap
+  touch "$FX/rest-mode"
   echo '[]' >"$FX/pulls.json"; echo '[]' >"$FX/merged.json"; echo '[]' >"$FX/issues.json"
 }
 
@@ -111,13 +96,14 @@ fixture() {
   echo '[{"user":{"login":"me"},"body":"Device verification: PASS on android pixel 8","created_at":"2026-09-26T12:00:00Z"}]' >"$FX/comments-4.json"
 }
 
-# both CMD...: run CMD with GH_MODE=graphql, then with GH_MODE=rest (fresh memo each), and
-# require the same output and status. Leaves the REST run in $output / $status.
+# both CMD...: run CMD the GraphQL way, then with GraphQL refused (fresh memo each), and require
+# the same output and status. Leaves the REST run in $output / $status (and REST mode on).
 both() {
-  rm -f "$ORCHESTRATE_STATE_DIR/gh-no-graphql"
-  GH_MODE=graphql run "$@"; local g=$output gs=$status
+  rm -f "$ORCHESTRATE_STATE_DIR/gh-no-graphql" "$FX/rest-mode"
+  run "$@"; local g=$output gs=$status
   rm -f "$ORCHESTRATE_STATE_DIR/gh-no-graphql" "$FX/calls"
-  GH_MODE=rest run "$@"
+  touch "$FX/rest-mode"
+  run "$@"
   [ "$status" -eq "$gs" ] || { echo "graphql exit $gs, rest exit $status: $output"; false; }
   # Candidate files carry a timestamp path in the last line; compare the rest.
   [ "$(sed '/^# /s#all: .*##' <<<"$output")" = "$(sed '/^# /s#all: .*##' <<<"$g")" ] ||
@@ -196,13 +182,21 @@ both() {
 
 @test "gh-issues.sh: a 403 that does not name GraphQL is not a fallback; graphql mode never falls back" {
   fixture
+  rm "$FX/rest-mode"
   GH_FORBID=1 run "$SCRIPTS/gh-issues.sh" issues --repo o/r
   [ "$status" -eq 5 ]
   [[ "$output" == *"gh-read: forbidden status=403"* ]]
   ! grep -q '^api ' "$FX/calls"
+  # gh ends a GraphQL error with the endpoint URL; that lower-case "graphql" is not the refusal.
+  GH_FORBID=url run "$SCRIPTS/gh-issues.sh" issues --repo o/r
+  [ "$status" -eq 5 ]
+  ! grep -q '^api ' "$FX/calls"
+  [ ! -f "$ORCHESTRATE_STATE_DIR/gh-no-graphql" ]
+  touch "$FX/rest-mode"
   ORCHESTRATE_GH_API=graphql run "$SCRIPTS/gh-issues.sh" issues --repo o/r
   [ "$status" -eq 5 ]
   [[ "$output" == *"GraphQL is not available"* ]]
+  rm "$FX/rest-mode"
   GH_FORBID=1 run "$SCRIPTS/issues-ranked.sh" --repo o/r
   [ "$status" -eq 5 ]
   [[ "$output" == *"issues-ranked.sh: open pull requests could not be read"* ]]
