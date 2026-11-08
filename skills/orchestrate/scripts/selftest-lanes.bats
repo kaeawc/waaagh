@@ -15,6 +15,16 @@ setup() {
   git -C "$REPO" commit -qm init
 }
 
+# A runner or fake codex that outlives its test keeps bats' fd 3 open, and bats then waits for it
+# forever: the lane-runner tests start background children with fd 3 closed (3>&-), and record
+# the PIDs of long-lived ones in $BATS_TEST_TMPDIR/leftover.pids, killed here.
+teardown() {
+  local p
+  if [[ -f "$BATS_TEST_TMPDIR/leftover.pids" ]]; then
+    while read -r p; do kill -KILL "$p" 2>/dev/null || true; done <"$BATS_TEST_TMPDIR/leftover.pids"
+  fi
+}
+
 @test "fixtures ignore an inherited signing setup and hooks" {
   # A hostile user config: signing through a signer that always fails, and a failing hook.
   hostile="$BATS_TEST_TMPDIR/hostile.gitconfig"
@@ -329,12 +339,12 @@ SH
   [ "$status" -eq 11 ]
   [[ "$output" == "no-change rev=rev1 alive=yes elapsed="* ]]
   [ "${#output}" -lt 80 ]
-  ( sleep 1; echo rev2 >"$L.progress.rev" ) &
+  ( sleep 1; echo rev2 >"$L.progress.rev" ) 3>&- &
   run WAITER --log "$L" --since rev1 --timeout 20 --interval 1
   [ "$status" -eq 10 ]
   [[ "${lines[0]}" == "progress rev=rev2" ]]
   head -c 9000 /dev/zero | tr '\0' 'f' >"$L.final"
-  ( sleep 1; echo 0 >"$L.exit" ) &
+  ( sleep 1; echo 0 >"$L.exit" ) 3>&- &
   run WAITER --log "$L" --since rev2 --timeout 20 --interval 1
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" == "done exit=0" ]]
@@ -361,7 +371,8 @@ out=""; while (($#)); do [[ $1 == --output-last-message ]] && out=$2; shift; don
 cat >/dev/null; sleep 3; echo finished >"$out"
 SH
   printf 'LANE-WORKTREE: %s\ntask\n' "$(cd "$REPO" && pwd -P)" >"$RUNDIR/spec.md"
-  run_lane "$RUNDIR/spec.md" >/dev/null 2>&1 &
+  run_lane "$RUNDIR/spec.md" >/dev/null 2>&1 3>&- &
+  echo $! >>"$BATS_TEST_TMPDIR/leftover.pids"
   for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$RUNDIR/codex.jsonl.spec" ] && break; sleep 0.5; done
   rev=""; st=10
   while [ "$st" -eq 10 ]; do
@@ -373,10 +384,10 @@ SH
   wait
   cat >"$FAKEBIN/codex" <<'SH'
 #!/usr/bin/env bash
-cat >/dev/null; exec sleep 30
+cat >/dev/null; echo $$ >>"$BATS_TEST_TMPDIR/leftover.pids"; exec sleep 30
 SH
   run env PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$RUNNER" --model gpt-6-luna --spec "$RUNDIR/spec.md" \
-    --final "$RUNDIR/final2.md" --log "$RUNDIR/stall.jsonl" --cd "$REPO" --poll 1 --stall 2
+    --final "$RUNDIR/final2.md" --log "$RUNDIR/stall.jsonl" --cd "$REPO" --poll 1 --stall 2 3>&-
   [ "$status" -eq 125 ]
   run WAITER --log "$RUNDIR/stall.jsonl" --timeout 1
   [[ "${lines[0]}" == "done exit=125" ]]
@@ -386,7 +397,7 @@ SH
   runner_env
   START="$SCRIPTS/../../../bin/codex-lane-start.sh"
   cd "$REPO"
-  out=$(PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna --effort "" <<<"my task")
+  out=$(PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna --effort "" <<<"my task" 3>&-)
   log=$(printf '%s\n' "$out" | sed -n 's/^LOG=//p')
   run_dir=$(printf '%s\n' "$out" | sed -n 's/^RUN_DIR=//p')
   [ -n "$log" ] && [ -f "$run_dir/spec.md" ]
@@ -398,7 +409,7 @@ SH
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" == "done exit=0" ]]
   ! grep -q model_reasoning_effort "$log.args"
-  out=$(PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna --effort high <<<"task two")
+  out=$(PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna --effort high <<<"task two" 3>&-)
   log=$(printf '%s\n' "$out" | sed -n 's/^LOG=//p')
   grep -q 'model_reasoning_effort=high' "$log.args"
 }

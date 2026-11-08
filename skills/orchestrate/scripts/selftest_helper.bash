@@ -47,7 +47,7 @@ SH
   RUNDIR="$BATS_TEST_TMPDIR/run"; mkdir -p "$RUNDIR"
 }
 
-run_lane() { PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$RUNNER" --model gpt-6-luna --spec "$1" --final "$RUNDIR/final.md" --log "$RUNDIR/codex.jsonl" --cd "$REPO" --poll 1; }
+run_lane() { PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$RUNNER" --model gpt-6-luna --spec "$1" --final "$RUNDIR/final.md" --log "$RUNDIR/codex.jsonl" --cd "$REPO" --poll 1 3>&-; }   # fd 3 closed: see selftest-lanes.bats teardown
 
 WAITER() { "$SCRIPTS/../../../bin/codex-lane-wait.sh" "$@"; }
 
@@ -156,8 +156,15 @@ verdict_of() { # checks... -> the verdict and detail of one PR built from them
   "$SCRIPTS/pr-ready.sh" --repo o/r --no-threads 2>/dev/null | cut -f2,6
 }
 
+pr_rows() { # from to author draft fork mergeable checks-json: pr_row for each number from..to
+  # (counting down when from > to), from one jq instead of one per row
+  jq -cn --argjson a "$1" --argjson b "$2" --arg au "$3" --argjson d "$4" --argjson f "$5" --arg m "$6" --argjson c "$7" \
+    '(if $a <= $b then range($a; $b + 1) else range($a; $b - 1; -1) end)
+     | {number:.,author:{login:$au},isDraft:$d,isCrossRepository:$f,baseRefName:"main",headRefOid:("abcdef0123456789"+tostring),mergeable:$m,labels:[],statusCheckRollup:$c}'
+}
+
 ready_prs() { # n: n mergeable, green PRs by me
-  for i in $(seq 1 "$1"); do pr_row "$i" me false false MERGEABLE "$OKC"; done | jq -s . >"$FX/prs.json"
+  if (($1 > 0)); then pr_rows 1 "$1" me false false MERGEABLE "$OKC"; fi | jq -s . >"$FX/prs.json"
 }
 
 merge_fixture() {

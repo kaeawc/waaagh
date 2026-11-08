@@ -217,7 +217,7 @@ case "$*" in "pr list"*) echo "HTTP 403: Resource not accessible by integration"
 
 @test "rest: a full REST list is truncated, and an EXTRA PR beyond it is read on its own" {
   # 300 drafts newest first, then two old PRs: the list stops at 300; drafts cost no per-PR read.
-  { for i in $(seq 305 -1 6); do pr_row "$i" me true false MERGEABLE "$OKC"; done
+  { pr_rows 305 6 me true false MERGEABLE "$OKC"
     pr_row 3 me false false MERGEABLE "$OKC"; pr_row 2 me false false MERGEABLE "$OKC"; } | jq -s . >"$FX/prs.json"
   pr_row 5 me false false MERGEABLE "$OKC" | jq '.state = "MERGED"' >"$FX/view-5.json"
   touch "$FX/rest-mode"
@@ -268,7 +268,7 @@ rp() { "$SCRIPTS/gh-rest-pr.sh" "$@" --repo o/r; }
   [ "$(jq -c '.[1] | [.isDraft, .isCrossRepository, .labels, .baseRefName, .headRefOid]' <<<"$output")" = '[true,true,[{"name":"x"}],"main","abcdef01234567892"]' ]
   [ "$(jq -c '[.[0].closingIssuesReferences[].number]' <<<"$output")" = '[12,13,15]' ]
   # 250 open PRs: three pages of 100; --limit stops early.
-  for i in $(seq 1 250); do pr_row "$i" me false false MERGEABLE '[]'; done | jq -s . >"$FX/prs.json"
+  pr_rows 1 250 me false false MERGEABLE '[]' | jq -s . >"$FX/prs.json"
   : >"$FX/rest-calls"
   [ "$(rp list | jq length)" -eq 250 ]
   [ "$(grep -c 'pulls?state=open' "$FX/rest-calls")" -eq 3 ]
