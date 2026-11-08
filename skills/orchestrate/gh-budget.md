@@ -30,6 +30,11 @@ hour's budget lasting the hour.
   does not source `_lib.sh`, prepend `skills/orchestrate/scripts/gh-shim` to its `PATH` yourself.
 - Each waaagh script that calls GitHub declares its priority with `orch_gh_priority high|normal|low`
   (a test enforces this). Other callers set `GH_BUDGET_PRIORITY`; the default is normal.
+- Local-only commands never reach the pacer's state: `config`, `alias`, `completion`, `help`,
+  `version`/`--version`, `extension list`, `api rate_limit`, and `auth` except `auth status`
+  (which calls the API) run straight through, unpaced, with no `/rate_limit` read. Read
+  `gh config get` or `gh auth token` through the shim as usual. Anything not on that explicit list
+  is paced.
 - The pacer governs **local callers only**. Cloud sessions use their own GitHub auth and budget.
 
 ## Fewer calls per pass
