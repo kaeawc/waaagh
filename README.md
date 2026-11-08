@@ -28,6 +28,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 |---|---|
 | `skills/orchestrate/SKILL.md` | The doctrine: roles and routing, isolation, briefs, evidence, the campaign loop, lane cap, merge policy, interrupts, PR lifecycle and takeover |
 | `skills/orchestrate/subagent-hygiene.md` | Background subagent hygiene: premise-first, monitor-free, line-budgeted briefs; stop message vs `TaskStop` for closed or noisy lanes; model choice by role |
+| `skills/orchestrate/lane-safety.md`, `hooks/hooks.json` | Lane safety contract (deletion scope, no pattern kills, never quit Simulator.app, no writes around the edit hook) and the PreToolUse hook that enforces it |
 | `skills/orchestrate/roles/` | Brief templates for the standing roles: merge bot, rebase bot, hygiene bot, local sweep, verify batch, verification, implementation lane, PR doctor, conflict lane, reviewer |
 | `skills/orchestrate/scripts/` | The scripts below, with stubbed-`gh` self-tests |
 | `agents/codex-implementer.md` | Routine implementation lane (GPT-6 Luna, `medium`): wraps one supervised `codex exec` run and verifies it |
@@ -72,6 +73,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
 | `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, and create pacing with 429 backoff |
+| `lane-safety.sh` | PreToolUse hook (wired by `hooks/hooks.json`) enforcing the lane safety contract on Bash calls: denies deleting protected or out-of-lane paths, pattern kills, quitting Simulator.app and shell writes outside the lane worktree; asks about backgrounded or silenced destructive commands (`skills/orchestrate/lane-safety.md`) |
 
 ## Defaults
 
@@ -102,6 +104,9 @@ and from `<state dir>/lane-rules.md`.
 - The hygiene bot can close issues only as fixed-by-a-merged-PR or duplicate-of-an-open-issue, with
   evidence in the closing comment; every close is logged.
 - No role kills processes by pattern, and a device has one owner at a time.
+- A PreToolUse hook blocks deleting `~/Library`, the Android SDK, `~/.gradle` and other protected
+  roots, pattern kills and quitting Simulator.app; inside a lane worktree it also blocks deletions
+  and shell writes outside the lane (`skills/orchestrate/lane-safety.md`).
 
 ## Development
 

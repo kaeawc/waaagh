@@ -116,6 +116,10 @@ review on every poll or push.
 - **Never kill what you did not start.** No `pkill`/`killall`/kill-by-pattern, by you or any role:
   only a PID that agent launched and recorded. Finished lanes can leave orphan test processes that
   keep host load high, so every lane records the PIDs it starts and cleanup kills exactly those.
+- **Lane safety contract** (`lane-safety.md`): delete only your own worktree, AVD and simulator;
+  no `rm -rf` outside the lane or on a variable-built path; never quit Simulator.app; enter the
+  worktree instead of writing around the edit hook. Paste its rules into every lane brief; the
+  plugin's PreToolUse hook (`scripts/lane-safety.sh`) enforces them on Bash calls.
 - **Long lanes use named, persistent worktrees.** An isolated agent worktree may be removed
   automatically if the agent returns before editing anything; create the lane's worktree yourself.
 - **Never edit a running shell script in place.** Bash reads scripts incrementally, so an in-place

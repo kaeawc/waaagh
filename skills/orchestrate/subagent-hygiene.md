@@ -49,6 +49,7 @@ Pick the cheapest model that has done the role well; always pass `model` explici
 | Router, local sweep, hygiene bot, rebase bot | `sonnet` | Many items and cross-item judgment (duplicates, routing, clusters). |
 | Verify batch over several issues, verification | `sonnet` | Multi-issue verification batches needed Sonnet. |
 | Driver for a conflict fix or a static-analysis fix (Detekt, lint baselines) | `sonnet` | Both sides' intent, or a rule's intent, must survive; these fixes needed Sonnet. |
+| Lane driver that creates or deletes devices (emulators, AVDs, simulators) | `sonnet` | Device setup and cleanup involve improvised destructive commands; a Haiku driver deleted the Android SDK (`lane-safety.md`). |
 | The one independent reviewer per lane | `opus` | `SKILL.md`, "Choosing the reviewer". |
 | Concept and architecture review | `fable` | `SKILL.md`, "Choosing the reviewer". |
 

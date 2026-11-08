@@ -1,0 +1,17 @@
+{
+  "description": "waaagh lane safety contract (skills/orchestrate/lane-safety.md): blocks deleting protected or out-of-lane paths, pattern kills, quitting Simulator.app and shell writes outside a lane's worktree",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/lane-safety.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
