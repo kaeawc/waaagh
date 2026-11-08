@@ -197,7 +197,7 @@ CASES
   run mq run-once
   [ "$(outcome a)" = error ]
   [[ "$(reason a)" == "worktree dirty or not on a" ]]
-  ! git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a
+  run ! git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a
   rm "$BATS_TEST_TMPDIR/a/untracked.txt"
   git -C "$BATS_TEST_TMPDIR/a" switch -q -c elsewhere
   mq retry a >/dev/null
@@ -214,7 +214,7 @@ CASES
   [ "$status" -eq 0 ]
   [ "$(outcome a)" = waiting ]
   [[ "$(reason a)" == "PR 5 unreadable (transient); will re-check" ]]
-  ! grep -qE '^pr (list|create|merge)' "$FX/calls"
+  run ! grep -qE '^pr (list|create|merge)' "$FX/calls"
   ! git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a
 }
 
@@ -225,7 +225,7 @@ CASES
   run mq run-once
   [ "$(outcome a)" = waiting ]
   [[ "$(reason a)" == "PR lookup failed (transient)" ]]
-  ! grep -q '^pr create' "$FX/calls"
+  run ! grep -q '^pr create' "$FX/calls"
   rm "$FX/merged-list-fails"
   touch "$FX/create-fails"
   run mq run-once

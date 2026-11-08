@@ -73,7 +73,7 @@ sweep() { "$SCRIPTS/issue-candidates.sh" sweep --repo o/r --checkout "$BATS_TEST
   run sweep
   [ "$status" -eq 0 ]
   [ "$(row 5 | cut -f1)" = C ]
-  ! grep -q blocked_by "$FX/calls"
+  if grep -q blocked_by "$FX/calls"; then false; fi   # not run: the next line reads $lines
   [[ "${lines[${#lines[@]}-1]}" == "# A=0 B=1 C=4 D=0; shown 5 of 5 in A,B,C,D;"* ]]
   run sweep --drop-blocked
   [ "$status" -eq 0 ]
@@ -89,7 +89,7 @@ sweep() { "$SCRIPTS/issue-candidates.sh" sweep --repo o/r --checkout "$BATS_TEST
   full=${last##*all: }
   [ "$(awk -F'\t' '$1 == "blocked"' "$full" | wc -l | tr -d ' ')" = 2 ]
   # The B row is not checked: only C rows cost blocker reads.
-  ! grep -q "issues/8" "$FX/calls"
+  run ! grep -q "issues/8" "$FX/calls"
   # --bucket C leaves the blocked rows out of the shortlist.
   run sweep --drop-blocked --bucket C
   [ "$(printf '%s\n' "$output" | awk -F'\t' '!/^#/ { print $2 }' | tr '\n' ' ')" = "4 7 " ]

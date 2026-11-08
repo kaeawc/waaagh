@@ -53,7 +53,7 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
   run dr check
   [ "$status" -eq 3 ]
   [ "$output" = "held: PR 7 fixes device-found regression(s) #11 and no device recheck is recorded" ]
-  ! grep -q "issues/13" "$FX/calls"   # "refs #13" is not a fixing reference
+  run ! grep -q "issues/13" "$FX/calls"   # "refs #13" is not a fixing reference
   ! grep -qE "label create|pr edit|POST" "$FX/calls"
 }
 
@@ -220,7 +220,7 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
     run "$SCRIPTS/$s.sh" -h
     [ "$status" -eq 0 ]
     printf '%s\n' "$output" | grep -q "^# Exit:"
-    ! printf '%s\n' "$output" | grep -q "set -euo"
+    [[ "$output" != *"set -euo"* ]]
   done
 }
 

@@ -51,8 +51,8 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$I" "If the prompt names fixtures, commit the captured fixtures from those URLs verbatim"
   has "$I" "never pkill, killall or kill a process you did not start"
   has "$CO/.claude/briefs/repair.md" "Check out BRANCH"
-  ! grep -q '{{' "$I" "$CO/.claude/briefs/repair.md"
-  ! [ -s "$FX/calls" ]
+  run ! grep -q '{{' "$I" "$CO/.claude/briefs/repair.md"
+  [ ! -s "$FX/calls" ]
   # Re-running is a no-op; a hand-edited copy is never overwritten without --force.
   run cd_ briefs install --dir "$CO" --base trunk --gates "make test" --kind implement
   [ "$output" = "current $I" ]
@@ -136,7 +136,7 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   [ "$status" -eq 0 ]
   jq -e '.name == "r #5 cloud repair of PR #31" and .run_once_at == "2026-09-27T12:01:20Z"
     and .job_config.ccr.events[0].data.message == "Follow .claude/briefs/repair.md for PR #31 (issue #5, branch work/5-auto)."' <<<"$output"
-  ! [ -s "$FX/calls" ]
+  [ ! -s "$FX/calls" ]
   run cd_ record --issue 5 --kind repair --trigger trig_r --run-at 2026-09-27T12:01:20Z
   [ "$output" = "recorded 5 trig_r 2026-09-27T12:01:20Z repair" ]
   cd_ record --issue 6 --kind repair --trigger trig_s --run-at 2026-09-27T12:01:40Z

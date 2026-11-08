@@ -115,7 +115,7 @@ outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   [ ! -f "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/b.outcome" ]
   [[ "$output" == *"b: blocked on a"* ]]
   [ -z "$(git -C "$BATS_TEST_TMPDIR/a" status --porcelain)" ]
-  ! grep -q 'pr merge' "$FX/calls"
+  run ! grep -q 'pr merge' "$FX/calls"
   run mqr status
   [[ "$output" == *$'a\tconflict\ta'* ]]
   [[ "$output" == *$'b\tblocked:a\tb'* ]]
@@ -218,7 +218,7 @@ outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   [ "$(outcome a)" = waiting ]
   [[ "$output" == *"a: waiting (PR 5: pending:build)"* ]]
   [[ "$output" == *"b: blocked on a"* ]]
-  ! grep -q 'pr merge' "$FX/calls"
+  run ! grep -q 'pr merge' "$FX/calls"
   run mqr status
   [[ "$output" == *$'a\twaiting\ta'* ]]
   # Checks finish: the item resumes and merges; the check command is not run again.
@@ -240,7 +240,7 @@ outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   echo UNKNOWN >"$FX/mergeable"
   run mqr run-once
   [ "$(outcome a)" = waiting ]
-  ! grep -q 'pr merge' "$FX/calls"
+  run ! grep -q 'pr merge' "$FX/calls"
   echo MERGEABLE >"$FX/mergeable"
   run mqr run-once
   [ "$(outcome a)" = merged ]
@@ -300,7 +300,7 @@ outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   echo '[{"isResolved":false,"isOutdated":false}]' >"$FX/threads.json"
   run mqr run-once
   [ "$(outcome a)" = blocked ]
-  ! grep -q 'pr merge' "$FX/calls"
+  run ! grep -q 'pr merge' "$FX/calls"
   echo '[]' >"$FX/threads.json"
   mqr retry a
   run mqr run-once
@@ -341,7 +341,7 @@ outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   run mqr run-once
   [ "$(outcome a)" = merged ]
   [[ "$output" == *"PR 9 (already merged at"* ]]
-  ! grep -q 'pr create' "$FX/calls"
+  run ! grep -q 'pr create' "$FX/calls"
   ! grep -q 'pr merge' "$FX/calls"
 }
 

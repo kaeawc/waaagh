@@ -57,7 +57,7 @@ ob() { "$SCRIPTS/open-blockers.sh" --repo o/r "$@"; }
   run ob 20
   [ "$status" -eq 3 ]
   [ "$output" = "20 BLOCKED by #5 #7" ]
-  ! grep -q 'issues/8$' "$FX/calls"
+  run ! grep -q 'issues/8$' "$FX/calls"
   ! grep -q 'issues/9$' "$FX/calls"
 }
 
