@@ -32,6 +32,17 @@
 #       (hold) | 5 merge rejected | 6 --admin not allowed | 7 not ready | 8 accepted but queued
 #       on GitHub (merge queue or auto-merge): not merged yet, do not merge again
 #       | 9 outcome unknown (the PR could not be read back): run again later to reconcile
+#       | 10 pending on GitHub: the merge got a 5xx or "merge already in progress" and the PR is
+#       still OPEN after the waits (`pending:`), or Pull Requests is in an outage (`outage:`);
+#       not merged, not failed: do not merge by other means, run again later to reconcile
+# GitHub outages: success is read from the PR state, never from the merge's exit code. A 5xx or
+# "merge already in progress" is pending, not success or failure: githubstatus.com is read
+# (gh-status.sh) and its non-operational components logged; then the PR state is re-read after
+# waits of 60 s, 120 s, ... (ORCHESTRATE_MERGE_TRIES rounds, default 3; ORCHESTRATE_MERGE_BACKOFF
+# never below 60). Only a 5xx is re-sent (still bound to the head); "already in progress" is only
+# re-read. While Pull Requests is down it stops at once and writes <state dir>/GITHUB_OUTAGE; while
+# that file exists every run re-reads the status first and pauses (exit 10, nothing attempted or
+# logged) until Pull Requests is operational again.
 # Appends one line per attempt to <state dir>/merges.log.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -52,11 +63,11 @@ while (($#)); do
     --except-check) excepts+=("$2"); shift 2 ;;
     --ignore-check) ignores+=("$2"); shift 2 ;;
     --main-fix) main_fix=yes; shift ;;
-    -h | --help) sed -n '2,35p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,46p' "$0"; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,35p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,46p' "$0" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
@@ -65,7 +76,7 @@ log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "${h
 
 journal="$state/ops/merge-pr$pr.json"
 # An unfinished earlier attempt is reconciled before anything else: never merge twice.
-if [[ -f "$journal" ]] && [[ "$(jq -r .state "$journal" 2>/dev/null)" =~ ^(intent|unknown|queued)$ ]]; then
+if [[ -f "$journal" ]] && [[ "$(jq -r .state "$journal" 2>/dev/null)" =~ ^(intent|unknown|queued|pending)$ ]]; then
   jfull=$(jq -r .head "$journal")
   now=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,mergeCommit,headRefOid,autoMergeRequest) ||
     { echo "unverified: an earlier merge attempt of PR $pr is unreconciled and the PR is unreadable"; exit 9; }
@@ -87,6 +98,16 @@ fi
 
 if [[ -f "$state/MAIN_RED" && "$main_fix" == no ]]; then
   echo "hold: default branch is red ($(head -1 "$state/MAIN_RED"))"; exit 4
+fi
+
+# Paused while GitHub's Pull Requests component is down: no attempt, no failure line per pass.
+if [[ -f "$state/GITHUB_OUTAGE" ]]; then
+  src=0
+  st=$("$here/gh-status.sh") || src=$?
+  if ((src == 4)); then
+    echo "outage: merging paused since $(cut -f1 "$state/GITHUB_OUTAGE"); githubstatus: $st"; exit 10
+  fi
+  ((src != 0)) || rm -f "$state/GITHUB_OUTAGE"
 fi
 
 if [[ "$admin" == yes ]]; then
@@ -184,19 +205,56 @@ orch_journal "$journal" "$(jq -cn --arg repo "$repo" --argjson pr "$pr" --arg he
     state: "intent", started_at: $at}')"
 jset() { orch_journal "$journal" "$(jq -c --arg s "$1" --arg d "${2:-}" '.state = $s | .detail = $d' "$journal")"; }
 diag="$state/ops/merge-pr$pr-$attempt.out"
-rc=0
-gh pr merge "$pr" --repo "$repo" "${args[@]}" >"$diag" 2>&1 || rc=$?
-out=$(tail -1 "$diag")
-
-# Reconcile: bounded reads of the PR, never a second mutation.
-if ! after=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,mergeCommit,headRefOid,autoMergeRequest); then
-  jset unknown "merge exit $rc; readback failed"
-  log "unverified: merge exit $rc, readback failed; attempt $attempt; output in $diag"
-  echo "unverified: the merge of PR $pr may or may not have happened (exit $rc, readback failed); run again to reconcile"
-  exit 9
-fi
-final=$(jq -r '"\(.state) \(.mergeCommit.oid // "-")"' <<<"$after")
+# A 5xx, or GitHub saying the merge is already in progress: pending, never success or failure.
+pending_kind() {
+  if grep -qi 'merge already in progress' "$diag"; then echo in-progress
+  elif grep -qiE 'HTTP 5[0-9][0-9]|bad gateway|service unavailable|gateway time-?out|internal server error' "$diag"; then
+    echo 5xx
+  fi
+  return 0
+}
+tries=${ORCHESTRATE_MERGE_TRIES:-3} backoff=${ORCHESTRATE_MERGE_BACKOFF:-60} round=1 send=yes rc=0 out=""
+((backoff >= 60)) || backoff=60
+while :; do
+  if [[ "$send" == yes ]]; then
+    ((round == 1)) || diag="$state/ops/merge-pr$pr-$attempt-r$round.out"
+    rc=0
+    gh pr merge "$pr" --repo "$repo" "${args[@]}" >"$diag" 2>&1 || rc=$?
+    out=$(tail -1 "$diag")
+  fi
+  # Reconcile: bounded reads of the PR; its state decides, never the merge's exit code.
+  if ! after=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,mergeCommit,headRefOid,autoMergeRequest); then
+    jset unknown "merge exit $rc; readback failed"
+    log "unverified: merge exit $rc, readback failed; attempt $attempt; output in $diag"
+    echo "unverified: the merge of PR $pr may or may not have happened (exit $rc, readback failed); run again to reconcile"
+    exit 9
+  fi
+  final=$(jq -r '"\(.state) \(.mergeCommit.oid // "-")"' <<<"$after")
+  # Only a still-OPEN PR at the judged head, not queued, can be pending.
+  [[ "$final" == OPEN* && "$(jq -r '.headRefOid // ""' <<<"$after")" == "$full" &&
+    "$(jq -r '.autoMergeRequest != null' <<<"$after")" != true ]] || break
+  kind=$(pending_kind)
+  [[ -n "$kind" ]] || break
+  src=0
+  st=$("$here/gh-status.sh") || src=$?
+  log "pending: $kind (exit $rc: $out); githubstatus: $st"
+  if ((src == 4)); then
+    printf '%s\t%s\n' "$(orch_iso "$(orch_now)")" "$st" >"$state/GITHUB_OUTAGE"
+    jset pending "$kind; outage: $st"
+    echo "outage: GitHub reports $st; the merge of PR $pr is pending and merging is paused (do not merge again; a rerun reconciles)"
+    exit 10
+  fi
+  if ((round >= tries)); then
+    jset pending "$kind: $out"
+    echo "pending: the merge of PR $pr got $kind ($out) and the PR is still OPEN after $round rounds; githubstatus: $st; a rerun reconciles"
+    exit 10
+  fi
+  if [[ "${ORCHESTRATE_MERGE_FAKE_SLEEP:-0}" == 1 ]]; then echo "pr-merge: wait $backoff" >&2; else sleep "$backoff"; fi
+  backoff=$((backoff * 2)) round=$((round + 1))
+  if [[ "$kind" == 5xx ]]; then send=yes; else send=no; fi
+done
 if [[ "$final" == MERGED* ]]; then
+  rm -f "$state/GITHUB_OUTAGE"
   jset merged "${final#MERGED }"
   log "merged ${final#MERGED } method=$method admin=$admin${evidence:+ evidence=$evidence}"
   echo "merged $pr ${final#MERGED }"

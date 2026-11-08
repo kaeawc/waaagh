@@ -18,7 +18,9 @@
 #   merged     done; the only outcome that satisfies a dependent
 #   waiting    pushed, but not merged yet: checks pending or not reported, mergeability unknown,
 #              GitHub not yet showing the pushed head, a merge queued on GitHub, a merge whose
-#              outcome could not be read back, or a transient read failure. The next run-once
+#              outcome could not be read back, a merge pending after a 5xx or "already in
+#              progress" (an outage also stops the pass: `paused:`, exit 0), or a transient read
+#              failure. The next run-once
 #              first re-checks the item's known PR (MERGED -> merged, without any new push, PR or
 #              merge), then resumes, skipping the base merge, check and push when nothing moved
 #   blocked    readiness found a real blocker (failed check, review thread, conflict, unknown
@@ -63,7 +65,7 @@ fi
 repo="" id="" worktree="" branch="" title="" body="" requires="-" arg=""
 case "$cmd" in
   add | run-once | status | retry) ;;
-  *) sed -n '2,40p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,42p' "$0" >&2; exit 2 ;;
 esac
 while (($#)); do
   case "$1" in
@@ -105,7 +107,7 @@ unmet_deps() {
 case "$cmd" in
   add)
     [[ "$id" =~ ^[A-Za-z0-9._-]+$ && -n "$worktree" && -n "$branch" && -n "$title" && -n "$body" ]] ||
-      { sed -n '2,40p' "$0" >&2; exit 2; }
+      { sed -n '2,42p' "$0" >&2; exit 2; }
     if cut -f1 "$queue" | grep -Fxq -- "$id"; then
       echo "refused: id '$id' is already queued; ids are never reused" >&2; exit 3
     fi
@@ -253,6 +255,8 @@ case "$cmd" in
         7) set_outcome "$qid" waiting "pr-merge found it not ready, see $log" ;;
         8) set_outcome "$qid" waiting "merge queued on GitHub; will confirm" ;;
         9) set_outcome "$qid" waiting "merge outcome unknown; will reconcile" ;;
+        10) set_outcome "$qid" waiting "merge pending on GitHub (5xx, in progress or outage); will reconcile"
+          if [[ -f "$(orch_state_dir "$repo")/GITHUB_OUTAGE" ]]; then echo "paused: GitHub outage; pass stopped"; break; fi ;;
         *) set_outcome "$qid" error "pr-merge exit $rc, see $log" ;;
       esac
     done 3<"$queue"

@@ -17,6 +17,9 @@ red `{{BASE}}`.
    Exit 3 (head moved or ineligible), 4 (red hold), 5 (GitHub refused) or 7 (no longer READY on a
    fresh read): record and move on. Exit 8 (queued on GitHub) or 9 (outcome unknown): do not
    merge it by other means; a later `pr-merge.sh` run for that PR reconciles it from its journal.
+   Exit 10 (pending on GitHub after a 5xx or "merge already in progress"; checked against
+   `{{SCRIPTS}}/gh-status.sh`) is neither merged nor failed: record it as pending. If it printed
+   `outage:`, Pull Requests is down: stop merging this pass and report the outage line.
    After each successful merge re-run step 2 with `--delta` added, because mergeability of the
    others changes: it fetches everything fresh but prints only rows that changed (or `no-change`),
    so work from the rows you already hold plus the delta. Always pass the head from the newest row

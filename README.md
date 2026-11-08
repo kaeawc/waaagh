@@ -56,6 +56,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `gate-slot.sh`, `heavy-build-slot.sh` | Host-wide gate semaphore (default 3) with a per-repo gate environment; Gradle/Xcode builds run alone with capped workers; bounded waits, stale-holder reclaim |
 | `wt-cleanup.sh` | Conservative worktree cleanup: only clean, idle, pushed, unprotected worktrees no process is in; dry run by default |
 | `gh-read.sh` | Bounded, typed GitHub reads: per-call timeout, backoff inside a time budget, Retry-After and rate-limit reset handling with a cooldown shared by local lanes; refuses writes |
+| `gh-status.sh` | Read githubstatus.com and name non-operational components; exit 4 while Pull Requests (or a named component) is down, so merges pause instead of failing |
 | `job-log.sh` | One Actions job's log via the job-scoped endpoint (works while the workflow still runs), saved per run/attempt/job and excerpted, with explicit not-available outcomes |
 | `usage-report.sh` | Codex usage per model and verified lane status, from per-run receipts (`bin/codex-lane-usage.sh`) |
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
