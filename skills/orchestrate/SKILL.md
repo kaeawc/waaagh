@@ -273,7 +273,9 @@ agent reports or a PR changes. Do not tick on a timer.
    branch `work/<issue>-<slug>`, whoever drives the lane. Nothing may select PRs by that name:
    the merge bot selects by author and readiness and excludes by labels, and `pr-ready.sh` reports
    any otherwise-ready PR an exclusion hid as `ready-but-skipped=<n>`.
-7. **Report** only what changed: merged, opened, blocked, decisions queued.
+7. **Report** only what changed, in the fixed order of `reporting.md`: main health, merges,
+   dispatches, closes, owner blockers, then the cumulative counts from
+   `"$SCRIPTS/counters.sh" show` (bump them as events happen), never from recall.
 
 Findings feed back: verification and review findings become issues, and the next plan ranks them.
 
@@ -464,6 +466,9 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   opted in. Report "usage limit" and "401 / sign in again" separately, with the exact text: one
   needs time or a plan change, the other a login.
 - **Claude-driven device verification** needs the user's go-ahead for each batch.
+- **Owner-only blockers** (signing, notarization, a device approval, a console registration, a
+  secret): surface each as it appears, as "action — where — exact names" (`reporting.md`), not
+  batched until the end; keep the lanes that do not need it running.
 - **Backlog drained.** No ranked, actionable, unblocked work is left. Report and stop; do not
   invent work or launch bug hunters unasked.
 
@@ -587,6 +592,11 @@ routines that did those jobs. Routines that remain (bug discovery on devices, de
 flagged issues, memory upkeep) run independently and share three things with a campaign: the pause
 label, the device lock, and the rule that every run ends with a posted trace. Before a
 verification batch, check the device lock those routines use; never start a batch over a live one.
+
+**Cloud dispatch.** When the owner wants one cloud session per `cloud-ready` issue with no click,
+the main session (subagents lack `RemoteTrigger`) creates one run-once routine per issue, paced and
+recorded through `"$SCRIPTS/cloud-dispatch.sh"`: `roles/cloud-dispatch.md`. Results come back only
+as PRs and issue comments, which the triage loop reads.
 
 ## Final report
 
