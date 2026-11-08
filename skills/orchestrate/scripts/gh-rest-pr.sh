@@ -8,6 +8,7 @@
 #        gh-rest-pr.sh view    [--repo OWNER/REPO] --pr N [--checks]
 #        gh-rest-pr.sh rollup  [--repo OWNER/REPO] --sha SHA
 #        gh-rest-pr.sh threads [--repo OWNER/REPO] --pr N
+#        gh-rest-pr.sh thread-nodes [--repo OWNER/REPO] --pr N
 #        gh-rest-pr.sh files   [--repo OWNER/REPO] --pr N
 #        gh-rest-pr.sh review  [--repo OWNER/REPO] --pr N
 #   list     open PRs, newest first (--asc: oldest first), at most --limit (default 300), from
@@ -29,7 +30,18 @@
 #            reviewThreads, nodes or data, each thread with isResolved/is_resolved/resolved and
 #            optionally isOutdated/is_outdated/outdated (absent: current). A thread without a
 #            resolved flag, or any other shape, is unreadable (exit 3), never "0".
-#   files    the changed files, [{path}], from GET pulls/<n>/files.
+#   thread-nodes  the PR as the GraphQL pull request node thread-sweep.sh classifies: {number,
+#            commits{nodes[{commit{oid}}]}, reviewThreads{pageInfo{hasNextPage:false}, nodes[{id,
+#            isResolved, isOutdated, starter{nodes[{author{login},url}]}, latest{totalCount,
+#            nodes[{author{login},body}]}, comments{nodes[{body}]} (the last 100)}]}}. Flags come
+#            from ccr/review_threads as in threads; bodies and authors from GET pulls/<n>/comments,
+#            commits from GET pulls/<n>/commits (neither is read when the PR has no thread). A
+#            thread is tied to its comments by a comment id it carries (root_comment_id,
+#            comment_id or first_comment_id, camelCase alike, or its first comment's
+#            databaseId/database_id/id); its node id is the REST id of the thread's first comment,
+#            the id POST pulls/<n>/ccr/comments/<id>/resolve takes. A thread with no comment id,
+#            or one naming no comment of the PR, is unreadable (exit 3).
+#   files   the changed files, [{path}], from GET pulls/<n>/files.
 #   review   the last review, {state, commit} (both null when there is none), from GET
 #            pulls/<n>/reviews.
 # closingIssuesReferences over REST is parsed from the body: "close(s|d) / fix(es|ed) /
@@ -43,7 +55,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,39p' "$0"; }
+usage() { sed -n '2,51p' "$0"; }
 case "${1:-}" in -h | --help) usage; exit 0 ;; -*) echo "gh-rest-pr.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
@@ -62,7 +74,7 @@ while (($#)); do
 done
 case "$cmd" in
   list) [[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "gh-rest-pr.sh: --limit must be a positive number" >&2; exit 2; } ;;
-  view | threads | files | review) [[ "$pr" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; } ;;
+  view | threads | thread-nodes | files | review) [[ "$pr" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; } ;;
   rollup) [[ "$sha" =~ ^[0-9a-fA-F]+$ ]] || { usage >&2; exit 2; } ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -135,24 +147,55 @@ view_pr() {
   printf '%s\n' "$one"
 }
 
+# The ccr/review_threads parsing threads and thread-nodes share: every thread of every page, each
+# with its resolved (_r, checked) and outdated (_o, absent: false) flags.
+# shellcheck disable=SC2016  # jq variables, not shell expansions
+tparse='def flag($a; $b; $c): if has($a) then .[$a] elif has($b) then .[$b] elif has($c) then .[$c] else null end;
+  def list: if type == "array" then .
+    elif type == "object" then
+      ([.threads, .review_threads, .reviewThreads, .nodes, .data] | map(select(. != null)) | first // null)
+      | if type == "object" and has("nodes") then .nodes else . end
+      | if type == "array" then . else error("no thread list") end
+    else error("no thread list") end;
+  [.[] | list[]
+   | if type != "object" then error("thread is not an object") else . end
+   | . + {_r: flag("isResolved"; "is_resolved"; "resolved"), _o: (flag("isOutdated"; "is_outdated"; "outdated") // false)}
+   | if (._r | type) != "boolean" then error("thread without a resolved flag") else . end]'
+
 threads() {
   local out
   out=$(ghr api --paginate "repos/$repo/pulls/$pr/ccr/review_threads") || exit 3
-  jq -se '
-    def flag($a; $b; $c): if has($a) then .[$a] elif has($b) then .[$b] elif has($c) then .[$c] else null end;
-    def list: if type == "array" then .
-      elif type == "object" then
-        ([.threads, .review_threads, .reviewThreads, .nodes, .data] | map(select(. != null)) | first // null)
-        | if type == "object" and has("nodes") then .nodes else . end
-        | if type == "array" then . else error("no thread list") end
-      else error("no thread list") end;
-    [.[] | list[]]
-    | map(if type != "object" then error("thread is not an object") else . end
-          | flag("isResolved"; "is_resolved"; "resolved") as $r
-          | (flag("isOutdated"; "is_outdated"; "outdated") // false) as $o
-          | if ($r | type) != "boolean" then error("thread without a resolved flag")
-            else select(($r | not) and ($o | not)) end)
-    | length' <<<"$out" 2>/dev/null || unreadable "PR $pr: review threads in an unrecognised shape"
+  jq -se "$tparse"' | map(select((._r | not) and (._o | not))) | length' <<<"$out" 2>/dev/null ||
+    unreadable "PR $pr: review threads in an unrecognised shape"
+}
+
+thread_nodes() {
+  local out cm='[]' co='[]'
+  out=$(ghr api --paginate "repos/$repo/pulls/$pr/ccr/review_threads") || exit 3
+  out=$(jq -sc "$tparse" <<<"$out" 2>/dev/null) || unreadable "PR $pr: review threads in an unrecognised shape"
+  if [[ "$out" != "[]" ]]; then
+    cm=$(ghr api --paginate "repos/$repo/pulls/$pr/comments?per_page=100") || exit 3
+    co=$(ghr api --paginate "repos/$repo/pulls/$pr/commits?per_page=100") || exit 3
+  fi
+  jq -nc --argjson n "$pr" --argjson t "$out" --slurpfile cm <(printf '%s\n' "$cm") --slurpfile co <(printf '%s\n' "$co") '
+    def num: if type == "number" then . elif type == "string" and test("^[0-9]+$") then tonumber else null end;
+    def cmts: if type == "array" then . elif type == "object" and (.nodes | type) == "array" then .nodes else [] end;
+    def login: (.user.login // "") | sub("\\[bot\\]$"; "");
+    def items: if type == "array" then .[] else error("not a list") end;
+    [$cm[] | items] as $all
+    | {number: $n, commits: {nodes: [$co[] | items | {commit: {oid: .sha}}]},
+       reviewThreads: {pageInfo: {hasNextPage: false}, nodes: [$t[]
+         | ([.root_comment_id, .rootCommentId, .comment_id, .commentId, .first_comment_id, .firstCommentId,
+             ((.comments // null) | cmts | (.[0] // {}) | (.databaseId // .database_id // .id))]
+            | map(num | select(. != null)) | first) as $cid
+         | (if $cid == null then error("thread without a comment id") else ($all | map(select(.id == $cid)) | first) end) as $m
+         | (if $m == null then error("thread names no comment of the PR") else ($m.in_reply_to_id // $m.id) end) as $root
+         | ([$all[] | select((.in_reply_to_id // .id) == $root)] | sort_by(.created_at // "", .id)) as $c
+         | {id: ($root | tostring), isResolved: ._r, isOutdated: ._o,
+            starter: {nodes: [{author: {login: ($c[0] | login)}, url: ($c[0].html_url // "-")}]},
+            latest: {totalCount: ($c | length), nodes: [{author: {login: ($c[-1] | login)}, body: ($c[-1].body // "")}]},
+            comments: {nodes: [$c[-100:][] | {body: (.body // "")}]}}]}}' 2>/dev/null ||
+    unreadable "PR $pr: review threads could not be tied to their comments"
 }
 
 files() {
@@ -173,6 +216,7 @@ case "$cmd" in
   view) view_pr ;;
   rollup) rollup "$sha" ;;
   threads) threads ;;
+  thread-nodes) thread_nodes ;;
   files) files ;;
   review) review ;;
 esac

@@ -59,10 +59,12 @@ within() { # CASE COLUMN MAX
   within triage-tick-50-open rows 9
 }
 
-@test "triage-tick snapshot over REST (GraphQL refused) costs a constant plus three calls per open PR" {
+@test "triage-tick snapshot over REST (GraphQL refused) costs a constant plus four calls per open PR" {
   # main health, the refused snapshot GraphQL page, the REST open list, then per PR check-runs,
-  # status and reviews (gh-snapshot.sh unchanged), then the refused PR list and thread sweep.
-  within triage-tick-rest-50-open gh_calls 155
+  # status and reviews (gh-snapshot.sh unchanged); the dispatch queue's REST PR and issue lists
+  # (#136); thread-sweep.sh's REST open list, then per PR its review threads (no thread: no
+  # comments or commits read).
+  within triage-tick-rest-50-open gh_calls 210
   within triage-tick-rest-50-open rows 9
 }
 

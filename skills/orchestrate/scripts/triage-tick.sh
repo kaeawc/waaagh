@@ -14,12 +14,13 @@
 #       prs open=<n|300+|unknown> [reviews=head:<n>,stale:<n>,none:<n> [changes-requested=#a,...]
 #            | reviews=unknown]   last review per open PR from one gh-snapshot.sh call (which also
 #            refreshes the per-head cache review-gate.sh check reads); omitted with no open PR.
-#            The count comes from the `gh pr list` read that dispatch needs, or from the snapshot
-#            (REST) when GraphQL is refused (dispatch is then unknown).
+#            The count comes from the open-PR read dispatch needs (gh-issues.sh prs-open, over REST
+#            where GraphQL is refused); should that read fail there, from the snapshot.
 #       merge_loop <absent|alive|stale|dead|expired|ended:REASON> [beat_age=<s>] [deadline=<iso>]
 #                  last_merge=<iso|-> pr=<n|-> merges_24h=<n>
 #       dispatch <n|unknown> next=#a,#b,#c     open issues (any --ready-label; none of
 #                  --exclude-label, default "blocked") with no open PR closing them and no active lane
+#                  (over REST a PR closes what its body names with a closing keyword; see gh-issues.sh)
 #       slots <type>=<busy>/<n>,... | slots none
 #       cron <none|age=<h>h expires_in=<h>h>
 #       threads none | threads unknown
@@ -59,7 +60,7 @@ orch_gh_priority normal
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 
-usage() { sed -n '2,53p' "$0"; }
+usage() { sed -n '2,54p' "$0"; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 case "$cmd" in -h | --help) usage; exit 0 ;; esac
@@ -92,7 +93,7 @@ case "$cmd" in
   beat) [[ -n "$end" || "$deadline" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; } ;;
   *) usage >&2; exit 2 ;;
 esac
-api=$(orch_gh_api triage-tick.sh) || exit 2
+orch_gh_api triage-tick.sh >/dev/null || exit 2
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 now=$(orch_now)
@@ -204,28 +205,23 @@ esac
 
 # Open PRs: their last reviews from one gh-snapshot.sh call (it also refreshes the per-head cache
 # review-gate.sh check reads), and the dispatch queue (one PR read for closing references, one
-# issue read). Where GraphQL is refused the PR read cannot be made; the count is the snapshot's.
+# issue read, both through gh-issues.sh: GraphQL, or REST where it is refused). Should the PR read fail
+# where GraphQL is refused, the count is the snapshot's.
 open=unknown dispatch=unknown next="-" reviews=""
 lanes_tsv=""
 [[ ! -f "$state/lanes.tsv" ]] || lanes_tsv=$(cat "$state/lanes.tsv")
 snap_rc=0
 snap=$("$here/gh-snapshot.sh" --repo "$repo" --limit 300 --json 2>/dev/null) || snap_rc=$?
 ((snap_rc <= 1)) && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$snap" || snap=""
-pr_rc=0 pr_err=$(mktemp)
-if [[ "$api" == rest ]]; then
-  pr_rc=5
-else
-  prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limit 300 --json number,closingIssuesReferences 2>"$pr_err") || pr_rc=$?
-  ((pr_rc == 0)) || ! orch_gh_refused "$pr_rc" "$(cat "$pr_err")" || api=rest
-fi
-if [[ "$api" == rest && -n "$snap" ]]; then
+pr_rc=0
+prs=$("$here/gh-issues.sh" prs-open --repo "$repo" --limit 300 --fields number,closingIssuesReferences 2>/dev/null) || pr_rc=$?
+if ((pr_rc != 0)) && [[ -n "$snap" ]] && [[ "$(orch_gh_api triage-tick.sh)" == rest ]]; then
   open=$(jq -r --argjson t "$snap_rc" 'if $t == 1 or length >= 300 then "300+" else length end' <<<"$snap")
 fi
-rm -f "$pr_err"
 if ((pr_rc == 0)); then
   open=$(jq -r 'if length >= 300 then "300+" else length end' <<<"$prs")
   ((${#exclude[@]})) || exclude=(blocked)
-  if issues=$("$here/gh-read.sh" --json -- issue list --repo "$repo" --state open --limit 300 --json number,labels 2>/dev/null); then
+  if issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 300 --fields number,labels 2>/dev/null); then
     q=$(jq -r --argjson prs "$prs" --arg lanes "$lanes_tsv" \
       --argjson ready "$(json_list ${ready[@]+"${ready[@]}"})" --argjson exclude "$(json_list "${exclude[@]}")" '
       def has_any($set): any(.[]; . as $l | $set | index($l));

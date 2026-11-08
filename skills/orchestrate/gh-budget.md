@@ -41,7 +41,7 @@ hour's budget lasting the hour.
   carries the last-review counts), and `review-gate.sh check` reads a fresh row (younger than
   `ORCHESTRATE_SNAPSHOT_TTL`, default 300 s) for the PR's head instead of its own head read, and
   instead of its reviews read when the row shows no review. `bench.sh`/`budget.bats` hold the
-  counts (triage tick with 50 open PRs: 6 calls over GraphQL, 155 over REST).
+  counts (triage tick with 50 open PRs: 6 calls over GraphQL, 206 over REST).
 - **Avoid commands that make hidden requests in loops.** `gh run list` also calls
   `GET actions/workflows` to resolve names, and that endpoint can be rate limited on its own while
   `actions/runs` still works. `main-health.sh` reads `actions/runs` directly for this reason. A
