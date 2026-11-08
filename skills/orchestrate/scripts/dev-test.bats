@@ -46,3 +46,32 @@ PROBE
   run "$ROOT/dev/test.sh" -j 0
   [ "$status" -eq 2 ]
 }
+
+# A suite whose test passes only when a wrapper script it starts inherits errexit, and its own shell
+# has nounset and pipefail: as group.sh did under bashcov in codex-lane-run-pgid.bats (#152, #153).
+shellopts_probe() {
+  printf '#!/usr/bin/env bash\nfalse\necho "survived false"\n' >"$P/wrapper.sh"
+  chmod +x "$P/wrapper.sh"
+  cat >"$P/shellopts.bats" <<PROBE
+@test "a wrapper script inherits errexit, and the shell has nounset and pipefail" {
+  # Called directly, as group.sh was: bats' run and \$(...) turn errexit off, and children see that.
+  rc=0; "$P/wrapper.sh" >"\$BATS_TEST_TMPDIR/out" || rc=\$?
+  [ "\$rc" -eq 1 ]
+  [ ! -s "\$BATS_TEST_TMPDIR/out" ]
+  [[ "\$SHELLOPTS" == *nounset* && "\$SHELLOPTS" == *pipefail* && "\$SHELLOPTS" == *errtrace* ]]
+}
+PROBE
+}
+
+@test "--bashcov-shellopts exports bashcov's SHELLOPTS to every bash a suite starts, and says so" {
+  shellopts_probe
+  run "$ROOT/dev/test.sh" -j 1 --bashcov-shellopts "$P/shellopts.bats"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"1/1 tests passed"*"SHELLOPTS=errexit:errtrace:functrace:nounset:pipefail"* ]]
+  # Without the option the wrapper runs past its failure and exits 0: the probe fails. (env -u: this
+  # suite may itself run under the option or bashcov, whose SHELLOPTS every child would inherit.)
+  run env -u SHELLOPTS "$ROOT/dev/test.sh" -j 1 "$P/shellopts.bats"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not ok 1"* ]]
+  [[ "$output" != *"SHELLOPTS="* ]]
+}
