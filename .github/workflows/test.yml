@@ -16,7 +16,7 @@ jobs:
       - name: Install bats
         run: sudo apt-get update && sudo apt-get install -y bats
       - name: ShellCheck
-        run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh bin/*.sh
+        run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh bin/*.sh
       - name: Hostile git config (the suites must not depend on it)
         run: |
           git config --global commit.gpgsign true

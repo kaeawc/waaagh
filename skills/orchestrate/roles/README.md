@@ -48,4 +48,4 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 | Conflict lane | `conflict-lane.md` | `waaagh:sol-implementer` | resolved markers, uncommitted |
 | Triage tick | `triage-tick.md` | `general-purpose`, `model: "haiku"` | one rerun per known-flake run; comments on the red-main tracking issue |
 | Reviewer | `review.md` | `general-purpose`, `model: "opus"` (one per lane) | findings file |
-| Cloud dispatch | `cloud-dispatch.md` (per-issue brief: `cloud-session-brief.md`; fixtures contract: `../device-cloud-handoff.md`) | none: the main session runs it (subagents lack `RemoteTrigger`) | run-once routines, `cloud-sessions.tsv` |
+| Cloud dispatch | `cloud-dispatch.md` (per-issue brief: `cloud-session-brief.md`; fixtures contract: `../device-cloud-handoff.md`; standard briefs kept in the target repo: `../briefs/implement.md`, `../briefs/repair.md`) | none: the main session runs it (subagents lack `RemoteTrigger`) | run-once routines, `cloud-sessions.tsv` |
