@@ -8,7 +8,9 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 2. Put the repository's own rules in `<state dir>/lane-rules.md` (things a fresh agent cannot
    guess: forbidden test suites, device and daemon rules, formatter quirks). Every brief tells its
    agent to read `_common.md` and that file first. Add a rule there when a lane trips on something
-   — once, for every later lane.
+   — once, for every later lane. Campaign learnings (`../learnings.md`) reach a role through
+   `learning.sh brief --role <role>` (`_common.md` rule 12): the index plus the entries tagged
+   with that role, never the whole store.
 3. Lane worktrees are named and persistent, created by you; an auto-created isolated worktree can
    be removed if the agent returns before editing.
 4. The agent's prompt is then short: the brief's path plus this pass's inputs (PR list, holds,
