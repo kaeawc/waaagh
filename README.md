@@ -97,7 +97,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | Merge mode | conservative; fast path above 20 open PRs | `ORCHESTRATE_FAST_PATH_OVER` |
 | Admin merges outside the fast path | refused | `ORCHESTRATE_ADMIN_MERGE=1` |
 | Pause labels | `orchestrate-pause`, `fleet-pause` | `ORCHESTRATE_PAUSE_LABELS` |
-| PR author | the authenticated `gh` user | `ORCHESTRATE_AUTHOR`, `--author` |
+| PR author | the authenticated `gh` user, cached an hour per host in `~/.claude/orchestrate/.author` | `ORCHESTRATE_AUTHOR`, `--author`, `ORCHESTRATE_AUTHOR_TTL` (seconds, 0 = no cache) |
 | State directory | `~/.claude/orchestrate/<owner>__<repo>/` | `ORCHESTRATE_STATE_DIR` |
 | Codex model for the Sol lane | `gpt-6.1-sol` | `CODEX_LANE_SOL_MODEL` |
 | Codex model for the routine lane | `gpt-6-luna` | none (fixed in `agents/codex-implementer.md`) |
