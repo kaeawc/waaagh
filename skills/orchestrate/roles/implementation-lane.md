@@ -52,3 +52,7 @@ start (suites, servers) and kill exactly those before you report. Commit and pus
 STATUS (complete / partial / stopped: reason); premise check; files changed; behaviour change in
 two sentences; before/after test evidence; verification commands and results; judgment calls
 beyond the issue; what needs a device to confirm; the model, effort and tier as actually run.
+Work you split off for a cloud lane that depends on output captured on a device: put every fixture
+under `{{STATE}}/handoff/<issue>/` with a `MANIFEST` and name it in the report, so the orchestrator
+attaches it to the follow-up (`{{SCRIPTS}}/../device-cloud-handoff.md`); a local path alone is
+never enough.

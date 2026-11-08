@@ -13,6 +13,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
+orch_gh_priority normal
 AUTHOR="" repo="" ttl=1800 quiet=20 include_drafts=no
 owner_args=()
 while (($#)); do

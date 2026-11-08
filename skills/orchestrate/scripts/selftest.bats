@@ -603,7 +603,7 @@ case "$*" in
     else cat "$FX/pr.json"; if [ -f "$FX/race" ]; then rm "$FX/race"; cp "$FX/race-head" "$FX/remote-head"; fi; fi ;;
   "pr list"*merged*) cat "$FX/prs-merged.json" ;;
   "pr list"*) cat "$FX/prs.json" ;;
-  "run list"*) cat "$FX/runs.json" ;;
+  "api repos/o/r/actions/runs?"*) jq '{workflow_runs: map({name: .workflowName, status, conclusion, head_sha: .headSha, id: .databaseId, created_at: .createdAt})}' "$FX/runs.json" ;;
   "issue list"*--label*) cat "$FX/pause.json" ;;
   "issue list"*) cat "$FX/issues.json" ;;
   "issue view"*) # issue.json plus what earlier closes changed; $FX/view-fails counts down failures
