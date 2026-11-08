@@ -305,7 +305,8 @@ slots).
 **The cap is the user's.** An explicit number from the user beats these defaults and the policy
 table. When the cap is lowered, never kill running lanes: stop refilling until the count is under
 it. Host load (saturated CPU, timing-out checks, sleeping laptop) is a valid reason to hold below
-the cap; say so in the status.
+the cap; say so in the status. Refill only while `"$SCRIPTS/host-load.sh"` says ADMIT, and report
+its cause row when it does not (`skills/orchestrate/host-load.md`).
 
 ### Standing roles
 
@@ -424,7 +425,12 @@ their wall caps, and lanes re-run them, which makes it worse.
 - Run the changed-files prepush check once per slice, not once per commit.
 - **Finished worktrees** go through `"$SCRIPTS/wt-cleanup.sh"` (dry run; `--apply` to remove): only
   clean, idle, pushed, unlocked, unprotected worktrees nobody is working in, via `git worktree
-  remove` without `--force`.
+  remove` without `--force`. A worktree that is any process's cwd is never removed; run it each
+  tick with `--pr-closed` and a worktree budget (`--max-count`, `--max-gb`).
+- **Admission names the cause.** `"$SCRIPTS/host-load.sh"` admits a lane only below 1.5x the CPU
+  count with 8 GB free, and lists the top processes by CPU and RSS with their worktrees. When
+  Spotlight or `fseventsd` leads, shrink the worktree set and raise the owner action. Thresholds,
+  budget and causes: `skills/orchestrate/host-load.md`.
 - None of these kill anything. Slots held by dead or reused PIDs are reclaimed; a live holder is
   waited for.
 
