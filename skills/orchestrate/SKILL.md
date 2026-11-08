@@ -266,7 +266,9 @@ whenever an agent reports or a PR changes. Do not tick on a timer.
    PR doctor, at most one writer per PR branch.
 4. **Plan.** When the lane plan is stale (no plan, most of its lanes consumed, or a burst of new
    issues), launch the hygiene bot. Between plans, `"$SCRIPTS/issues-ranked.sh" --skip-in-pr` is
-   the cheap view of what is next.
+   the cheap view of what is next. In a cloud session (no GraphQL) these issue reads fall back
+   to REST by themselves (`gh-issues.sh`); there "in an open PR" means a closing keyword in the
+   PR body, so a PR that only links its issue in the sidebar is not seen.
    **Routing** (campaigns with both local and cloud lanes; `routing.md`): every actionable issue
    carries exactly one route label, `cloud-ready` or `needs-local:<type>`.
    `"$SCRIPTS/issue-route.sh" status` shows the counts; any `unrouted` or `multi` issue → launch

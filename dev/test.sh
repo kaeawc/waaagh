@@ -2,21 +2,23 @@
 # Run the BATS suites in parallel, one bats process per file, longest files first. Prints one line
 # per file (status, seconds, tests) and the full output of every file that failed.
 #
-# Usage: dev/test.sh [-j N] [FILE.bats...]
-#   -j N   files to run at once (default: the number of CPUs, at most 8)
-#   FILE   suites to run (default: every skills/orchestrate/scripts/*.bats)
+# Usage: dev/test.sh [-j N] [--ignore-sigpipe] [FILE.bats...]
+#   -j N              files to run at once (default: the number of CPUs, at most 8)
+#   --ignore-sigpipe  run every suite with SIGPIPE ignored, as GitHub's runners do (#77)
+#   FILE              suites to run (default: every skills/orchestrate/scripts/*.bats)
 # Env: BATS (default bats)
 # Exit: 0 every suite passed | 1 a suite failed | 2 usage
 # Suites must not share state: each test works under its own $BATS_TEST_TMPDIR (test_helper.bash).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 
-jobs=""
+jobs="" sigpipe=default
 while (($#)); do
   case "$1" in
     -j) jobs=${2:-}; shift 2 ;;
     -j*) jobs=${1#-j}; shift ;;
-    -h | --help) sed -n '2,11p' "$0"; exit 0 ;;
+    --ignore-sigpipe) sigpipe=ignore; shift ;;
+    -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
     -*) echo "dev/test.sh: unknown argument: $1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -39,10 +41,11 @@ done | sort -rn | cut -f2 >"$work/order"
 
 start=$(date +%s)
 # Each file: its output to <work>/<n>.out, then one result line "<rc> <secs> <file>".
-export work BATS="${BATS:-bats}"
+export work sigpipe BATS="${BATS:-bats}"
 n=0
 while IFS= read -r f; do n=$((n + 1)); printf '%s\0%s\0' "$n" "$f"; done <"$work/order" | xargs -0 -n 2 -P "$jobs" bash -c '
   n=$1 f=$2 s=$(date +%s)
+  if [[ "$sigpipe" == ignore ]]; then trap "" PIPE; fi   # inherited by bats and the scripts
   "$BATS" "$f" >"$work/$n.out" 2>&1 && rc=0 || rc=$?
   printf "%s %s %s %s\n" "$rc" "$(( $(date +%s) - s ))" "$n" "$f" >>"$work/results"
 ' _ || true
@@ -67,5 +70,6 @@ while read -r rc secs n f; do
   cat "$work/$n.out"
 done <"$work/results"
 
-printf '\n%s/%s tests passed in %s files, %ss wall, -j %s\n' "$passed" "$total" "$ran" "$(( $(date +%s) - start ))" "$jobs"
+printf '\n%s/%s tests passed in %s files, %ss wall, -j %s%s\n' "$passed" "$total" "$ran" "$(( $(date +%s) - start ))" "$jobs" \
+  "$([[ "$sigpipe" == ignore ]] && echo ', SIGPIPE ignored')"
 ((failed == 0))

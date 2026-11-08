@@ -19,7 +19,10 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
+# The caller's budget priority when it declared one (issue-candidates.sh sweep runs it at low).
+caller_priority=${GH_BUDGET_PRIORITY:-}
 orch_gh_priority normal
+[[ -z "$caller_priority" ]] || orch_gh_priority "$caller_priority"
 
 usage_end=$(($(grep -n '^set -euo pipefail' "$0" | cut -d: -f1 | sed -n 1p) - 1))
 repo="" issues=()

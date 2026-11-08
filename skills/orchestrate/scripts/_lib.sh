@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared helpers for the orchestrate scripts. Source, do not execute.
 # Env: ORCHESTRATE_STATE_DIR (default ~/.claude/orchestrate), ORCHESTRATE_AUTHOR (default: the
-# authenticated gh user), ORCHESTRATE_NOW (epoch seconds; tests only), ORCHESTRATE_GH_BUDGET=1
+# authenticated gh user, cached an hour: ORCHESTRATE_AUTHOR_TTL), ORCHESTRATE_NOW (epoch seconds; tests only), ORCHESTRATE_GH_BUDGET=1
 # (pace every gh call through gh-budget.sh; see orch_gh_priority below).
 
 orch_now() { echo "${ORCHESTRATE_NOW:-$(date +%s)}"; }
@@ -22,9 +22,34 @@ orch_repo() {
   gh repo view --json nameWithOwner | jq -r .nameWithOwner
 }
 
-# The login whose PRs this orchestrator may drive.
+# orch_author -> the login whose PRs this orchestrator may drive: ORCHESTRATE_AUTHOR, else the
+# authenticated gh user. The `gh api user` answer is cached in <state root>/.author (one line:
+# written-at epoch, host, account key, login) and reused for ORCHESTRATE_AUTHOR_TTL seconds
+# (default 3600; 0 = always ask) while the host (GH_HOST, default github.com) and the account key
+# match. The key is read offline, not from `gh auth status` (which validates over the network):
+# the active user in gh's hosts.yml plus a checksum of GH_TOKEN/GITHUB_TOKEN, so `gh auth switch`
+# or a different token misses the cache; any other account change waits out the TTL. A failed
+# lookup is never cached.
 orch_author() {
-  if [[ -n "${ORCHESTRATE_AUTHOR:-}" ]]; then echo "$ORCHESTRATE_AUTHOR"; else gh api user | jq -r .login; fi
+  if [[ -n "${ORCHESTRATE_AUTHOR:-}" ]]; then echo "$ORCHESTRATE_AUTHOR"; return; fi
+  local root="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}" host="${GH_HOST:-github.com}"
+  local ttl="${ORCHESTRATE_AUTHOR_TTL:-3600}" now key login t h k l
+  local cache="$root/.author" hosts="${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml"
+  now=$(orch_now)
+  key=$(awk -v h="$host:" '$0 == h { in_host = 1; next } /^[^ ]/ { in_host = 0 }
+    in_host && $1 == "user:" { print $2 }' "$hosts" 2>/dev/null) || key=""
+  key="${key:--}/$(printf '%s' "${GH_TOKEN:-${GITHUB_TOKEN:-}}" | cksum | tr ' ' .)"
+  if [[ "$ttl" =~ ^[0-9]+$ ]] && ((ttl > 0)) && read -r t h k l 2>/dev/null <"$cache" &&
+    [[ "$t" =~ ^[0-9]+$ && "$h" == "$host" && "$k" == "$key" && -n "$l" ]] && ((now - t < ttl)); then
+    echo "$l"
+    return
+  fi
+  login=$(gh api user | jq -r .login) || return 1
+  [[ -n "$login" && "$login" != null ]] || return 1
+  if mkdir -p "$root" 2>/dev/null && printf '%s %s %s %s\n' "$now" "$host" "$key" "$login" >"$cache.tmp.$$" 2>/dev/null; then
+    mv "$cache.tmp.$$" "$cache" 2>/dev/null || rm -f "$cache.tmp.$$"
+  fi
+  echo "$login"
 }
 
 # orch_state_dir OWNER/REPO -> the repo's durable campaign directory (created on demand).

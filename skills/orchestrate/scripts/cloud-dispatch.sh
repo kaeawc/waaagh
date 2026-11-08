@@ -6,7 +6,7 @@
 # The standard briefs can instead live in the target repository (.claude/briefs/implement.md and
 # repair.md, versioned and changed by PR); the dispatched prompt is then one line (--brief-ref).
 #
-# Usage: cloud-dispatch.sh queue add|drop N... [--repo OWNER/REPO]
+# Usage: cloud-dispatch.sh queue add|drop N... [--no-blocker-check] [--repo OWNER/REPO]
 #        cloud-dispatch.sh queue list [--repo OWNER/REPO]
 #        cloud-dispatch.sh next [--count K] [--repo OWNER/REPO]
 #        cloud-dispatch.sh fixtures --issue N [--require] [--repo OWNER/REPO]
@@ -14,7 +14,8 @@
 #                          [--brief-ref implement|repair [--pr P]]
 #        cloud-dispatch.sh payload --issue N --env ENV_ID --source URL [--model M] [--at EPOCH]
 #                          [--base B] [--gates TEXT] [--fixtures REFS|none] [--lead S]
-#                          [--stagger S] [--brief-ref implement|repair [--pr P]] [--repo R]
+#                          [--stagger S] [--brief-ref implement|repair [--pr P]] [--no-blocker-check]
+#                          [--repo R]
 #        cloud-dispatch.sh briefs install [--dir D] [--kind K] [--base B] [--gates TEXT] [--force]
 #        cloud-dispatch.sh briefs check [--dir D | --remote] [--kind K] [--base B] [--repo R]
 #        cloud-dispatch.sh created [--issue N [--kind repair]] [--response FILE] [--run-at ISO]
@@ -25,6 +26,9 @@
 #   queue add   append issues to the todo queue, skipping ones already queued or dispatched;
 #               prints "queued N" per issue added. queue list prints the issues still to dispatch;
 #               queue drop removes issues (one routed back to a local lane) and prints "dropped N".
+#               queue add runs open-blockers.sh on the issues it adds and warns on stderr
+#               ("warning: #N BLOCKED by #a #b", or "warning: #N blockers unverified: <what>");
+#               it still queues them (payload refuses). --no-blocker-check skips the check.
 #   next        the first K (default 1) queued issues not yet in the ledger, one per line.
 #   fixtures    the device-to-cloud handoff check (../device-cloud-handoff.md), read-only. An issue
 #               needs fixtures with --require, the label needs-fixtures, or when its body or a
@@ -48,9 +52,12 @@
 #               entry, used as is). run_once_at is --at, else the later of now+--lead (default 60)
 #               and the ledger's latest run_at + --stagger (default 20), so runs are staggered.
 #               Refused (exit 3) when the issue is already in the ledger. Without --fixtures it
-#               runs the fixtures check first (exits 5 or 7 as that does). --brief-ref sends the
-#               one-line prompt as the message; repair needs --pr, skips the ledger refusal and
-#               the fixtures check (the issue was dispatched before; its PR exists).
+#               runs the fixtures check first (exits 5 or 7 as that does). Before that it runs
+#               open-blockers.sh for the issue: refused (exit 8) when an open issue blocks it,
+#               naming the blockers; exit 7 when the blockers could not be read (unverified is
+#               not clear). --no-blocker-check skips it. --brief-ref sends the one-line prompt
+#               as the message; repair needs --pr, skips the ledger refusal, the blocker check
+#               and the fixtures check (the issue was dispatched before; its PR exists).
 #   briefs      the standard briefs kept in the target repository at .claude/briefs/K.md (K:
 #               implement, repair, or all, the default). install renders waaagh's template
 #               (<state dir>/briefs/K.md if present, else ../briefs/K.md) with {{REPO}} {{BASE}}
@@ -76,23 +83,25 @@
 # Files in <state dir>: cloud-queue.txt (one issue per line), cloud-sessions.tsv (issue, trigger
 # id, run_at, created_at[, repair]; ISO times), cloud-backoff (epoch until which creates wait).
 # Exit 5 refuses an issue whose fixtures are missing (route it back to its lane); exit 7 means the
-# issue, its comments or its timeline could not be read (do not dispatch it), or for created
-# that the response holds no trigger id; exit 6 is a missing or outdated brief in the repository.
-# Exit: 0 ok | 2 usage | 3 refused (already dispatched) | 4 brief template missing | 5 | 6 | 7
+# issue, its comments, its timeline or its blockers could not be read (do not dispatch it), or for
+# created that the response holds no trigger id; exit 6 is a missing or outdated brief in the
+# repository; exit 8 refuses an issue blocked by an open issue (route the blocker first).
+# Exit: 0 ok | 2 usage | 3 refused (already dispatched) | 4 brief template missing | 5 | 6 | 7 | 8
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
+usage_end=$(($(grep -n '^set -euo pipefail' "$0" | cut -d: -f1 | sed -n 1p) - 1))
 
-usage() { sed -n '2,81p' "$0" >&2; exit 2; }
+usage() { sed -n "2,${usage_end}p" "$0" >&2; exit 2; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 sub=""
 if [[ "$cmd" == queue || "$cmd" == briefs ]]; then sub=${1:-}; if [[ -n "$sub" ]]; then shift; fi; fi
 repo="" issue="" count=1 base="" gates="" env_id="" source_arg="" model="" at="" lead=60 stagger=20
 fixtures="" require=no brief_ref="" pr="" dir=. kind="" force=no remote=no response=""
-per_minute=5 seconds="" message="" trigger="" run_at=""
+per_minute=5 seconds="" message="" trigger="" run_at="" blocker_check=yes
 nums=()
 while (($#)); do
   case "$1" in
@@ -109,6 +118,7 @@ while (($#)); do
     --kind) kind=$2; shift 2 ;;
     --force) force=yes; shift ;;
     --remote) remote=yes; shift ;;
+    --no-blocker-check) blocker_check=no; shift ;;
     --response) response=$2; shift 2 ;;
     --env) env_id=$2; shift 2 ;;
     --source) source_arg=$2; shift 2 ;;
@@ -121,7 +131,7 @@ while (($#)); do
     --message) message=$2; shift 2 ;;
     --trigger) trigger=$2; shift 2 ;;
     --run-at) run_at=$2; shift 2 ;;
-    -h | --help) sed -n '2,81p' "$0"; exit 0 ;;
+    -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
     [0-9]*) nums+=("${1#\#}"); shift ;;
     \#[0-9]*) nums+=("${1#\#}"); shift ;;
     *) echo "cloud-dispatch.sh: unknown argument: $1" >&2; exit 2 ;;
@@ -131,7 +141,7 @@ case "$cmd" in
   queue) case "$sub" in add | drop | list) ;; *) usage ;; esac ;;
   briefs) case "$sub" in install | check) ;; *) usage ;; esac ;;
   next | fixtures | brief | payload | pace | backoff | record | created | status) ;;
-  -h | --help) sed -n '2,81p' "$0"; exit 0 ;;
+  -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
   *) usage ;;
 esac
 is_num() { [[ "$1" =~ ^[0-9]+$ ]]; }
@@ -197,6 +207,30 @@ check_fixtures() {
     exit 5
   fi
   echo "$refs"
+}
+
+# blockers N...: open-blockers.sh lines (REST through gh-read.sh), one per issue; an outright
+# failure of the check reads as "<n> unreadable blocker check (exit RC)" for every issue.
+blockers() {
+  local out rc=0
+  out=$("$here/open-blockers.sh" --repo "$repo" "$@") || rc=$?
+  case "$rc" in
+    0 | 3 | 4) printf '%s\n' "$out" ;;
+    *) printf '%s\n' "$@" | awk -v rc="$rc" '{ print $1 " unreadable blocker check (exit " rc ")" }' ;;
+  esac
+}
+# check_blockers: payload's refusal. Exit 8 when an open issue blocks $issue, 7 when unverified.
+check_blockers() {
+  local line
+  line=$(blockers "$issue" | awk -v n="$issue" '$1 == n' | sed -n 1p)
+  case "$line" in
+    "$issue clear") ;;
+    "$issue BLOCKED "*)
+      echo "cloud-dispatch.sh: #$issue ${line#"$issue" }: route the blocker first; do not dispatch it" >&2
+      exit 8 ;;
+    *) echo "cloud-dispatch.sh: #$issue: blockers unverified (${line#"$issue" unreadable }); do not dispatch it" >&2
+       exit 7 ;;
+  esac
 }
 
 # prompt_line: the one-line prompt for a brief kept in the repository (--brief-ref).
@@ -272,11 +306,18 @@ case "$cmd" in
       done
       exit 0
     fi
+    added=()
     for n in "${nums[@]}"; do
       if dispatched "$n" || grep -qxF "$n" "$queue"; then continue; fi
       printf '%s\n' "$n" >>"$queue"
       echo "queued $n"
+      added+=("$n")
     done
+    if [[ "$blocker_check" == yes ]] && ((${#added[@]})); then
+      blockers "${added[@]}" | awk '
+        $2 == "BLOCKED" { $1 = "warning: #" $1; print; next }
+        $2 == "unreadable" { n = $1; $1 = ""; $2 = ""; sub(/^ +/, ""); print "warning: #" n " blockers unverified: " $0 }' >&2
+    fi
     ;;
   next)
     pending | awk -v k="$count" 'NR <= k'
@@ -335,6 +376,7 @@ case "$cmd" in
       echo "cloud-dispatch.sh: #$issue already dispatched: $(awk -F'\t' -v n="$issue" '$1 == n && $5 != "repair" { print $2 " at " $3 }' "$ledger")" >&2
       exit 3
     fi
+    if [[ "$brief_ref" != repair && "$blocker_check" == yes ]]; then check_blockers; fi
     if [[ -z "$fixtures" ]]; then fixtures=$(check_fixtures); fi
     if [[ -z "$at" ]]; then
       at=$((now + lead))

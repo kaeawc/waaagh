@@ -55,7 +55,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `counters.sh` | Cumulative campaign counters in the ledger (merged, dispatched, closed, owner blockers; today and campaign total) for the tick report (`skills/orchestrate/reporting.md`) |
 | `learning.sh` | Campaign learnings: one file per owner rule or procedural fix, an index in the ledger, `brief --role` for briefs, consolidation (`supersede`, `retire`) and `upstream` of repo-agnostic ones as waaagh issues (`skills/orchestrate/learnings.md`) |
 | `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first; `--route` filters to one route for cloud or local dispatch |
-| `issue-candidates.sh` | Leads for already-fixed issues and duplicate titles; `sweep` sorts `needs-local:*` issues into A (closeable), B (fix merged, device check left), C (needs implementation) and D (unclear) |
+| `issue-candidates.sh` | Leads for already-fixed issues and duplicate titles; `sweep` sorts `needs-local:*` issues into A (closeable), B (fix merged, device check left), C (needs implementation) and D (unclear); `--drop-blocked` moves blocked C rows to a `blocked` bucket naming their blockers |
 | `issue-close.sh` | Close an issue as fixed or duplicate, with required evidence, and log it |
 | `review-followup.sh` | One review round per PR: classify unresolved review threads as first-round, later-round or the author's; file a later-round thread as a follow-up issue (or append it to one with the same root cause), reply `follow-up #N`, resolve it and route the issue `cloud-ready` |
 | `thread-resolve.sh` | Reply once (marker-keyed) on one review thread and resolve it, with readback and typed exits |
@@ -75,6 +75,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `wt-cleanup.sh` | Conservative worktree cleanup: only clean, idle, pushed, unprotected worktrees no process is in (cwds read again before each removal); `--pr-closed`, and a worktree budget (`--max-count`, `--max-gb`, exit 3 over); dry run by default |
 | `host-load.sh` | Lane admission with attribution: ADMIT / HOLD / BACKOFF from 1-min load vs CPUs and free memory, a third device slot only at 12 GB free, top processes by CPU and RSS tied to their worktrees, and the cause (indexing, lanes, other) with the owner action (`skills/orchestrate/host-load.md`) |
 | `gh-read.sh` | Bounded, typed GitHub reads: per-call timeout, backoff inside a time budget, Retry-After and rate-limit reset handling with a cooldown shared by local lanes; refuses writes |
+| `gh-issues.sh` | Issue-side list reads (open issues, open and merged PRs) as `gh ... --json` would print them: GraphQL first, REST when GitHub refuses GraphQL (Claude Code cloud sessions), remembered for 12 hours; used by `campaign.sh status`, `issues-ranked.sh`, `issue-candidates.sh`, `issue-route.sh status` |
 | `gh-budget.sh`, `gh-shim/gh` | One API pacer for every local caller: per-priority floors (high 150, normal 1000, low 2500), calls spaced until the reset from a shared `/rate_limit` cache, exit 75 to skip a pass, endpoint-scoped backoff for a 403 with headroom; the shim budgets any `gh` call (`ORCHESTRATE_GH_BUDGET=1`) |
 | `gh-snapshot.sh` | One GraphQL snapshot per pass of every open PR (head, check roll-up, last review state and commit), cached per head SHA; REST per PR where GraphQL is refused |
 | `gh-rest-pr.sh` | REST reads of the PR side in `gh pr list --json` shapes (open list, one PR with mergeable and check roll-up, review threads via `ccr/review_threads`, files, last review), used by `pr-ready.sh`, `gh-snapshot.sh` and `lane-claim.sh` when GraphQL answers 403 (cloud sessions) |
@@ -84,8 +85,8 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `usage-report.sh` | Codex usage per model and verified lane status, from per-run receipts (`bin/codex-lane-usage.sh`) |
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
-| `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue), the standard implement/repair briefs kept in the target repo (`briefs install`/`check`, templates in `skills/orchestrate/briefs/`), one-line `--brief-ref` prompts, and `created` to keep only the trigger id from a create response |
-| `open-blockers.sh` | One blocker check before any lane or cloud dispatch: native `blocked by` links plus "Blocked by #N" body lines, each blocker's state looked up; `<n> BLOCKED by #a #b` or `<n> clear` (exit 3 blocked, 4 unreadable); `issues-ranked.sh --drop-blocked` drops blocked candidates and ranks routable blockers in their place |
+| `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue), the standard implement/repair briefs kept in the target repo (`briefs install`/`check`, templates in `skills/orchestrate/briefs/`), one-line `--brief-ref` prompts, a blocker check (`payload` exit 8 for a blocked issue, `queue add` warns; `--no-blocker-check`), and `created` to keep only the trigger id from a create response |
+| `open-blockers.sh` | One blocker check before any lane or cloud dispatch: native `blocked by` links plus "Blocked by #N" body lines, each blocker's state looked up; `<n> BLOCKED by #a #b` or `<n> clear` (exit 3 blocked, 4 unreadable); `issues-ranked.sh --drop-blocked` drops blocked candidates and ranks routable blockers in their place; `issue-candidates.sh sweep --drop-blocked` and `cloud-dispatch.sh payload` use it too |
 
 ## Defaults
 
@@ -96,7 +97,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | Merge mode | conservative; fast path above 20 open PRs | `ORCHESTRATE_FAST_PATH_OVER` |
 | Admin merges outside the fast path | refused | `ORCHESTRATE_ADMIN_MERGE=1` |
 | Pause labels | `orchestrate-pause`, `fleet-pause` | `ORCHESTRATE_PAUSE_LABELS` |
-| PR author | the authenticated `gh` user | `ORCHESTRATE_AUTHOR`, `--author` |
+| PR author | the authenticated `gh` user, cached an hour per host in `~/.claude/orchestrate/.author` | `ORCHESTRATE_AUTHOR`, `--author`, `ORCHESTRATE_AUTHOR_TTL` (seconds, 0 = no cache) |
 | State directory | `~/.claude/orchestrate/<owner>__<repo>/` | `ORCHESTRATE_STATE_DIR` |
 | Codex model for the Sol lane | `gpt-6.1-sol` | `CODEX_LANE_SOL_MODEL` |
 | Codex model for the routine lane | `gpt-6-luna` | none (fixed in `agents/codex-implementer.md`) |
@@ -125,6 +126,7 @@ and from `<state dir>/lane-rules.md`.
 ```
 shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh bin/*.sh dev/*.sh
 dev/test.sh                 # every suite, in parallel (-j N); or dev/test.sh path/to/one.bats
+dev/test.sh --ignore-sigpipe   # the same with SIGPIPE ignored, as on GitHub's runners
 dev/coverage.sh             # line coverage per script (needs: gem install bashcov)
 claude --plugin-dir .
 ```

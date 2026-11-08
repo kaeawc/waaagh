@@ -33,7 +33,7 @@ STUB
   echo '[]' >"$FX/comments.json"
   echo '[]' >"$FX/timeline.json"
 }
-cd_() { "$SCRIPTS/cloud-dispatch.sh" "$@" --repo o/r; }
+cd_() { "$SCRIPTS/cloud-dispatch.sh" "$@" --repo o/r --no-blocker-check; }   # blockers: cloud-blockers.bats
 remote_file() { # remote_file KIND FILE: serve FILE as the contents API answer for KIND
   jq -n --arg c "$(base64 <"$2" | tr -d '\n')" '{content: $c, encoding: "base64"}' >"$FX/c-$1.json"
 }

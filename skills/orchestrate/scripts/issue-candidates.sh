@@ -7,6 +7,7 @@
 #                                  [--limit 25] [--per-issue 3]
 #        issue-candidates.sh sweep [--repo OWNER/REPO] [--since-days N] [--route GLOB]
 #                                  [--bucket A,B,C,D] [--limit 50] [--checkout DIR] [--ref REF]
+#                                  [--drop-blocked]
 #   fixed  open issues that a PR merged in the window says it closes, fixes or resolves.
 #          TSV: issue  pr  merged_at  how(linked|body)  issue_title
 #   dupes  open issues (updated in the window) whose titles share most of their words.
@@ -32,8 +33,15 @@
 #          platforms (so B rows group into one verify batch per platform), then issue. At most
 #          --limit rows from the --bucket buckets; a last "# " line gives every bucket's count,
 #          whether git history was used, and the uncapped results file under <state dir>/candidates/.
+#          --drop-blocked runs open-blockers.sh (REST) on every C row: a row blocked by an open
+#          issue moves to bucket "blocked" (reason "blocked by #a #b"), listed after the other rows
+#          and shown unless --bucket leaves "blocked" out; a row whose blockers could not be read
+#          stays C with reason "...; blockers unverified (<what>)", never counted as clear. The
+#          last line then also gives blocked=N unverified=N.
 # Defaults: --since-days 14 (sweep: 180), --limit 25 (sweep: 50).
-# Exit: 0 ok | 2 usage | 4 sweep only: issues or merged PRs could not be read.
+# Reads go through gh-issues.sh: GraphQL, or REST where GitHub refuses GraphQL (cloud sessions);
+# over REST a merged PR's closing references come only from its body (how=body).
+# Exit: 0 ok | 2 usage | 4 issues or merged PRs could not be read.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
@@ -44,7 +52,7 @@ usage_end=$(($(grep -n '^set -euo pipefail' "$0" | cut -d: -f1 | sed -n 1p) - 1)
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" days="" min=0.5 limit="" per_issue=3 route_glob='needs-local:*' buckets=A,B,C,D
-checkout=. ref=""
+checkout=. ref="" drop_blocked=no bucket_set=no
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -53,7 +61,8 @@ while (($#)); do
     --limit) limit=$2; shift 2 ;;
     --per-issue) per_issue=$2; shift 2 ;;
     --route) route_glob=$2; shift 2 ;;
-    --bucket) buckets=$2; shift 2 ;;
+    --bucket) buckets=$2; bucket_set=yes; shift 2 ;;
+    --drop-blocked) drop_blocked=yes; shift ;;
     --checkout) checkout=$2; shift 2 ;;
     --ref) ref=$2; shift 2 ;;
     -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
@@ -69,27 +78,33 @@ if [[ -z "$days" ]]; then if [[ "$cmd" == sweep ]]; then days=180; else days=14;
 if [[ -z "$limit" ]]; then if [[ "$cmd" == sweep ]]; then limit=50; else limit=25; fi; fi
 repo=$(orch_repo "$repo")
 since=$(jq -rn --argjson now "$(orch_now)" --argjson d "$days" '$now - $d * 86400 | strftime("%Y-%m-%d")')
+# Bounded, typed, read-only lists: GraphQL, or REST where GitHub refuses GraphQL.
+gi() { "$here/gh-issues.sh" "$1" --repo "$repo" "${@:2}"; }
+read_fail() { echo "issue-candidates.sh: $1 could not be read" >&2; exit 4; }
+# Lists go to jq as files: one argument holds at most 128 KiB (bodies of 1000 PRs do not fit).
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 
 case "$cmd" in
   fixed)
-    issues=$(gh issue list --repo "$repo" --state open --limit 1000 --json number,title)
-    gh pr list --repo "$repo" --state merged --limit 300 --search "merged:>=$since" \
-      --json number,mergedAt,body,closingIssuesReferences |
-      jq -r --argjson issues "$issues" '
-        ($issues | map({key: (.number | tostring), value: .title}) | from_entries) as $open
+    issues=$(gi issues --limit 1000 --fields number,title) || read_fail "open issues"
+    merged=$(gi prs-merged --limit 300 --merged ">=$since" --fields number,mergedAt,body,closingIssuesReferences) ||
+      read_fail "merged PRs"
+    printf '%s' "$issues" >"$tmp/issues"
+    jq -r --slurpfile issues "$tmp/issues" '
+        ($issues[0] | map({key: (.number | tostring), value: .title}) | from_entries) as $open
         | [.[] | . as $pr
            | (([(.closingIssuesReferences // [])[] | {n: .number, how: "linked"}])
               + [(.body // "") | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#(\\d+)") | {n: (.[0] | tonumber), how: "body"}])
            | unique_by(.n)[] | select($open[.n | tostring])
            | [.n, $pr.number, $pr.mergedAt, .how, $open[.n | tostring]]]
-        | sort_by(.[0])[] | @tsv'
+        | sort_by(.[0])[] | @tsv' <<<"$merged"
     ;;
   dupes)
     # All leads, uncapped: cluster rows, then every pair of cluster representatives at or above
     # --min-score. Comparing one representative per word set keeps a repetitive cluster linear.
-    all=$(gh issue list --repo "$repo" --state open --limit 400 --search "updated:>=$since sort:updated-desc" \
-      --json number,title |
-      jq -r --argjson min "$min" '
+    listed=$(gi issues --limit 400 --since "$since" --fields number,title) || read_fail "open issues"
+    all=$(jq -r --argjson min "$min" '
         def words: ascii_downcase | [scan("[a-z0-9]+")]
           | map(select(length > 2 and (IN("the", "and", "for", "with", "when", "not", "does", "from", "that", "this", "into", "after", "are", "but") | not)))
           | unique;
@@ -106,7 +121,7 @@ case "$cmd" in
            | select($either > 0) | ($both / $either) as $score | select($score >= $min)
            | ["P", ($score * 100 | round / 100), $a.number, $b.number, $a.title, $b.title]]
         | ($clusters | sort_by(.[2])) + (sort_by(-.[1], .[2], .[3]))
-        | .[] | @tsv')
+        | .[] | @tsv' <<<"$listed")
     out="$(orch_state_dir "$repo")/candidates"
     mkdir -p "$out"
     full="$out/dupes-$(orch_iso "$(orch_now)" | tr -d ':').tsv"
@@ -125,26 +140,20 @@ case "$cmd" in
       }' <<<"$all"
     ;;
   sweep)
-    ghr() { "$here/gh-read.sh" --json -- "$@"; }   # bounded, typed, read-only
-    if ! listed=$(ghr issue list --repo "$repo" --state open --limit 1000 --json number,labels); then
-      echo "issue-candidates.sh: open issues could not be read" >&2; exit 4
-    fi
+    listed=$(gi issues --limit 1000 --fields number,labels) || read_fail "open issues"
     # The route labels in use that match --route; then each one's issues with their comments.
     issues='[]'
     while IFS= read -r label; do
       [[ -n "$label" ]] || continue
       # shellcheck disable=SC2053  # --route is a glob on purpose
       [[ "$label" == $route_glob ]] || continue
-      if ! got=$(ghr issue list --repo "$repo" --state open --label "$label" --limit 1000 \
-        --json number,title,labels,comments); then
-        echo "issue-candidates.sh: issues labelled $label could not be read" >&2; exit 4
-      fi
-      issues=$(jq -c --argjson more "$got" '. + $more | unique_by(.number)' <<<"$issues")
+      got=$(gi issues --label "$label" --limit 1000 --fields number,title,labels,comments) ||
+        read_fail "issues labelled $label"
+      printf '%s' "$got" >"$tmp/more"
+      issues=$(jq -c --slurpfile more "$tmp/more" '. + $more[0] | unique_by(.number)' <<<"$issues")
     done < <(jq -r '[.[].labels[]?.name | select(startswith("needs-local:"))] | unique | .[]' <<<"$listed")
-    if ! prs=$(ghr pr list --repo "$repo" --state merged --limit 1000 --search "merged:>=$since" \
-      --json number,title,mergedAt,body,closingIssuesReferences); then
-      echo "issue-candidates.sh: merged PRs could not be read" >&2; exit 4
-    fi
+    prs=$(gi prs-merged --limit 1000 --merged ">=$since" --fields number,title,mergedAt,body,closingIssuesReferences) ||
+      read_fail "merged PRs"
     # Commits on REF in the window: sha, commit date, message. No checkout -> PRs only.
     commits='[]' git_used=none
     if git -C "$checkout" rev-parse --git-dir >/dev/null 2>&1; then
@@ -158,8 +167,10 @@ case "$cmd" in
         git_used=$ref
       fi
     fi
-    all=$(jq -rn --argjson issues "$issues" --argjson prs "$prs" --argjson commits "$commits" '
-      def closes: [scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s+#(\\d+)") | .[0] | tonumber];
+    printf '%s' "$issues" >"$tmp/issues"; printf '%s' "$prs" >"$tmp/prs"; printf '%s' "$commits" >"$tmp/commits"
+    all=$(jq -rn --slurpfile issues "$tmp/issues" --slurpfile prs "$tmp/prs" --slurpfile commits "$tmp/commits" '
+      $issues[0] as $issues | $prs[0] as $prs | $commits[0] as $commits
+      | def closes: [scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s+#(\\d+)") | .[0] | tonumber];
       def mentions: [scan("#(\\d+)\\b") | .[0] | tonumber];
       def platform: if . == "android-emulator" then "android" elif . == "ios-simulator" then "ios"
         elif . == "macos-xcode" then "macos" else . end;
@@ -204,15 +215,46 @@ case "$cmd" in
     out="$(orch_state_dir "$repo")/candidates"
     mkdir -p "$out"
     full="$out/sweep-$(orch_iso "$(orch_now)" | tr -d ':').tsv"
+    if [[ "$drop_blocked" == yes ]]; then
+      # Blocker check on every C row. open-blockers.sh lines go to awk as a file; a check that
+      # fails outright leaves every C row unverified, never clear.
+      [[ "$bucket_set" == yes ]] || buckets="$buckets,blocked"
+      : >"$tmp/blockers"
+      cs=$(awk -F'\t' '$1 == "C" { print $2 }' <<<"$all")
+      if [[ -n "$cs" ]]; then
+        rc=0
+        # shellcheck disable=SC2086  # issue numbers, one word each
+        "$here/open-blockers.sh" --repo "$repo" $cs >"$tmp/blockers" || rc=$?
+        case "$rc" in
+          0 | 3 | 4) ;;
+          *) echo "issue-candidates.sh: open-blockers.sh failed (exit $rc); C rows unverified" >&2
+             awk '{ print $1 " unreadable blocker check" }' <<<"$cs" >"$tmp/blockers" ;;
+        esac
+      fi
+      printf '%s\n' "$all" >"$tmp/all"
+      # blocker line: "<n> BLOCKED by #a #b" | "<n> clear" | "<n> unreadable <what>"
+      all=$(awk -F'\t' -v OFS='\t' '
+        FILENAME == ARGV[1] { k = split($0, a, " "); if (k < 2) next
+          r = ""; for (i = 3; i <= k; i++) r = r (r == "" ? "" : " ") a[i]
+          st[a[1]] = a[2]; rest[a[1]] = r; next }
+        NF == 0 { next }
+        $1 == "C" && st[$2] == "BLOCKED" { $1 = "blocked"; r = rest[$2]; sub(/^by /, "", r)
+          $6 = "blocked by " r; held[++h] = $0; next }
+        $1 == "C" && st[$2] == "unreadable" { $6 = $6 "; blockers unverified (" rest[$2] ")" }
+        { print }
+        END { for (i = 1; i <= h; i++) print held[i] }' "$tmp/blockers" "$tmp/all")
+    fi
     if [[ -n "$all" ]]; then printf '%s\n' "$all" >"$full"; else : >"$full"; fi
-    awk -F'\t' -v limit="$limit" -v want="$buckets" -v full="$full" -v git="$git_used" '
+    awk -F'\t' -v limit="$limit" -v want="$buckets" -v full="$full" -v git="$git_used" -v drop="$drop_blocked" '
       BEGIN { n = split(want, w, ","); for (i = 1; i <= n; i++) keep[w[i]] = 1 }
       NF == 0 { next }
       { count[$1]++ }
+      $1 == "C" && index($6, "; blockers unverified (") { unverified++ }
       ($1 in keep) { matched++; if (shown < limit) { shown++; print } }
       END {
-        printf "# A=%d B=%d C=%d D=%d; shown %d of %d in %s; git: %s; all: %s\n",
-          count["A"], count["B"], count["C"], count["D"], shown, matched, want, git, full
+        more = drop == "yes" ? sprintf(" blocked=%d unverified=%d", count["blocked"], unverified) : ""
+        printf "# A=%d B=%d C=%d D=%d%s; shown %d of %d in %s; git: %s; all: %s\n",
+          count["A"], count["B"], count["C"], count["D"], more, shown, matched, want, git, full
       }' <<<"$all"
     ;;
 esac
