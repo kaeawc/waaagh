@@ -32,9 +32,16 @@
 # line. Everything is still fetched fresh; the delta only trims output. A snapshot is never
 # authority to merge: pr-merge.sh re-checks the live PR.
 # Every GitHub read goes through gh-read.sh (bounded retries, typed errors; read failures are
-# recorded in the diagnostics file). An unreadable PR list exits 3 with no verdicts.
+# recorded in the diagnostics file). The open-PR list (with statusCheckRollup) is heavy: when a
+# page of 300 times out or returns a 5xx, it is retried with limits 120, 60 and 30, each fallback
+# logged to stderr. Only when every limit fails, or on a non-transient error (auth, forbidden,
+# not found), does it exit 3 with no verdicts.
+# PR_READY_EXTRA="<n> <n>..." (and the --pr number) name PRs that must be classified even when a
+# full page left them out, e.g. an old PR at the front of a serialized merge line: each one
+# missing from a full page is read with `gh pr view` and classified like the rest.
 # Last line on stderr: "open=<n> ready=<n>" (+ " changed=<n>" with --delta, + " truncated=yes"
-# when the PR list hit its 300-row limit, + " policy=unknown", + " diagnostics=<path>").
+# when the PR list hit its row limit, + " page=<limit>" when a smaller page was used,
+# + " extra-unreadable=<n,...>", + " policy=unknown", + " diagnostics=<path>").
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
@@ -55,7 +62,7 @@ while (($#)); do
     --no-threads) threads=no; shift ;;
     --delta) delta=yes; shift ;;
     --pr) only_pr=$2; shift 2 ;;
-    -h | --help) sed -n '2,35p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,44p' "$0"; exit 0 ;;
     *) echo "pr-ready.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -97,15 +104,45 @@ else
   policy=unknown; note "branch protection read failed for $base: ${out:0:500}"
 fi
 
-list_limit=300
-if ! prs=$(ghr pr list --repo "$repo" --state open --limit "$list_limit" \
-  --json number,author,isDraft,isCrossRepository,baseRefName,headRefOid,mergeable,labels,statusCheckRollup 2>&1); then
-  note "PR list unreadable: ${prs:0:500}"
-  echo "pr-ready: the open PR list could not be read; no verdicts (diagnostics: $diag)" >&2
-  exit 3
-fi
+fields=number,author,isDraft,isCrossRepository,baseRefName,headRefOid,mergeable,labels,statusCheckRollup
+# Large pages of statusCheckRollup time out (HTTP 502/504) on busy repositories; smaller pages
+# usually succeed. Only a transient (7) or malformed (8) read falls back; anything else is final.
+limits=(300 120 60 30)
+prs="" list_limit=""
+for ((li = 0; li < ${#limits[@]}; li++)); do
+  lim=${limits[li]}
+  tries=2; ((li < ${#limits[@]} - 1)) || tries=4   # the same size rarely recovers; the last gets more
+  rc=0
+  prs=$("$here/gh-read.sh" --json --tries "$tries" -- pr list --repo "$repo" --state open --limit "$lim" \
+    --json "$fields" 2>"$diag_dir/.prlist-$$") || rc=$?
+  err=$(cat "$diag_dir/.prlist-$$" 2>/dev/null || true); rm -f "$diag_dir/.prlist-$$"
+  if ((rc == 0)); then list_limit=$lim; break; fi
+  note "PR list at limit $lim unreadable (exit $rc): ${err:0:500}"
+  if ((rc != 7 && rc != 8)) || ((li == ${#limits[@]} - 1)); then
+    echo "pr-ready: the open PR list could not be read; no verdicts (diagnostics: $diag)" >&2
+    exit 3
+  fi
+  echo "pr-ready: open PR list at limit $lim failed (exit $rc); retrying with limit ${limits[li + 1]}" >&2
+done
 truncated=no
 [[ "$(jq length <<<"$prs")" -lt "$list_limit" ]] || truncated=yes
+
+# Named PRs a full page may have left out: read each one on its own and add it to the list.
+extra_bad=""
+if [[ "$truncated" == yes ]]; then
+  for n in ${PR_READY_EXTRA:-} $only_pr; do
+    [[ "$n" =~ ^[0-9]+$ ]] || { note "PR_READY_EXTRA: not a PR number: $n"; continue; }
+    [[ "$(jq --argjson n "$n" 'any(.[]; .number == $n)' <<<"$prs")" == false ]] || continue
+    if one=$(ghr pr view "$n" --repo "$repo" --json "$fields,state" 2>"$diag_dir/.prview-$$") &&
+      jq -e 'type == "object" and has("number")' >/dev/null 2>&1 <<<"$one"; then
+      prs=$(jq -c --argjson one "$one" 'if $one.state == "OPEN" then . + [$one | del(.state)] else . end' <<<"$prs")
+    else
+      note "PR $n (extra): unreadable: $(cat "$diag_dir/.prview-$$" 2>/dev/null | awk 'NR<=3')"
+      extra_bad+="${extra_bad:+,}$n"
+    fi
+    rm -f "$diag_dir/.prview-$$"
+  done
+fi
 rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" --argjson holds "$holds_json" \
     --argjson required "$required" --arg base "$base" --arg hold_label "$hold_label" \
     --argjson min_pass "$min_pass" --arg only_pr "$only_pr" '
@@ -267,6 +304,8 @@ else
   printf '%s' "$out"
 fi
 [[ "$truncated" == no ]] || summary+=" truncated=yes"
+[[ "$list_limit" == "${limits[0]}" ]] || summary+=" page=$list_limit"
+[[ -z "$extra_bad" ]] || summary+=" extra-unreadable=$extra_bad"
 [[ "$policy" == known ]] || summary+=" policy=unknown"
 if [[ -s "$diag" ]]; then summary+=" diagnostics=$diag"; else rm -f "$diag"; fi
 echo "$summary" >&2
