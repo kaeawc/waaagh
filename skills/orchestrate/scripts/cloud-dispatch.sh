@@ -3,18 +3,24 @@
 # run-once routine (RemoteTrigger create) from the main session. This script never calls
 # RemoteTrigger or writes to GitHub; it keeps the todo queue and the dispatch ledger (both survive
 # compaction), renders the short per-issue brief, builds the create payload, and paces creates.
+# The standard briefs can instead live in the target repository (.claude/briefs/implement.md and
+# repair.md, versioned and changed by PR); the dispatched prompt is then one line (--brief-ref).
 #
 # Usage: cloud-dispatch.sh queue add|drop N... [--repo OWNER/REPO]
 #        cloud-dispatch.sh queue list [--repo OWNER/REPO]
 #        cloud-dispatch.sh next [--count K] [--repo OWNER/REPO]
 #        cloud-dispatch.sh fixtures --issue N [--require] [--repo OWNER/REPO]
 #        cloud-dispatch.sh brief --issue N [--base B] [--gates TEXT] [--fixtures REFS] [--repo R]
+#                          [--brief-ref implement|repair [--pr P]]
 #        cloud-dispatch.sh payload --issue N --env ENV_ID --source URL [--model M] [--at EPOCH]
 #                          [--base B] [--gates TEXT] [--fixtures REFS|none] [--lead S]
-#                          [--stagger S] [--repo OWNER/REPO]
+#                          [--stagger S] [--brief-ref implement|repair [--pr P]] [--repo R]
+#        cloud-dispatch.sh briefs install [--dir D] [--kind K] [--base B] [--gates TEXT] [--force]
+#        cloud-dispatch.sh briefs check [--dir D | --remote] [--kind K] [--base B] [--repo R]
+#        cloud-dispatch.sh created [--issue N [--kind repair]] [--response FILE] [--run-at ISO]
 #        cloud-dispatch.sh pace [--per-minute N] [--repo OWNER/REPO]
 #        cloud-dispatch.sh backoff [--seconds S] [--message TEXT] [--repo OWNER/REPO]
-#        cloud-dispatch.sh record --issue N --trigger ID --run-at ISO [--repo OWNER/REPO]
+#        cloud-dispatch.sh record --issue N --trigger ID --run-at ISO [--kind repair] [--repo R]
 #        cloud-dispatch.sh status [--repo OWNER/REPO]
 #   queue add   append issues to the todo queue, skipping ones already queued or dispatched;
 #               prints "queued N" per issue added. queue list prints the issues still to dispatch;
@@ -32,14 +38,31 @@
 #               --base defaults to the repository's default branch (main if unreadable); --gates
 #               to the repository's own test, lint and build commands. --fixtures REFS (other
 #               than none) fills {{FIXTURES}} with "commit the fixtures from REFS verbatim" (a
-#               template without that placeholder gets it appended).
+#               template without that placeholder gets it appended). With --brief-ref it prints
+#               the one-line prompt instead: "Follow .claude/briefs/implement.md for issue #N
+#               (branch work/N-auto)." (repair: "... repair.md for PR #P (issue #N, branch
+#               work/N-auto)."), plus " Fixtures: REFS (commit verbatim)." when REFS name any.
 #   payload     one JSON object for RemoteTrigger create: name, run_once_at, and job_config.ccr
 #               {environment_id, session_context {sources [{git_repository {url}}], model}, events
 #               [{data {message: <brief>}}]}. --source may instead be a JSON object (one sources
 #               entry, used as is). run_once_at is --at, else the later of now+--lead (default 60)
 #               and the ledger's latest run_at + --stagger (default 20), so runs are staggered.
 #               Refused (exit 3) when the issue is already in the ledger. Without --fixtures it
-#               runs the fixtures check first (exits 5 or 7 as that does).
+#               runs the fixtures check first (exits 5 or 7 as that does). --brief-ref sends the
+#               one-line prompt as the message; repair needs --pr, skips the ledger refusal and
+#               the fixtures check (the issue was dispatched before; its PR exists).
+#   briefs      the standard briefs kept in the target repository at .claude/briefs/K.md (K:
+#               implement, repair, or all, the default). install renders waaagh's template
+#               (<state dir>/briefs/K.md if present, else ../briefs/K.md) with {{REPO}} {{BASE}}
+#               {{GATES}} filled into checkout --dir (default .) and prints "installed <path>" or
+#               "current <path>"; a different existing file is refused (exit 3) without --force.
+#               Commit and merge it by PR. check prints "brief K ok vV", "brief K custom" (no
+#               version line; kept), "brief K outdated vV (template vT)" or "brief K missing
+#               <path>", reading --dir, or with --remote the base branch on GitHub. Exit 6 when a
+#               brief is missing or outdated: dispatch with --brief-ref only after check passes.
+#   created     filter a RemoteTrigger create response (stdin or --response FILE): prints only
+#               "created <trigger id> <run_once_at>", dropping the echoed prompt; with --issue it
+#               also records it, as record does. Exit 7 when no trigger id is found.
 #   pace        "wait <seconds>": how long to wait before the next create. Non-zero while a
 #               recorded 429 backoff runs, or when the ledger already holds --per-minute (default
 #               5) creates in the last 60 s. Sleep that long, then create.
@@ -47,25 +70,28 @@
 #               else 20 s. Prints "backoff until <iso>".
 #   record      after a create succeeds: append "issue trigger run_at created_at" to
 #               cloud-sessions.tsv. Refused (exit 3) when the issue is already recorded.
-#   status      queued, dispatched, last dispatch, backoff remaining; one "key value" per line.
+#               --kind repair adds a fifth column "repair": never refused, never a dispatch.
+#   status      queued, dispatched, last dispatch, backoff remaining (and repairs, when any); one
+#               "key value" per line.
 # Files in <state dir>: cloud-queue.txt (one issue per line), cloud-sessions.tsv (issue, trigger
-# id, run_at, created_at; ISO times), cloud-backoff (epoch until which creates wait).
+# id, run_at, created_at[, repair]; ISO times), cloud-backoff (epoch until which creates wait).
 # Exit 5 refuses an issue whose fixtures are missing (route it back to its lane); exit 7 means the
-# issue, its comments or its timeline could not be read (do not dispatch it).
-# Exit: 0 ok | 2 usage | 3 refused (already dispatched) | 4 brief template missing | 5 | 7
+# issue, its comments or its timeline could not be read (do not dispatch it), or for created
+# that the response holds no trigger id; exit 6 is a missing or outdated brief in the repository.
+# Exit: 0 ok | 2 usage | 3 refused (already dispatched) | 4 brief template missing | 5 | 6 | 7
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 
-usage() { sed -n '2,55p' "$0" >&2; exit 2; }
+usage() { sed -n '2,81p' "$0" >&2; exit 2; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 sub=""
-if [[ "$cmd" == queue ]]; then sub=${1:-}; if [[ -n "$sub" ]]; then shift; fi; fi
+if [[ "$cmd" == queue || "$cmd" == briefs ]]; then sub=${1:-}; if [[ -n "$sub" ]]; then shift; fi; fi
 repo="" issue="" count=1 base="" gates="" env_id="" source_arg="" model="" at="" lead=60 stagger=20
-fixtures="" require=no
+fixtures="" require=no brief_ref="" pr="" dir=. kind="" force=no remote=no response=""
 per_minute=5 seconds="" message="" trigger="" run_at=""
 nums=()
 while (($#)); do
@@ -77,6 +103,13 @@ while (($#)); do
     --gates) gates=$2; shift 2 ;;
     --fixtures) fixtures=$2; shift 2 ;;
     --require) require=yes; shift ;;
+    --brief-ref) brief_ref=$2; shift 2 ;;
+    --pr) pr=${2#\#}; shift 2 ;;
+    --dir) dir=$2; shift 2 ;;
+    --kind) kind=$2; shift 2 ;;
+    --force) force=yes; shift ;;
+    --remote) remote=yes; shift ;;
+    --response) response=$2; shift 2 ;;
     --env) env_id=$2; shift 2 ;;
     --source) source_arg=$2; shift 2 ;;
     --model) model=$2; shift 2 ;;
@@ -88,7 +121,7 @@ while (($#)); do
     --message) message=$2; shift 2 ;;
     --trigger) trigger=$2; shift 2 ;;
     --run-at) run_at=$2; shift 2 ;;
-    -h | --help) sed -n '2,55p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,81p' "$0"; exit 0 ;;
     [0-9]*) nums+=("${1#\#}"); shift ;;
     \#[0-9]*) nums+=("${1#\#}"); shift ;;
     *) echo "cloud-dispatch.sh: unknown argument: $1" >&2; exit 2 ;;
@@ -96,8 +129,9 @@ while (($#)); do
 done
 case "$cmd" in
   queue) case "$sub" in add | drop | list) ;; *) usage ;; esac ;;
-  next | fixtures | brief | payload | pace | backoff | record | status) ;;
-  -h | --help) sed -n '2,55p' "$0"; exit 0 ;;
+  briefs) case "$sub" in install | check) ;; *) usage ;; esac ;;
+  next | fixtures | brief | payload | pace | backoff | record | created | status) ;;
+  -h | --help) sed -n '2,81p' "$0"; exit 0 ;;
   *) usage ;;
 esac
 is_num() { [[ "$1" =~ ^[0-9]+$ ]]; }
@@ -105,6 +139,13 @@ for v in "$count" "$lead" "$stagger" "$per_minute"; do is_num "$v" || usage; don
 [[ -z "$issue" ]] || is_num "$issue" || usage
 [[ -z "$at" ]] || is_num "$at" || usage
 [[ -z "$seconds" ]] || is_num "$seconds" || usage
+[[ -z "$pr" ]] || is_num "$pr" || usage
+case "$brief_ref" in "" | implement) ;; repair) [[ -n "$pr" ]] || usage ;; *) usage ;; esac
+if [[ "$cmd" == briefs ]]; then
+  case "${kind:=all}" in all) kinds="implement repair" ;; implement | repair) kinds=$kind ;; *) usage ;; esac
+else
+  case "${kind:=implement}" in implement | repair) ;; *) usage ;; esac
+fi
 
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
@@ -112,9 +153,11 @@ queue="$state/cloud-queue.txt" ledger="$state/cloud-sessions.tsv" backoff_file="
 touch "$queue" "$ledger"
 now=$(orch_now)
 
-dispatched() { awk -F'\t' -v n="$1" '$1 == n { f = 1 } END { exit !f }' "$ledger"; }
+# Repair rows (fifth column "repair") are creates, but never count as an issue's dispatch.
+dispatched() { awk -F'\t' -v n="$1" '$1 == n && $5 != "repair" { f = 1 } END { exit !f }' "$ledger"; }
 pending() { # queued issues not yet in the ledger, in queue order
-  awk -F'\t' 'FILENAME == ARGV[1] { d[$1] = 1; next } $1 != "" && !($1 in d) && !s[$1]++ { print $1 }' "$ledger" "$queue"
+  awk -F'\t' 'FILENAME == ARGV[1] { if ($5 != "repair") d[$1] = 1; next }
+    $1 != "" && !($1 in d) && !s[$1]++ { print $1 }' "$ledger" "$queue"
 }
 iso_epoch() { jq -rn --arg t "$1" '$t | fromdateiso8601'; }
 need_issue() { [[ -n "$issue" ]] || { echo "cloud-dispatch.sh: $cmd needs --issue" >&2; exit 2; }; }
@@ -156,12 +199,42 @@ check_fixtures() {
   echo "$refs"
 }
 
+# prompt_line: the one-line prompt for a brief kept in the repository (--brief-ref).
+prompt_line() {
+  local line
+  if [[ "$brief_ref" == repair ]]; then
+    line="Follow .claude/briefs/repair.md for PR #$pr (issue #$issue, branch work/$issue-auto)."
+  else
+    line="Follow .claude/briefs/implement.md for issue #$issue (branch work/$issue-auto)."
+  fi
+  if [[ -n "$fixtures" && "$fixtures" != none ]]; then line="$line Fixtures: $fixtures (commit verbatim)."; fi
+  printf '%s\n' "$line"
+}
+
+resolve_base() {
+  if [[ -z "$base" ]]; then base=$(orch_default_branch "$repo" 2>/dev/null || true); fi
+  [[ -n "$base" && "$base" != null ]] || base=main
+}
+
+# brief_template K: waaagh's standard brief K rendered for this repository; {{REPO}} {{BASE}}
+# {{GATES}} filled, the per-issue values left to the one-line prompt.
+brief_template() {
+  local tpl="$here/../briefs/$1.md"
+  [[ -s "$state/briefs/$1.md" ]] && tpl="$state/briefs/$1.md"
+  [[ -s "$tpl" ]] || { echo "cloud-dispatch.sh: brief template missing: $tpl" >&2; exit 4; }
+  jq -Rrs --arg repo "$repo" --arg base "$base" --arg gates "$gates" '
+    gsub("\\{\\{REPO\\}\\}"; $repo) | gsub("\\{\\{BASE\\}\\}"; $base)
+    | gsub("\\{\\{GATES\\}\\}"; $gates)' "$tpl"
+}
+brief_version() { # the V of a first line "<!-- waaagh-brief K vV ...", or nothing
+  awk 'NR == 1 && match($0, /waaagh-brief [a-z]+ v[0-9]+/) { s = substr($0, RSTART, RLENGTH); sub(/.* v/, "", s); print s }'
+}
+
 render_brief() {
   local tpl="$here/../roles/cloud-session-brief.md"
   [[ -s "$state/cloud-brief.md" ]] && tpl="$state/cloud-brief.md"
   [[ -s "$tpl" ]] || { echo "cloud-dispatch.sh: brief template missing: $tpl" >&2; exit 4; }
-  if [[ -z "$base" ]]; then base=$(orch_default_branch "$repo" 2>/dev/null || true); fi
-  [[ -n "$base" && "$base" != null ]] || base=main
+  resolve_base
   [[ -n "$gates" ]] || gates="the repository's own test, lint and build commands (README, CI config)"
   local fix=""
   if [[ -n "$fixtures" && "$fixtures" != none ]]; then
@@ -172,6 +245,19 @@ render_brief() {
     | gsub("\\{\\{REPO\\}\\}"; $repo) | gsub("\\{\\{ISSUE\\}\\}"; $n)
     | gsub("\\{\\{BASE\\}\\}"; $base) | gsub("\\{\\{GATES\\}\\}"; $gates)
     | gsub("\\{\\{FIXTURES\\}\\}"; $fix)' "$tpl"
+}
+
+do_record() {
+  [[ -n "$trigger" && -n "$run_at" ]] || { echo "cloud-dispatch.sh: record needs --trigger and --run-at" >&2; exit 2; }
+  iso_epoch "$run_at" >/dev/null 2>&1 || { echo "cloud-dispatch.sh: --run-at must be ISO 8601 (2026-01-02T03:04:05Z)" >&2; exit 2; }
+  if [[ "$kind" == repair ]]; then
+    printf '%s\t%s\t%s\t%s\trepair\n' "$issue" "$trigger" "$run_at" "$(orch_iso "$now")" >>"$ledger"
+    echo "recorded $issue $trigger $run_at repair"
+    return
+  fi
+  if dispatched "$issue"; then echo "cloud-dispatch.sh: #$issue already recorded" >&2; exit 3; fi
+  printf '%s\t%s\t%s\t%s\n' "$issue" "$trigger" "$run_at" "$(orch_iso "$now")" >>"$ledger"
+  echo "recorded $issue $trigger $run_at"
 }
 
 case "$cmd" in
@@ -202,13 +288,51 @@ case "$cmd" in
     ;;
   brief)
     need_issue
-    render_brief
+    if [[ -n "$brief_ref" ]]; then prompt_line; else render_brief; fi
+    ;;
+  briefs)
+    resolve_base
+    [[ -n "$gates" ]] || gates="the repository's own test, lint and build commands (README, CI config)"
+    bad=0
+    for k in $kinds; do
+      rel=".claude/briefs/$k.md" want=$(brief_template "$k")
+      if [[ "$sub" == install ]]; then
+        f="$dir/$rel"
+        if [[ -f "$f" ]] && [[ "$(cat "$f")" == "$want" ]]; then echo "current $f"; continue; fi
+        if [[ -f "$f" && "$force" != yes ]]; then
+          echo "cloud-dispatch.sh: $f exists and differs from the template; --force replaces it" >&2
+          exit 3
+        fi
+        mkdir -p "$(dirname "$f")"
+        printf '%s\n' "$want" >"$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+        echo "installed $f"
+        continue
+      fi
+      if [[ "$remote" == yes ]]; then
+        rc=0
+        got=$(orch_read_retry 3 gh api "repos/$repo/contents/$rel?ref=$base") || rc=$?
+        if ((rc == 3)); then echo "brief $k missing $rel on $base"; bad=1; continue; fi
+        if ((rc != 0)); then echo "cloud-dispatch.sh: $rel on $base could not be read" >&2; exit 7; fi
+        got=$(jq -r '.content | gsub("\n"; "") | @base64d' <<<"$got" 2>/dev/null) ||
+          { echo "cloud-dispatch.sh: $rel on $base could not be read" >&2; exit 7; }
+      else
+        if [[ ! -f "$dir/$rel" ]]; then echo "brief $k missing $dir/$rel"; bad=1; continue; fi
+        got=$(cat "$dir/$rel")
+      fi
+      have=$(brief_version <<<"$got") tv=$(brief_version <<<"$want")
+      if [[ -z "$have" ]]; then echo "brief $k custom"
+      elif [[ -n "$tv" ]] && ((have < tv)); then echo "brief $k outdated v$have (template v$tv)"; bad=1
+      else echo "brief $k ok v$have"; fi
+    done
+    if [[ "$sub" == check ]] && ((bad)); then exit 6; fi
     ;;
   payload)
     need_issue
     [[ -n "$env_id" && -n "$source_arg" ]] || { echo "cloud-dispatch.sh: payload needs --env and --source" >&2; exit 2; }
-    if dispatched "$issue"; then
-      echo "cloud-dispatch.sh: #$issue already dispatched: $(awk -F'\t' -v n="$issue" '$1 == n { print $2 " at " $3 }' "$ledger")" >&2
+    if [[ "$brief_ref" == repair ]]; then
+      [[ -n "$fixtures" ]] || fixtures=none
+    elif dispatched "$issue"; then
+      echo "cloud-dispatch.sh: #$issue already dispatched: $(awk -F'\t' -v n="$issue" '$1 == n && $5 != "repair" { print $2 " at " $3 }' "$ledger")" >&2
       exit 3
     fi
     if [[ -z "$fixtures" ]]; then fixtures=$(check_fixtures); fi
@@ -225,8 +349,10 @@ case "$cmd" in
     else
       src=$(jq -cn --arg u "$source_arg" '{git_repository: {url: $u}}')
     fi
-    msg=$(render_brief)
-    jq -n --arg name "${repo##*/} #$issue cloud lane" --arg at "$(orch_iso "$at")" --arg env "$env_id" \
+    name="${repo##*/} #$issue cloud lane"
+    if [[ -n "$brief_ref" ]]; then msg=$(prompt_line); else msg=$(render_brief); fi
+    if [[ "$brief_ref" == repair ]]; then name="${repo##*/} #$issue cloud repair of PR #$pr"; fi
+    jq -n --arg name "$name" --arg at "$(orch_iso "$at")" --arg env "$env_id" \
       --argjson src "$src" --arg model "$model" --arg msg "$msg" '
       {name: $name, run_once_at: $at,
        job_config: {ccr: {environment_id: $env,
@@ -258,17 +384,27 @@ case "$cmd" in
     ;;
   record)
     need_issue
-    [[ -n "$trigger" && -n "$run_at" ]] || { echo "cloud-dispatch.sh: record needs --trigger and --run-at" >&2; exit 2; }
-    iso_epoch "$run_at" >/dev/null 2>&1 || { echo "cloud-dispatch.sh: --run-at must be ISO 8601 (2026-01-02T03:04:05Z)" >&2; exit 2; }
-    if dispatched "$issue"; then echo "cloud-dispatch.sh: #$issue already recorded" >&2; exit 3; fi
-    printf '%s\t%s\t%s\t%s\n' "$issue" "$trigger" "$run_at" "$(orch_iso "$now")" >>"$ledger"
-    echo "recorded $issue $trigger $run_at"
+    do_record
+    ;;
+  created)
+    if [[ -n "$response" ]]; then body=$(cat "$response"); else body=$(cat); fi
+    got=$(jq -r 'def tid: first((.. | objects | .trigger_id? | strings),
+        (.. | objects | .id? | strings | select(startswith("trig_"))), (.trigger.id? | strings), (.id? | strings)) // "";
+      def rat: first(.. | objects | .run_once_at? | strings) // "";
+      "\(tid)\t\(rat)"' <<<"$body" 2>/dev/null) || got=""
+    trigger=${got%%$'\t'*}
+    [[ -n "$trigger" ]] || { echo "cloud-dispatch.sh: no trigger id in the create response" >&2; exit 7; }
+    [[ -n "$run_at" ]] || run_at=${got#*$'\t'}
+    echo "created $trigger ${run_at:--}"
+    if [[ -n "$issue" ]]; then do_record >/dev/null; fi
     ;;
   status)
     until_t=0
     if [[ -s "$backoff_file" ]]; then until_t=$(awk 'NR == 1 { print $1 + 0 }' "$backoff_file"); fi
     echo "queued $(pending | awk 'END { print NR }')"
-    echo "dispatched $(awk -F'\t' '$1 != "" { c++ } END { print c + 0 }' "$ledger")"
+    echo "dispatched $(awk -F'\t' '$1 != "" && $5 != "repair" { c++ } END { print c + 0 }' "$ledger")"
+    repairs=$(awk -F'\t' '$5 == "repair" { c++ } END { print c + 0 }' "$ledger")
+    if ((repairs)); then echo "repairs $repairs"; fi
     echo "last $(awk -F'\t' '$1 != "" { l = "#" $1 " " $2 " " $3 } END { print (l == "" ? "-" : l) }' "$ledger")"
     echo "backoff $((until_t > now ? until_t - now : 0))"
     ;;
