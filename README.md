@@ -74,6 +74,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
 | `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, and the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue) |
+| `loops.sh` | Long-lived campaign loops installed in `<state dir>/bin/` (never a session scratchpad), a per-pass heartbeat in `<state dir>/loops/`, and the startup status: last pass N min ago, alive/stale/dead/ended/never, exit 3 when a loop is not running and 4 when its script is not installed |
 
 ## Defaults
 
