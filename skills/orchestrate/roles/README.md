@@ -38,6 +38,8 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 | Rebase bot | `rebase-bot.md` | `general-purpose`, `model: "sonnet"` | base merges into PR branches |
 | Hygiene bot | `hygiene-bot.md` | `general-purpose`, `model: "sonnet"` | labels, links, evidence-backed closes |
 | Router | `router.md` | `general-purpose`, `model: "sonnet"` | route labels and local-work comments, via `issue-route.sh` |
+| Local sweep | `local-sweep.md` | `general-purpose`, `model: "sonnet"` | evidence-backed closes of bucket A; sweep and batch plan files |
+| Verify batch | `verify-batch.md` | `general-purpose`, `model: "sonnet"` | one verdict comment per issue, evidence-backed closes, issues for twice-reproduced failures |
 | Verification | `verification.md` | `general-purpose`, `model: "sonnet"` | new issues for findings |
 | Implementation lane | `implementation-lane.md` | `waaagh:codex-implementer` (routine, Luna `medium`) or `waaagh:sol-implementer` (judgment) | uncommitted diff in its worktree |
 | PR doctor | `pr-doctor.md` | `waaagh:sol-implementer`, `REASONING: high` | commits on its own PR branches |

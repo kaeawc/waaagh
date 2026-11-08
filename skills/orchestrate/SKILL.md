@@ -242,6 +242,11 @@ agent reports or a PR changes. Do not tick on a timer.
    `"$SCRIPTS/issue-route.sh" status` shows the counts; any `unrouted` or `multi` issue → launch
    the router (`roles/router.md`). Cloud dispatch takes only `cloud-ready` and local lanes only
    `needs-local:*` (`issues-ranked.sh --route …`).
+   **Local sweep before device lanes** (`roles/local-sweep.md`): no device lane starts until a
+   sweep newer than the last 16 merges has sorted the `needs-local:*` issues into A (closeable), B
+   (fix merged, device check left), C (needs implementation) and D (unclear). Device slots then go
+   to one verify batch per platform for B (`roles/verify-batch.md`) before implementation lanes,
+   which take only C; A is closed by the sweep and D waits for its question.
 5. **Verify.** `verification_due=yes` and the repository has a verification skill → launch one
    verification batch over everything merged since the last one. Sooner when a risky change lands.
    No verification skill: skip this phase and say so once.
@@ -284,6 +289,8 @@ the cap; say so in the status.
 | Rebase bot | a PR conflicts, or is stale against files main changed | `pr-ready.sh --no-threads` |
 | Hygiene bot | the plan is stale | `issues-ranked.sh`, `issue-candidates.sh`, `issue-close.sh` |
 | Router | `issue-route.sh status` shows unrouted or multi-routed issues | `issue-route.sh` (`routing.md`) |
+| Local sweep | before the first local lane, then about every 16 merged PRs or when a device lane finds its issue already fixed | `issue-candidates.sh sweep`, `issue-close.sh` (`roles/local-sweep.md`) |
+| Verify batch | the sweep left bucket-B issues on a platform with a free device | `device-lock.sh`, `issue-close.sh` (`roles/verify-batch.md`) |
 | Verification | about every 16 merged PRs | the repo's verification skill, `device-lock.sh`, `campaign.sh verified` |
 
 One instance of each at a time. The hygiene bot may label, link, and close an issue as a duplicate
