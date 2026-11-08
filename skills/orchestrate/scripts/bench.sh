@@ -102,7 +102,7 @@ pr_rows 20 >"$FX/prs.json"
 measure pr-ready-rest-20-ready "$here/pr-ready.sh" --repo o/r --base main
 pr_rows 100 >"$FX/prs.json"
 measure pr-ready-rest-100-ready "$here/pr-ready.sh" --repo o/r --base main
-rm -f "$FX/rest"
+rm -f "$FX/rest" "$ORCHESTRATE_STATE_DIR/gh-no-graphql"   # and forget the refusal (orch_gh_api)
 
 # triage-tick.sh snapshot with 50 open PRs (#118): the open count and last reviews come from one
 # gh-snapshot.sh call. Then the same where GraphQL is refused, where the snapshot goes REST per PR.
@@ -111,7 +111,7 @@ echo '[{"number":900,"labels":[]}]' >"$FX/issues.json"
 measure triage-tick-50-open "$here/triage-tick.sh" snapshot --repo o/r --branch main
 touch "$FX/rest"
 measure triage-tick-rest-50-open "$here/triage-tick.sh" snapshot --repo o/r --branch main
-rm -f "$FX/rest"
+rm -f "$FX/rest" "$ORCHESTRATE_STATE_DIR/gh-no-graphql"   # and forget the refusal (orch_gh_api)
 # review-gate.sh check for one PR: its own reads, then with a fresh snapshot row for its head.
 "$here/review-gate.sh" policy review-at-head --repo o/r >/dev/null
 rm -rf "$ORCHESTRATE_STATE_DIR/o__r/pr-snapshot"
