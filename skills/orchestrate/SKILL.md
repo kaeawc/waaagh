@@ -596,6 +596,13 @@ as PRs and issue comments, which the triage loop reads. A cloud-ready follow-up 
 work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
 `device-cloud-handoff.md`.
 
+**Session topology.** A campaign split over an owner-facing orchestrator, a triage session, a
+manual-test session, cloud routines and local lanes follows `session-topology.md`: who owns what
+(closing stays the owner's), owner instructions forwarded verbatim, the Remote Control fallback to
+a cloud routine, and follow-ups to an idle cloud branch as a second routine. Every message to a peer
+goes through `"$SCRIPTS/relay.sh"`, which tracks queued, delivered, acknowledged and done
+separately; tell the owner the state it reports, never "done" for a message that is only queued.
+
 ## Final report
 
 Per lane: model and effort as run, artifact (diff or PR), validation key and result, review
