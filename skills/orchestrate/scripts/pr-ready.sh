@@ -55,6 +55,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
+orch_gh_priority normal
 
 repo="" base="" hold_label="hold" head_match="" min_pass=1 threads=yes delta=no only_pr=""
 all_args=("$@")

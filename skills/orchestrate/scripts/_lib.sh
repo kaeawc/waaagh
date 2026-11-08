@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Shared helpers for the orchestrate scripts. Source, do not execute.
 # Env: ORCHESTRATE_STATE_DIR (default ~/.claude/orchestrate), ORCHESTRATE_AUTHOR (default: the
-# authenticated gh user), ORCHESTRATE_NOW (epoch seconds; tests only).
+# authenticated gh user), ORCHESTRATE_NOW (epoch seconds; tests only), ORCHESTRATE_GH_BUDGET=1
+# (pace every gh call through gh-budget.sh; see orch_gh_priority below).
 
 orch_now() { echo "${ORCHESTRATE_NOW:-$(date +%s)}"; }
 
@@ -50,3 +51,13 @@ orch_read_retry() {
   done
   return 1
 }
+
+# orch_gh_priority high|normal|low: declare this script's GitHub budget priority (gh-budget.sh):
+# high for merges and main health, normal for ticks, repairs and lanes, low for nudges, backfills
+# and sweeps. With ORCHESTRATE_GH_BUDGET=1, sourcing this file also puts the gh shim (gh-shim/gh)
+# first on PATH, so every gh call, gh-read.sh's and third-party scripts' included, is paced.
+orch_gh_priority() { export GH_BUDGET_PRIORITY="$1"; }
+if [[ "${ORCHESTRATE_GH_BUDGET:-0}" == 1 ]]; then
+  _orch_shim="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gh-shim"
+  case ":$PATH:" in *":$_orch_shim:"*) ;; *) export PATH="$_orch_shim:$PATH" ;; esac
+fi
