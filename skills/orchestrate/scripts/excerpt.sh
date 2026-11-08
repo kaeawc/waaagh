@@ -10,6 +10,10 @@
 #   failure line is folded (counted, not shown). The full log path is always printed last.
 set -euo pipefail
 
+case "${1:-}" in
+  -h | --help) sed -n '2,10p' "$0"; exit 0 ;;
+  -*) echo "excerpt.sh: unknown argument: $1" >&2; exit 2 ;;
+esac
 log=${1:?usage: excerpt.sh LOG [CONTEXT_LINES] [MAX_LINES] [MAX_BYTES]}
 context=${2:-3}
 max=${3:-120}

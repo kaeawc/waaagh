@@ -8,20 +8,31 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR supersedes the run in flight; pushes to main always run to the end.
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   scripts:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # bats from its pinned release (commit checked), instead of apt-get update + install.
       - name: Install bats
-        run: sudo apt-get update && sudo apt-get install -y bats
+        run: |
+          git clone -q --depth 1 --branch v1.13.0 https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats"
+          test "$(git -C "$RUNNER_TEMP/bats" rev-parse HEAD)" = 3bca150ec86275d6d9d5a4fd7d48ab8b6c6f3d87
+          sudo "$RUNNER_TEMP/bats/install.sh" /usr/local >/dev/null
+          bats --version
       - name: ShellCheck
-        run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh bin/*.sh
+        run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh bin/*.sh dev/*.sh
+      - name: Validate manifests
+        run: jq -e . .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json >/dev/null
       - name: Hostile git config (the suites must not depend on it)
         run: |
           git config --global commit.gpgsign true
           git config --global gpg.program false
-      - name: Self-test (every suite)
-        run: bats skills/orchestrate/scripts/*.bats
-      - name: Validate manifests
-        run: jq -e . .claude-plugin/plugin.json .claude-plugin/marketplace.json >/dev/null
+      - name: Self-test (every suite, in parallel)
+        run: dev/test.sh -j "$(nproc)"

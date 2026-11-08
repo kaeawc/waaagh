@@ -32,6 +32,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
+case "${1:-}" in -h | --help) sed -n '2,28p' "$0"; exit 0 ;; -*) echo "campaign.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" bots=working verify=idle sha=""

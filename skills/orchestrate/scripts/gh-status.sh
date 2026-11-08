@@ -18,7 +18,7 @@ components=()
 while (($#)); do
   case "$1" in
     --component) components+=("$2"); shift 2 ;;
-    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "gh-status.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

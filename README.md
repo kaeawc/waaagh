@@ -122,10 +122,15 @@ and from `<state dir>/lane-rules.md`.
 ## Development
 
 ```
-shellcheck -S warning -x skills/orchestrate/scripts/*.sh bin/*.sh
-bats skills/orchestrate/scripts/*.bats
+shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh bin/*.sh dev/*.sh
+dev/test.sh                 # every suite, in parallel (-j N); or dev/test.sh path/to/one.bats
+dev/coverage.sh             # line coverage per script (needs: gem install bashcov)
 claude --plugin-dir .
 ```
+
+Every suite isolates its state under `$BATS_TEST_TMPDIR`, so suites can run in parallel; CI runs
+`dev/test.sh -j "$(nproc)"`. `cli-contract.bats` holds every script to the same command line: `-h`
+prints exactly its header comment, and an unknown flag exits 2 before any GitHub call.
 
 ## License
 
