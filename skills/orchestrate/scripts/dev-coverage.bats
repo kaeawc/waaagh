@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # dev/coverage.sh --check: the coverage floor check reads an existing resultset (a small synthetic
-# fixture here), so it runs without bashcov and without running any suite.
+# fixture here), so it runs without bashcov and without running any suite. A run of chosen suites
+# (#168) runs a copy of the script against a stub bashcov in a repo root of its own.
 
 setup() {
   load test_helper
@@ -137,4 +138,82 @@ STUB
   PATH="$b" run "$COV"
   [ "$status" -eq 2 ]
   [[ "$output" == *"EXECUTABLE DIRECTORY from 'gem environment'"* ]]
+}
+
+# fake_root: a copy of dev/coverage.sh in a repo root of its own with three suites, and a bashcov
+# stub that records its argv and writes the fixture resultset (keyed under that root), so a run
+# touches neither the real repo's coverage/ nor any suite (#168).
+fake_root() {
+  R="$BATS_TEST_TMPDIR/root"
+  mkdir -p "$R/dev" "$R/skills/orchestrate/scripts" "$BATS_TEST_TMPDIR/bin"
+  cp "$COV" "$R/dev/coverage.sh"
+  for s in one two three; do printf '@test "x" { :; }\n' >"$R/skills/orchestrate/scripts/$s.bats"; done
+  sed "s#/ci/work/waaagh#$R#" rs.json >"$BATS_TEST_TMPDIR/fixture.json"
+  cat >"$BATS_TEST_TMPDIR/bin/bashcov" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >"$BATS_TEST_TMPDIR/argv"
+mkdir -p coverage && cp "$BATS_TEST_TMPDIR/fixture.json" coverage/.resultset.json
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/bashcov"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+@test "suite files pass through to dev/test.sh, and the table says the run was a subset (#168)" {
+  fake_root
+  run "$R/dev/coverage.sh" -j 2 "$R/skills/orchestrate/scripts/two.bats"
+  [ "$status" -eq 0 ]
+  [ "$(cat argv)" = "$(printf '%s\n' --root "$R" -- dev/test.sh -j 2 "$R/skills/orchestrate/scripts/two.bats")" ]
+  [[ "$output" == *"90%"*"skills/orchestrate/scripts/a.sh"* ]]
+  [[ "$output" == *"subset: 1 of 3 suites ran (coverage/subset.txt)"* ]]
+  [ "$(cat "$R/coverage/subset.txt")" = "skills/orchestrate/scripts/two.bats" ]
+  grep -q '_subset: 1 of 3 suites ran' summary.md
+}
+
+@test "a relative suite path is resolved before the run moves to the repo root (#168)" {
+  fake_root
+  cd "$R/skills/orchestrate"
+  run "$R/dev/coverage.sh" scripts/one.bats scripts/three.bats
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$BATS_TEST_TMPDIR/argv")" == *"$R/skills/orchestrate/scripts/one.bats"$'\n'"$R/skills/orchestrate/scripts/three.bats" ]]
+  [[ "$output" == *"subset: 2 of 3 suites ran"* ]]
+}
+
+@test "a full run passes no suite files, writes no subset.txt and adds no subset note (#168)" {
+  fake_root
+  mkdir -p "$R/coverage"
+  echo stale >"$R/coverage/subset.txt"
+  run "$R/dev/coverage.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat argv)" = "$(printf '%s\n' --root "$R" -- dev/test.sh -j 1)" ]
+  [ ! -e "$R/coverage/subset.txt" ]
+  [[ "$output" != *"subset"* ]]
+  [ "$(grep -c subset summary.md || true)" -eq 0 ]
+}
+
+@test "--check on a subset resultset gives the same verdicts and says the numbers are partial (#168)" {
+  mkdir -p cov
+  cp rs.json cov/.resultset.json
+  printf 'skills/orchestrate/scripts/two.bats\n' >cov/subset.txt
+  run "$COV" --check floor.tsv --resultset cov/.resultset.json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"partial resultset: only 1 suite(s) ran (cov/subset.txt)"* ]]
+  grep -q '_partial resultset' summary.md
+  printf 'skills/orchestrate/scripts/a.sh\t95\nskills/orchestrate/scripts/gh-shim/gh\t50\n' >f2.tsv
+  run "$COV" --check f2.tsv --resultset cov/.resultset.json
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"partial resultset"*"below floor: skills/orchestrate/scripts/a.sh"* ]]
+  rm cov/subset.txt
+  run "$COV" --check floor.tsv --resultset cov/.resultset.json
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"partial"* ]]
+}
+
+@test "suite file usage errors exit 2: a missing suite, or suites with --check (#168)" {
+  run "$COV" nope.bats
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no such suite: nope.bats"* ]]
+  touch s.bats
+  run "$COV" --check floor.tsv --resultset rs.json s.bats
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--check runs no suites"* ]]
 }

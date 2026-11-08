@@ -129,6 +129,7 @@ dev/test.sh                 # every suite, in parallel (-j N); or dev/test.sh pa
 dev/test.sh --ignore-sigpipe   # the same with SIGPIPE ignored, as on GitHub's runners
 dev/test.sh --bashcov-shellopts   # the same with bashcov's exported errexit/nounset/pipefail (CI runs this)
 dev/coverage.sh             # line coverage per script (needs: gem install bashcov)
+dev/coverage.sh skills/orchestrate/scripts/job-log.bats   # only these suites: partial numbers, said so
 dev/coverage.sh --check dev/coverage-floor.tsv   # floors vs the last run; CI runs both on main and on PRs that change scripts (coverage.yml)
 claude --plugin-dir .
 ```
