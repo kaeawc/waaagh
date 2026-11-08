@@ -15,9 +15,11 @@ setup() {
 
 # Every executable script with a usage header. Sourced libraries, the benchmark (no arguments) and
 # the hook (reads a payload on stdin, no arguments) are not command-line tools in this sense.
+# The dev/ tools are held to the same contract (#159); they make no GitHub calls, so that part of
+# the checks holds for them trivially.
 scripts() {
   local f
-  for f in "$SCRIPTS"/*.sh "$ROOT"/bin/*.sh; do
+  for f in "$SCRIPTS"/*.sh "$ROOT"/bin/*.sh "$ROOT"/dev/*.sh; do
     case "${f##*/}" in _*.sh | bench.sh | lane-safety.sh) continue ;; esac
     echo "$f"
   done
@@ -49,6 +51,12 @@ header() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$1"; }
   [ -z "$bad" ] || { echo "contract broken:$bad"; false; }
   [ ! -s "$BATS_TEST_TMPDIR/gh-calls" ] || { echo "gh called:"; cat "$BATS_TEST_TMPDIR/gh-calls"; false; }
   [ ! -e "$ORCHESTRATE_STATE_DIR" ] || { echo "state written:"; find "$ORCHESTRATE_STATE_DIR"; false; }
+}
+
+@test "the contract covers the dev/ tools" {
+  run scripts
+  [[ "$output" == *"/dev/test.sh"* ]]
+  [[ "$output" == *"/dev/coverage.sh"* ]]
 }
 
 @test "the hook takes no arguments: any argument exits 1 with a message" {
