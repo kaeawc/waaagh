@@ -11,6 +11,8 @@
 #          overlap. A path ending in "/" covers everything under it.
 #   add    the same check, then appends the lane as `active` (under a lock, so two launches cannot
 #          both pass). Refused when the check finds a conflict.
+#          Lane branches are named work/<first issue>-<slug>; add notes any other name on stderr
+#          (not refused: the merge loop selects PRs by author and readiness, never by branch name).
 #   set    sets a lane's status (last column), e.g. merged, closed, done, abandoned: those end it.
 # lanes.tsv columns: worktree  branch  issues  files  agent  status
 # Exit: 0 ok | 3 conflict | 4 the open PRs could not be read (no verdict; see gh-read.sh) | 2 usage
@@ -95,6 +97,8 @@ check_and() {
 append() {
   printf '%s\t%s\t%s\t%s\t%s\tactive\n' "$worktree" "$branch" "$issues" "$files" "$agent" >>"$lanes"
   echo "ok: lane $worktree claimed issues ${issues:--} files ${files:--}"
+  [[ -z "$issues" || "$branch" == "work/${issues%%,*}-"?* ]] ||
+    echo "note: branch $branch is not named work/${issues%%,*}-<slug> (the lane branch standard)" >&2
 }
 set_status() {
   awk -F'\t' -v OFS='\t' -v wt="$worktree" -v st="$status" '$1 == wt { $NF = st; hit = 1 } { print }

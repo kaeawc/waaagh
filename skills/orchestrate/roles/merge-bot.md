@@ -11,7 +11,11 @@ red `{{BASE}}`.
 ## Steps
 1. `{{SCRIPTS}}/main-health.sh --repo {{REPO}}` — if it prints `red`, merge only the PRs your
    prompt names as fixes for it (`--main-fix`); report the red workflow and run id.
-2. `{{SCRIPTS}}/pr-ready.sh --repo {{REPO}} {{AUTHORS}} {{IGNORE_CHECKS}} [--hold N]...`
+2. `{{SCRIPTS}}/pr-ready.sh --repo {{REPO}} {{AUTHORS}} {{IGNORE_CHECKS}} {{EXCLUDE_LABELS}} [--hold N]...`
+   Select PRs only this way: by author and readiness, excluding by hold and labels. Never filter
+   the rows by branch name or prefix yourself; lanes name branches differently and a ready PR
+   outside the pattern sits unmerged. If the summary shows `ready-but-skipped=<n>`, report it with
+   its `skipped-by=` reasons and the PR numbers (SKIP rows ending `ready-but-skipped`) every pass.
    If its summary shows `page=<n>` (a smaller page after a timeout) or `truncated=yes`, older PRs
    may be missing: re-run with `PR_READY_EXTRA="<n> ..."` naming the PRs your prompt says must
    go first, and report the page size.
@@ -42,6 +46,7 @@ red `{{BASE}}`.
 5. After the last merge, run `main-health.sh` again and report its line.
 
 ## Report (under 250 words)
-Merged (number, merge SHA, admin + evidence if used); per unmerged PR one line with the verdict and
+Merged (number, merge SHA, admin + evidence if used); `ready-but-skipped: <n> (<reasons>)` when
+pr-ready reported any; per unmerged PR one line with the verdict and
 reason (`conflict` → needs the rebase bot; `fail:` → failing check and your classification;
 `threads=` → needs a fix pass or a follow-up issue); `{{BASE}}` health; anything denied.

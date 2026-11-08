@@ -3,6 +3,7 @@
 #
 # Usage: pr-ready.sh [--repo OWNER/REPO] [--author LOGIN]... [--base BRANCH]
 #                    [--ignore-check NAME]... [--hold PR]... [--hold-label LABEL]
+#                    [--exclude-label LABEL]... [--head-match REGEX]
 #                    [--min-pass N] [--no-threads] [--delta] [--pr N]
 # Output (TSV): number  verdict  head  mergeable  passed  detail
 #   READY  mergeable, no pending check, no failed check, every required check passed, and no
@@ -14,7 +15,14 @@
 #          | policy=unknown (required checks could not be read)
 #          Review threads and policy are checked for BLOCK rows too, so a row whose only blocker
 #          is a failed check really has no other: the admin path depends on that.
-#   SKIP   draft | fork | hold
+#   SKIP   draft | fork | hold | label:<label> | branch, then " ready-but-skipped" when the PR
+#          would otherwise be READY (checks, review threads and policy are judged for it too)
+# Selection is by author and base, never by branch name: a lane that names its branches
+# differently is still judged. Exclusions are explicit and visible as SKIP rows: --hold PR,
+# --hold-label (default hold), --exclude-label (repeatable; e.g. `dependencies` when dependabot
+# PRs have their own lane) and --head-match REGEX (a jq regex the head branch must match;
+# discouraged). A skipped PR that is otherwise READY is counted on the summary line, so a filter
+# that hides ready work is seen every pass.
 # Check identity is (provider type, workflow, name), with the Actions run and job ids taken from
 # the details URL. Only a proven replacement supersedes an earlier result: within one run, a newer
 # job id (a rerun attempt); across runs of the same workflow and check, only a CANCELLED result,
@@ -39,7 +47,8 @@
 # PR_READY_EXTRA="<n> <n>..." (and the --pr number) name PRs that must be classified even when a
 # full page left them out, e.g. an old PR at the front of a serialized merge line: each one
 # missing from a full page is read with `gh pr view` and classified like the rest.
-# Last line on stderr: "open=<n> ready=<n>" (+ " changed=<n>" with --delta, + " truncated=yes"
+# Last line on stderr: "open=<n> ready=<n>" (+ " ready-but-skipped=<n> skipped-by=<reason>:<n>,..."
+# when a skipped PR is otherwise READY, + " changed=<n>" with --delta, + " truncated=yes"
 # when the PR list hit its row limit, + " page=<limit>" when a smaller page was used,
 # + " extra-unreadable=<n,...>", + " policy=unknown", + " diagnostics=<path>").
 set -euo pipefail
@@ -47,9 +56,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 
-repo="" base="" hold_label="hold" min_pass=1 threads=yes delta=no only_pr=""
+repo="" base="" hold_label="hold" head_match="" min_pass=1 threads=yes delta=no only_pr=""
 all_args=("$@")
-authors=() ignores=() holds=()
+authors=() ignores=() holds=() excludes=()
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -58,11 +67,13 @@ while (($#)); do
     --ignore-check) ignores+=("$2"); shift 2 ;;
     --hold) holds+=("$2"); shift 2 ;;
     --hold-label) hold_label=$2; shift 2 ;;
+    --exclude-label) excludes+=("$2"); shift 2 ;;
+    --head-match) head_match=$2; shift 2 ;;
     --min-pass) min_pass=$2; shift 2 ;;
     --no-threads) threads=no; shift ;;
     --delta) delta=yes; shift ;;
     --pr) only_pr=$2; shift 2 ;;
-    -h | --help) sed -n '2,44p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,53p' "$0"; exit 0 ;;
     *) echo "pr-ready.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -74,6 +85,10 @@ json_list() { if (($#)); then printf '%s\n' "$@" | jq -R . | jq -sc .; else echo
 authors_json=$(json_list "${authors[@]}")
 ignores_json=$(json_list ${ignores[@]+"${ignores[@]}"})
 holds_json=$(json_list ${holds[@]+"${holds[@]}"})
+excludes_json=$(json_list ${excludes[@]+"${excludes[@]}"})
+if [[ -n "$head_match" ]] && ! jq -en --arg re "$head_match" '"x" | test($re) | . or true' >/dev/null 2>&1; then
+  echo "pr-ready.sh: --head-match is not a valid regex: $head_match" >&2; exit 2
+fi
 
 diag_dir="$(orch_state_dir "$repo")/diagnostics"
 diag="$diag_dir/pr-ready-$(orch_iso "$(orch_now)" | tr -d ':')-$$.log"
@@ -104,7 +119,7 @@ else
   policy=unknown; note "branch protection read failed for $base: ${out:0:500}"
 fi
 
-fields=number,author,isDraft,isCrossRepository,baseRefName,headRefOid,mergeable,labels,statusCheckRollup
+fields=number,author,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,mergeable,labels,statusCheckRollup
 # Large pages of statusCheckRollup time out (HTTP 502/504) on busy repositories; smaller pages
 # usually succeed. Only a transient (7) or malformed (8) read falls back; anything else is final.
 limits=(300 120 60 30)
@@ -145,6 +160,7 @@ if [[ "$truncated" == yes ]]; then
 fi
 rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" --argjson holds "$holds_json" \
     --argjson required "$required" --arg base "$base" --arg hold_label "$hold_label" \
+    --argjson excludes "$excludes_json" --arg head_match "$head_match" \
     --argjson min_pass "$min_pass" --arg only_pr "$only_pr" '
     def norm: . as $c | (($c.conclusion // "") | if . == "" then ($c.state // $c.status // "") else . end) | ascii_upcase;
     def kind: if IN("SUCCESS", "SKIPPED", "NEUTRAL") then "pass"
@@ -182,11 +198,14 @@ rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" 
     | ($checks | map(select(.k == "pending") | .name) | unique) as $pend
     | ($checks | map(select(.k == "fail") | .name) | unique) as $fail
     | ($required - $ignore - $pass - $pend - $fail) as $missing
-    | (if .isDraft then ["SKIP", "draft"]
-       elif .isCrossRepository then ["SKIP", "fork"]
-       elif (.number as $n | $holds | map(tonumber) | index($n)) or ([.labels[].name] | index($hold_label)) then ["SKIP", "hold"]
-       else
-         ([ (if .mergeable == "CONFLICTING" then "conflict" else empty end),
+    # An explicit exclusion; the PR is still judged so a ready one can be reported.
+    | ([.labels[].name] as $l
+       | if (.number as $n | $holds | map(tonumber) | index($n)) or ($l | index($hold_label)) then "hold"
+         elif ([$l[] | select(. as $x | $excludes | index($x))] | first) != null then
+           "label:" + ([$l[] | select(. as $x | $excludes | index($x))] | first)
+         elif $head_match != "" and ((.headRefName // "") | test($head_match) | not) then "branch"
+         else null end) as $skip
+    | (([ (if .mergeable == "CONFLICTING" then "conflict" else empty end),
             (if ($fail | length) > 0 then "fail:" + ($fail | join(",")) else empty end),
             (if ($missing | length) > 0 and ($pend | length) == 0 then "missing-required:" + ($missing | join(",")) else empty end),
             (if ($pass | length) < $min_pass and ($pend | length) == 0 then "few-checks=\($pass | length)" else empty end)
@@ -198,9 +217,13 @@ rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" 
                        | join(" "))]
            elif ($pend | length) > 0 or .mergeable != "MERGEABLE" then
              ["WAIT", (if ($pend | length) > 0 then "pending:" + ($pend | join(",")) else "mergeable=" + .mergeable end)]
-           else ["READY", "-"] end
-       end) as $v
-    | [.number, $v[0], .headRefOid[0:9], .mergeable, ($pass | length), $v[1]] | @tsv' <<<"$prs" | sort -n)
+           else ["READY", "-"] end) as $judged
+    | (if .isDraft then ["SKIP", "draft", "-"]
+       elif .isCrossRepository then ["SKIP", "fork", "-"]
+       elif $skip != null then ["SKIP", $skip, $judged[0]]
+       else $judged + ["-"] end) as $v
+    # Column 7 (internal): the verdict a SKIP row would have had without its exclusion.
+    | [.number, $v[0], .headRefOid[0:9], .mergeable, ($pass | length), $v[1], $v[2]] | @tsv' <<<"$prs" | sort -n)
 
 # Unresolved, current review threads per READY or BLOCK PR, in batched GraphQL calls; a PR with
 # more than one page is followed page by page through its cursor. Prints "number<TAB>count", where
@@ -248,7 +271,7 @@ more_threads() {
 tcounts=""
 if [[ "$threads" == yes ]]; then
   ready_nums=()
-  while IFS= read -r n; do ready_nums+=("$n"); done < <(awk -F'\t' '$2 == "READY" || $2 == "BLOCK" { print $1 }' <<<"$rows")
+  while IFS= read -r n; do ready_nums+=("$n"); done < <(awk -F'\t' '$2 == "READY" || $2 == "BLOCK" || $7 == "READY" { print $1 }' <<<"$rows")
   for ((i = 0; i < ${#ready_nums[@]}; i += 50)); do
     while IFS=$'\t' read -r n count cursor; do
       [[ -n "$n" ]] || continue
@@ -259,11 +282,20 @@ if [[ "$threads" == yes ]]; then
   done
 fi
 
-open=0 ready=0
+open=0 ready=0 skipped_ready=0 skipped_by=""
 out=""
-while IFS=$'\t' read -r num verdict head mergeable passed detail; do
+while IFS=$'\t' read -r num verdict head mergeable passed detail inner; do
   [[ -n "$num" ]] || continue
   open=$((open + 1))
+  if [[ "$inner" == READY ]]; then   # excluded, but would be READY: same thread and policy rules
+    n=0
+    [[ "$threads" == no ]] || n=$(awk -F'\t' -v n="$num" '$1 == n { print $2; exit }' <<<"$tcounts")
+    if [[ "$policy" == known && "${n:-unknown}" == 0 ]]; then
+      detail+=" ready-but-skipped"
+      skipped_ready=$((skipped_ready + 1))
+      reason=${detail%% *}; skipped_by+="${reason%%:*}"$'\n'
+    fi
+  fi
   if [[ "$verdict" == READY || "$verdict" == BLOCK ]]; then
     extra=""
     [[ "$policy" == known ]] || extra+=" policy=unknown"
@@ -282,6 +314,10 @@ while IFS=$'\t' read -r num verdict head mergeable passed detail; do
 done <<<"$rows"
 
 summary="open=$open ready=$ready"
+if ((skipped_ready)); then
+  by=$(printf '%s' "$skipped_by" | sort | uniq -c | awk '{ printf "%s%s:%s", (NR > 1 ? "," : ""), $2, $1 }')
+  summary+=" ready-but-skipped=$skipped_ready skipped-by=$by"
+fi
 if [[ "$delta" == yes ]]; then
   snaps="$(orch_state_dir "$repo")/snapshots"
   mkdir -p "$snaps"
