@@ -199,6 +199,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
 | `GITHUB_OUTAGE` | `pr-merge.sh` | present while githubstatus.com reports Pull Requests down; pauses merges |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
+| `reruns.log`, `merge-loop.beat`, `triage-cron` | `triage-tick.sh` | known-flake reruns of default-branch runs (one per run); the merge loop's heartbeat and why it ended; when the session cron was created |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
 | `ops/` | `pr-merge.sh`, `issue-close.sh` | journal of each GitHub write (intent, attempt, state) and its raw output, so a lost answer is reconciled, never replayed |
 | `../validate/` | `validate.sh` | validation receipts and logs, keyed by `fingerprint.sh --key` (shared across repos; `ORCHESTRATE_VALIDATE_DIR`) |
@@ -260,6 +261,14 @@ agent reports or a PR changes. Do not tick on a timer.
 7. **Report** only what changed: merged, opened, blocked, decisions queued.
 
 Findings feed back: verification and review findings become issues, and the next plan ranks them.
+
+**Recurring triage tick.** When the user asks for the campaign to keep running on a schedule, each
+tick reads one compact verdict, not five raw outputs: `"$SCRIPTS/triage-tick.sh" snapshot` gives
+main health with the classifier verdict, the open PR count, merge-loop liveness and last merges,
+the dispatch queue, and free device slots by type. The `triage-tick` role
+(`roles/triage-tick.md`) acts on it: it re-runs a known-flake red once and holds merges until main
+is green, and it documents the session cron (fires only while idle, dies with the session, expires
+after 7 days) and a merge-loop wrapper that never stops silently.
 
 ### Lane cap
 
