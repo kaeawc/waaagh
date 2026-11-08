@@ -73,7 +73,7 @@ while [[ "$api" != rest ]]; do
   ((rc == 0)) || { cat "$err" >&2; exit 3; }
   conn=$(jq -c '.data.repository.pullRequests // empty' <<<"$page")
   [[ -n "$conn" ]] || { echo "gh-snapshot: no pullRequests in the response" >&2; exit 3; }
-  rows=$(jq -c --argjson rows "$rows" '$rows + [.nodes[] | {
+  rows=$(jq -c --slurpfile rows <(printf '%s\n' "$rows") '$rows[0] + [.nodes[] | {
       number, head: .headRefOid, draft: .isDraft,
       rollup: (.commits.nodes[0].commit.statusCheckRollup.state // "NONE"),
       review: (.reviews.nodes[0].state // "NONE"),
@@ -94,7 +94,8 @@ if [[ "$api" == rest ]]; then
     [[ -n "$n" ]] || continue
     roll=$("$rest" rollup --repo "$repo" --sha "$head") || exit 3
     rev=$("$rest" review --repo "$repo" --pr "$n") || exit 3
-    rows=$(jq -c --argjson rows "$rows" --argjson n "$n" --arg head "$head" --argjson draft "$draft" --argjson rev "$rev" '
+    rows=$(jq -c --slurpfile rows <(printf '%s\n' "$rows") --argjson n "$n" --arg head "$head" --argjson draft "$draft" --argjson rev "$rev" '
+      $rows[0] as $rows |
       [.[] | ((.conclusion // "") | if . == "" then null else . end) // .state // .status // "" | ascii_upcase] as $s
       | (if ($s | length) == 0 then "NONE"
          elif any($s[]; IN("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")) then "FAILURE"

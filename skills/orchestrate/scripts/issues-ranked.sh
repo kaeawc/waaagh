@@ -62,13 +62,14 @@ prs=$("$here/gh-issues.sh" prs-open --repo "$repo" --limit 300 --fields number,c
   read_fail "open pull requests"
 issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 500 --since "$since" \
   --fields number,title,labels,updatedAt) || read_fail "open issues"
-rows=$(jq -r --argjson prs "$prs" --argjson priority "$(json_list ${priority[@]+"${priority[@]}"})" \
+# The PR and issue lists travel as files or stdin, not arguments: one argument is capped at 128 KiB (#121).
+rows=$(jq -r --slurpfile prs <(printf '%s\n' "$prs") --argjson priority "$(json_list ${priority[@]+"${priority[@]}"})" \
     --argjson bug "$(json_list "${bug[@]}")" --argjson exclude "$(json_list "${exclude[@]}")" \
     --argjson limit "$jq_limit" --arg skip "$skip_in_pr" --arg route "$route" '
     def has_any($set): any(.[]; . as $l | $set | index($l));
     def routed: $route == "" or any(.[];
       if ($route | endswith("*")) then startswith($route | rtrimstr("*")) else . == $route end);
-    ([$prs[] | .number as $p | (.closingIssuesReferences // [])[] | {key: (.number | tostring), value: $p}]
+    ([$prs[0][] | .number as $p | (.closingIssuesReferences // [])[] | {key: (.number | tostring), value: $p}]
       | from_entries) as $closing
     | [.[] | ([.labels[].name]) as $l | select(($l | has_any($exclude) | not) and ($l | routed))
        | {number, title, updated: .updatedAt, labels: $l, in_pr: ($closing[.number | tostring] // null),
@@ -96,7 +97,7 @@ check() { # issue... -> open-blockers.sh lines; exit 4 when it fails outright
 }
 # shellcheck disable=SC2046  # issue numbers, one word each
 checked=$(check $(awk -F'\t' -v n="$limit" 'NR <= n { print $2 }' <<<"$rows"))
-promote=$(jq -rn --arg rows "$rows" --arg ob "$checked" --argjson limit "$limit" '
+promote=$(jq -rn --rawfile rows <(printf '%s' "$rows") --rawfile ob <(printf '%s' "$checked") --argjson limit "$limit" '
   ($rows | split("\n") | map(select(length > 0) | split("\t")[1])) as $all
   | $all[0:$limit] as $top
   | [$ob | split("\n")[] | split(" ") | select(.[1] == "BLOCKED") | .[3:][]
@@ -106,7 +107,7 @@ if [[ -n "$promote" ]]; then
   # shellcheck disable=SC2086  # issue numbers, one word each
   checked+=$'\n'$(check $promote)
 fi
-jq -rn --arg rows "$rows" --arg ob "$checked" --argjson limit "$limit" '
+jq -rn --rawfile rows <(printf '%s' "$rows") --rawfile ob <(printf '%s' "$checked") --argjson limit "$limit" '
   [$rows | split("\n")[] | select(length > 0) | split("\t")] as $all
   | ($all | map({key: .[1], value: (.[0] | tonumber)}) | from_entries) as $rank
   | [$ob | split("\n")[] | select(length > 0) | split(" ")

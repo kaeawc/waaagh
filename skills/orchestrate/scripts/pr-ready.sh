@@ -175,7 +175,8 @@ if [[ "$truncated" == yes ]]; then
     if if [[ "$api" == rest ]]; then one=$("$rest" view --repo "$repo" --pr "$n" 2>"$diag_dir/.prview-$$")
        else one=$(ghr pr view "$n" --repo "$repo" --json "$fields,state" 2>"$diag_dir/.prview-$$"); fi &&
       jq -e 'type == "object" and has("number")' >/dev/null 2>&1 <<<"$one"; then
-      prs=$(jq -c --argjson one "$one" 'if $one.state == "OPEN" then . + [$one | del(.state)] else . end' <<<"$prs")
+      prs=$(jq -c --slurpfile one <(printf '%s\n' "$one") '$one[0] as $one
+        | if $one.state == "OPEN" then . + [$one | del(.state)] else . end' <<<"$prs")
     else
       note "PR $n (extra): unreadable: $(cat "$diag_dir/.prview-$$" 2>/dev/null | awk 'NR<=3')"
       extra_bad+="${extra_bad:+,}$n"
@@ -211,8 +212,8 @@ if [[ "$api" == rest ]]; then
     unread+="$n "
   done
   # No candidate (no open PR, or only drafts, forks and other authors): no view-*.out exists.
-  prs=$({ cat "$restdir"/view-*.out 2>/dev/null || true; } | jq -sc --argjson prs "$prs" '
-    (map(select(type == "object" and has("number")) | {key: (.number | tostring), value: del(.state)}) | from_entries) as $by
+  prs=$({ cat "$restdir"/view-*.out 2>/dev/null || true; } | jq -sc --slurpfile prs <(printf '%s\n' "$prs") '
+    $prs[0] as $prs | (map(select(type == "object" and has("number")) | {key: (.number | tostring), value: del(.state)}) | from_entries) as $by
     | $prs | map($by[.number | tostring] // .)')
 fi
 rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" --argjson holds "$holds_json" \

@@ -135,8 +135,9 @@ case "$cmd" in
       echo '{}' >"$work/comments"
       for n in $(jq -r '.[].number' <<<"$rows"); do
         c=$(ghr api "repos/$repo/issues/$n/comments?per_page=100") || exit
-        jq -c --arg n "$n" --argjson c "$c" \
-          '.[$n] = [$c[] | {author: {login: .user.login}, body, createdAt: .created_at}]' "$work/comments" >"$work/c.new"
+        printf '%s\n' "$c" >"$work/c.page"
+        jq -c --arg n "$n" --slurpfile c "$work/c.page" \
+          '.[$n] = [$c[0][] | {author: {login: .user.login}, body, createdAt: .created_at}]' "$work/comments" >"$work/c.new"
         mv "$work/c.new" "$work/comments"
       done
       rows=$(jq -c --slurpfile c "$work/comments" 'map(.comments = $c[0][.number | tostring])' <<<"$rows")
