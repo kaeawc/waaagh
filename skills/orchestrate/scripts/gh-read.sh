@@ -138,7 +138,9 @@ while :; do
   else
     cp "$work/out" "$work/body"
   fi
-  [[ -n "$status" ]] || status=$({ grep -oE 'HTTP [0-9]{3}' "$work/err" || true; } | tail -1 | cut -c6-)
+  # "HTTP 403: ..." from most commands; "non-200 OK status code: 403 Forbidden ..." from some
+  # GraphQL ones (issue list --label).
+  [[ -n "$status" ]] || status=$({ grep -oE '(HTTP|status code:) [0-9]{3}' "$work/err" || true; } | tail -1 | grep -oE '[0-9]{3}$' || true)
   # awk reads to the end, so nothing upstream is cut off: where SIGPIPE is ignored (some CI
   # runners), an early-closed pipe makes cat print "Broken pipe" to stderr instead of dying quietly.
   msg=$(cat "$work/err" "$work/body" 2>/dev/null | awk 'NF && n < 3 { print; n++ }' || true)

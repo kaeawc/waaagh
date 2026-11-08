@@ -33,7 +33,9 @@
 #          --limit rows from the --bucket buckets; a last "# " line gives every bucket's count,
 #          whether git history was used, and the uncapped results file under <state dir>/candidates/.
 # Defaults: --since-days 14 (sweep: 180), --limit 25 (sweep: 50).
-# Exit: 0 ok | 2 usage | 4 sweep only: issues or merged PRs could not be read.
+# Reads go through gh-issues.sh: GraphQL, or REST where GitHub refuses GraphQL (cloud sessions);
+# over REST a merged PR's closing references come only from its body (how=body).
+# Exit: 0 ok | 2 usage | 4 issues or merged PRs could not be read.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
@@ -69,27 +71,33 @@ if [[ -z "$days" ]]; then if [[ "$cmd" == sweep ]]; then days=180; else days=14;
 if [[ -z "$limit" ]]; then if [[ "$cmd" == sweep ]]; then limit=50; else limit=25; fi; fi
 repo=$(orch_repo "$repo")
 since=$(jq -rn --argjson now "$(orch_now)" --argjson d "$days" '$now - $d * 86400 | strftime("%Y-%m-%d")')
+# Bounded, typed, read-only lists: GraphQL, or REST where GitHub refuses GraphQL.
+gi() { "$here/gh-issues.sh" "$1" --repo "$repo" "${@:2}"; }
+read_fail() { echo "issue-candidates.sh: $1 could not be read" >&2; exit 4; }
+# Lists go to jq as files: one argument holds at most 128 KiB (bodies of 1000 PRs do not fit).
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 
 case "$cmd" in
   fixed)
-    issues=$(gh issue list --repo "$repo" --state open --limit 1000 --json number,title)
-    gh pr list --repo "$repo" --state merged --limit 300 --search "merged:>=$since" \
-      --json number,mergedAt,body,closingIssuesReferences |
-      jq -r --argjson issues "$issues" '
-        ($issues | map({key: (.number | tostring), value: .title}) | from_entries) as $open
+    issues=$(gi issues --limit 1000 --fields number,title) || read_fail "open issues"
+    merged=$(gi prs-merged --limit 300 --merged ">=$since" --fields number,mergedAt,body,closingIssuesReferences) ||
+      read_fail "merged PRs"
+    printf '%s' "$issues" >"$tmp/issues"
+    jq -r --slurpfile issues "$tmp/issues" '
+        ($issues[0] | map({key: (.number | tostring), value: .title}) | from_entries) as $open
         | [.[] | . as $pr
            | (([(.closingIssuesReferences // [])[] | {n: .number, how: "linked"}])
               + [(.body // "") | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#(\\d+)") | {n: (.[0] | tonumber), how: "body"}])
            | unique_by(.n)[] | select($open[.n | tostring])
            | [.n, $pr.number, $pr.mergedAt, .how, $open[.n | tostring]]]
-        | sort_by(.[0])[] | @tsv'
+        | sort_by(.[0])[] | @tsv' <<<"$merged"
     ;;
   dupes)
     # All leads, uncapped: cluster rows, then every pair of cluster representatives at or above
     # --min-score. Comparing one representative per word set keeps a repetitive cluster linear.
-    all=$(gh issue list --repo "$repo" --state open --limit 400 --search "updated:>=$since sort:updated-desc" \
-      --json number,title |
-      jq -r --argjson min "$min" '
+    listed=$(gi issues --limit 400 --since "$since" --fields number,title) || read_fail "open issues"
+    all=$(jq -r --argjson min "$min" '
         def words: ascii_downcase | [scan("[a-z0-9]+")]
           | map(select(length > 2 and (IN("the", "and", "for", "with", "when", "not", "does", "from", "that", "this", "into", "after", "are", "but") | not)))
           | unique;
@@ -106,7 +114,7 @@ case "$cmd" in
            | select($either > 0) | ($both / $either) as $score | select($score >= $min)
            | ["P", ($score * 100 | round / 100), $a.number, $b.number, $a.title, $b.title]]
         | ($clusters | sort_by(.[2])) + (sort_by(-.[1], .[2], .[3]))
-        | .[] | @tsv')
+        | .[] | @tsv' <<<"$listed")
     out="$(orch_state_dir "$repo")/candidates"
     mkdir -p "$out"
     full="$out/dupes-$(orch_iso "$(orch_now)" | tr -d ':').tsv"
@@ -125,26 +133,20 @@ case "$cmd" in
       }' <<<"$all"
     ;;
   sweep)
-    ghr() { "$here/gh-read.sh" --json -- "$@"; }   # bounded, typed, read-only
-    if ! listed=$(ghr issue list --repo "$repo" --state open --limit 1000 --json number,labels); then
-      echo "issue-candidates.sh: open issues could not be read" >&2; exit 4
-    fi
+    listed=$(gi issues --limit 1000 --fields number,labels) || read_fail "open issues"
     # The route labels in use that match --route; then each one's issues with their comments.
     issues='[]'
     while IFS= read -r label; do
       [[ -n "$label" ]] || continue
       # shellcheck disable=SC2053  # --route is a glob on purpose
       [[ "$label" == $route_glob ]] || continue
-      if ! got=$(ghr issue list --repo "$repo" --state open --label "$label" --limit 1000 \
-        --json number,title,labels,comments); then
-        echo "issue-candidates.sh: issues labelled $label could not be read" >&2; exit 4
-      fi
-      issues=$(jq -c --argjson more "$got" '. + $more | unique_by(.number)' <<<"$issues")
+      got=$(gi issues --label "$label" --limit 1000 --fields number,title,labels,comments) ||
+        read_fail "issues labelled $label"
+      printf '%s' "$got" >"$tmp/more"
+      issues=$(jq -c --slurpfile more "$tmp/more" '. + $more[0] | unique_by(.number)' <<<"$issues")
     done < <(jq -r '[.[].labels[]?.name | select(startswith("needs-local:"))] | unique | .[]' <<<"$listed")
-    if ! prs=$(ghr pr list --repo "$repo" --state merged --limit 1000 --search "merged:>=$since" \
-      --json number,title,mergedAt,body,closingIssuesReferences); then
-      echo "issue-candidates.sh: merged PRs could not be read" >&2; exit 4
-    fi
+    prs=$(gi prs-merged --limit 1000 --merged ">=$since" --fields number,title,mergedAt,body,closingIssuesReferences) ||
+      read_fail "merged PRs"
     # Commits on REF in the window: sha, commit date, message. No checkout -> PRs only.
     commits='[]' git_used=none
     if git -C "$checkout" rev-parse --git-dir >/dev/null 2>&1; then
@@ -158,8 +160,10 @@ case "$cmd" in
         git_used=$ref
       fi
     fi
-    all=$(jq -rn --argjson issues "$issues" --argjson prs "$prs" --argjson commits "$commits" '
-      def closes: [scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s+#(\\d+)") | .[0] | tonumber];
+    printf '%s' "$issues" >"$tmp/issues"; printf '%s' "$prs" >"$tmp/prs"; printf '%s' "$commits" >"$tmp/commits"
+    all=$(jq -rn --slurpfile issues "$tmp/issues" --slurpfile prs "$tmp/prs" --slurpfile commits "$tmp/commits" '
+      $issues[0] as $issues | $prs[0] as $prs | $commits[0] as $commits
+      | def closes: [scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s+#(\\d+)") | .[0] | tonumber];
       def mentions: [scan("#(\\d+)\\b") | .[0] | tonumber];
       def platform: if . == "android-emulator" then "android" elif . == "ios-simulator" then "ios"
         elif . == "macos-xcode" then "macos" else . end;
