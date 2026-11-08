@@ -27,7 +27,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | Path | What |
 |---|---|
 | `skills/orchestrate/SKILL.md` | The doctrine: roles and routing, isolation, briefs, evidence, the campaign loop, lane cap, merge policy, interrupts, PR lifecycle and takeover |
-| `skills/orchestrate/roles/` | Brief templates for the standing roles: merge bot, rebase bot, hygiene bot, verification, implementation lane, PR doctor, conflict lane, reviewer |
+| `skills/orchestrate/roles/` | Brief templates for the standing roles: merge bot, rebase bot, hygiene bot, local sweep, verify batch, verification, implementation lane, PR doctor, conflict lane, reviewer |
 | `skills/orchestrate/scripts/` | The scripts below, with stubbed-`gh` self-tests |
 | `agents/codex-implementer.md` | Routine implementation lane (GPT-6 Luna, `medium`): wraps one supervised `codex exec` run and verifies it |
 | `agents/sol-implementer.md` | Judgment implementation lane (GPT-6.1 Sol, `medium` or `high`): same runner and checks |
@@ -43,11 +43,12 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `pr-ready.sh` | One verdict per open PR: `READY`, `WAIT`, `BLOCK` (with reasons) or `SKIP`; falls back to smaller pages when the list times out (`PR_READY_EXTRA` names PRs to classify anyway) |
 | `pr-merge.sh` | Merge one PR after re-checking head, author, draft and fork state; honours the red-main hold; `--admin` only in the fast path and only with evidence |
 | `merge-queue.sh` | Serial local merge queue (`add`, `run-once`, `status`, `retry`): merge base in, run the check command, hand off to `pr-merge.sh`; records a per-item outcome and only `merged` satisfies dependents |
+| `merge-sensitive.sh` | Which merge-sensitive paths a PR touches, and whether it may merge: its head contains the base, or a merge-result check passes on base + head |
 | `main-health.sh` | Sets or clears the merge hold from the default branch's newest completed runs |
 | `triage-tick.sh` | One-call snapshot for a recurring triage tick (main health and classifier verdict, open PRs, merge-loop liveness, dispatch queue, free device slots, cron expiry) with one verdict line; one known-flake rerun per run, merge-loop heartbeat |
 | `campaign.sh` | Campaign ledger: merge mode, lane cap, merged-since-verification, pause label |
 | `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first; `--route` filters to one route for cloud or local dispatch |
-| `issue-candidates.sh` | Leads for already-fixed issues and duplicate titles |
+| `issue-candidates.sh` | Leads for already-fixed issues and duplicate titles; `sweep` sorts `needs-local:*` issues into A (closeable), B (fix merged, device check left), C (needs implementation) and D (unclear) |
 | `issue-close.sh` | Close an issue as fixed or duplicate, with required evidence, and log it |
 | `issue-route.sh` | Exactly one route label per actionable issue (`cloud-ready` or `needs-local:*`): route counts and unrouted/multi-routed issues, label bootstrap, and `set` with the local-work comment and a REST fallback |
 | `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid` |

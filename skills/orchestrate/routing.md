@@ -45,5 +45,13 @@ rate limit.
 - **Local lanes take only `needs-local:*`:**
   `"$SCRIPTS/issues-ranked.sh" --route 'needs-local:*' --skip-in-pr`, and only types this host can
   serve (`--route needs-local:android-emulator`).
+- **Sweep before local lanes.** Device time is scarce, and many `needs-local:*` issues are already
+  fixed on the default branch. Before the first local lane, and again about every 16 merges, run
+  the local sweep (`roles/local-sweep.md`), built on `"$SCRIPTS/issue-candidates.sh" sweep`. It
+  sorts the local issues into A (merged fix plus a PASS device verdict on every touched platform:
+  closed with evidence), B (merged fix, only device verification left), C (still needs
+  implementation) and D (unclear). Schedule B as one verify batch per platform
+  (`roles/verify-batch.md`: one device, one private daemon, a list of issues, a verdict comment per
+  issue) and give implementation lanes only C. One batch replaces a lane start per issue.
 - An unrouted issue is dispatched nowhere until it is routed. An issue whose route turns out wrong
   is re-routed with `issue-route.sh set`, never worked from both sides.
