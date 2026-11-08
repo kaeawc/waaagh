@@ -29,7 +29,8 @@ setup() {
 @test "default is idempotent for an open question and works without an issue" {
   "$SCRIPTS/decision.sh" default --repo o/r --question "keep the codex route?" --default yes
   run "$SCRIPTS/decision.sh" default --repo o/r --question "keep the codex route?" --default yes
-  [ "$status" -eq 0 ] && [[ "$output" == *"already recorded"* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already recorded"* ]]
   [ "$(grep -c 'keep the codex route' "$STATE/decisions.md")" -eq 1 ]
   [[ "$(cat "$STATE/decisions.md")" == "- [ ] keep the codex route? — default taken (2026-11-08): yes —"* ]]
 }
@@ -48,7 +49,8 @@ setup() {
 
 @test "defaults lists open stated defaults only; batch offers them as recommendations" {
   run "$SCRIPTS/decision.sh" defaults --repo o/r
-  [ "$status" -eq 0 ] && [ "$output" = "no stated defaults" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "no stated defaults" ]
   mkdir -p "$STATE"
   cat >"$STATE/decisions.md" <<'EOF'
 - [ ] #3 split the parser? — split / keep — recommend: split — blocks #4
