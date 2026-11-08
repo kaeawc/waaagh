@@ -15,6 +15,10 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    threads; all pages). Classify each item: (a) actionable defect or requested change, (b)
    question or nit needing no code, (c) not applicable — wrong, already done, or against the
    repo's conventions.
+   **Regression check first.** Before you file, resolve or answer any finding (any round), decide
+   whether it is a regression of existing behaviour (`{{SCRIPTS}}/../regression-gates.md`). If it
+   is, do not file it as a follow-up: fix it in this PR's pass, or, with the pass consumed, report
+   the PR as held with the finding.
    **Later-round threads (one review round per PR).** `{{SCRIPTS}}/review-followup.sh list --repo
    {{REPO}} --pr <n>` classifies every unresolved, current review thread as `first` (the PR's
    first review round), `later` (started after that round) or `own` (the author's). `first`

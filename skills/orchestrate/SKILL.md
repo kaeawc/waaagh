@@ -196,6 +196,8 @@ Act on it or surface the disagreement to the user.
   local-only until a post-merge run on the default branch completes. A run cancelled by a
   concurrency group is a cancellation, not a failure.
 - Lane reports are claims. Read the diff and spot-check the quoted verification against the tree.
+  Before relaying "merged", "closed", "verified" or "no device check needed" to the owner, confirm
+  it with one read of the source of truth (`scripts/claim-check.sh`; `regression-gates.md`).
 
 ## Campaign state
 
@@ -551,6 +553,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
    cannot, so cloud briefs say reply on each thread and do not resolve; after each repair,
    `scripts/thread-sweep.sh resolve` settles threads whose last reply links an issue or names a
    pushed fix.
+   **Regression gates** (`regression-gates.md`): before resolving or filing any review finding,
+   check whether it is a regression of existing behaviour; if so, hold the PR and fix it first.
+   A PR fixing a device-found regression carries `needs-device-recheck` until a device run on its
+   head passes (`scripts/device-recheck.sh`).
 6. **Merge** per the policy table, through `pr-merge.sh`.
 
 ## PR watch and takeover (the user's own PRs only)

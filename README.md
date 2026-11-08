@@ -57,6 +57,8 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `review-followup.sh` | One review round per PR: classify unresolved review threads as first-round, later-round or the author's; file a later-round thread as a follow-up issue (or append it to one with the same root cause), reply `follow-up #N`, resolve it and route the issue `cloud-ready` |
 | `thread-resolve.sh` | Reply once (marker-keyed) on one review thread and resolve it, with readback and typed exits |
 | `thread-sweep.sh` | Find review threads whose last reply links an issue or names a pushed fix (resolve-now vs repair per PR) and resolve them locally; cloud sessions reply but cannot resolve |
+| `device-recheck.sh` | Device-recheck hold: a PR that fixes a device-found regression (linked issue labelled `manual-test-regression`) carries `needs-device-recheck` until a device run on its current head passes; posts the result on the PR and each issue |
+| `claim-check.sh` | Confirm a delegated claim (merged, open, closed, evidence comment, no device check needed) with one read of the source of truth before relaying it |
 | `issue-route.sh` | Exactly one route label per actionable issue (`cloud-ready` or `needs-local:*`): route counts and unrouted/multi-routed issues, label bootstrap, and `set` with the local-work comment and a REST fallback |
 | `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid`; records the holder's serials or UDIDs and `check`s ownership (AVD suffix, simctl) before device commands |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
