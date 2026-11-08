@@ -6,9 +6,20 @@
 
 orch_now() { echo "${ORCHESTRATE_NOW:-$(date +%s)}"; }
 
-# orch_repo [OWNER/REPO] -> OWNER/REPO (falls back to the checkout's repository).
+# orch_repo [OWNER/REPO] -> OWNER/REPO (falls back to the checkout's repository). A checkout with
+# exactly one remote, on github.com, and no `gh repo set-default` choice is read from git with no
+# API call; anything else (several remotes, a chosen default, another host) is left to gh, which
+# knows how to pick among remotes.
 orch_repo() {
-  if [[ -n "${1:-}" ]]; then echo "$1"; else gh repo view --json nameWithOwner | jq -r .nameWithOwner; fi
+  if [[ -n "${1:-}" ]]; then echo "$1"; return; fi
+  local urls slug
+  if urls=$(git config --get-regexp '^remote\..*\.url$' 2>/dev/null) && [[ -n "$urls" && "$urls" != *$'\n'* ]] &&
+    ! git config --get-regexp '^remote\..*\.gh-resolved$' >/dev/null 2>&1; then
+    slug=$(sed -nE 's#^[^ ]+ (https://|ssh://)?(git@)?github\.com[:/]([^/]+/[^/]+)$#\3#p' <<<"$urls")
+    slug=${slug%.git}
+    if [[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then echo "$slug"; return; fi
+  fi
+  gh repo view --json nameWithOwner | jq -r .nameWithOwner
 }
 
 # The login whose PRs this orchestrator may drive.
