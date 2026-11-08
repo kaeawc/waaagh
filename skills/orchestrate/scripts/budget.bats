@@ -1,11 +1,24 @@
 #!/usr/bin/env bats
 # Output-budget ceilings over bench.sh's deterministic fixtures. A change that makes a helper put
-# more in front of a model, or call gh more, fails here. Run: bats budget.bats
+# more in front of a model, or call gh more, fails here. Also bench.sh --timing (#176): seconds and
+# jq process counts per case, as two extra columns; without the flag the TSV is byte-identical to the
+# four-column output the ceilings read. Run: bats budget.bats
 
 setup_file() {
+  load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-  "$SCRIPTS/bench.sh" >"$BATS_FILE_TMPDIR/bench.tsv"
-  export BENCH="$BATS_FILE_TMPDIR/bench.tsv"
+  # One plain run and one --timing run, side by side (#180): the ceilings read the plain TSV, the
+  # --timing checks compare the two. Each run works in its own mktemp dir.
+  "$SCRIPTS/bench.sh" >"$BATS_FILE_TMPDIR/bench.tsv" &
+  local plain=$!
+  "$SCRIPTS/bench.sh" --timing >"$BATS_FILE_TMPDIR/timing.tsv"
+  wait "$plain"
+}
+
+setup() {
+  load test_helper
+  SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
+  BENCH="$BATS_FILE_TMPDIR/bench.tsv" TIMING="$BATS_FILE_TMPDIR/timing.tsv"
 }
 
 metric() { awk -F'\t' -v c="$1" -v col="$2" 'NR == 1 { for (i = 1; i <= NF; i++) k[$i] = i; next } $1 == c { print $k[col] }' "$BENCH"; }
@@ -71,4 +84,39 @@ within() { # CASE COLUMN MAX
 @test "review-gate check with a fresh snapshot row and no review reads only the comments" {
   within review-gate-check-cold gh_calls 3
   within review-gate-check-snapshot gh_calls 1
+}
+
+# --- bench.sh --timing (#176) ---
+
+col() { awk -F'\t' -v c="$1" -v col="$2" 'NR == 1 { for (i = 1; i <= NF; i++) k[$i] = i; next } $1 == c { print $k[col] }' "$TIMING"; }
+
+@test "without --timing the header keeps exactly the four budget columns" {
+  [ "$(sed -n 1p "$BENCH")" = "$(printf 'case\tstdout_bytes\trows\tgh_calls')" ]
+  [ "$(awk -F'\t' 'NF != 4' "$BENCH" | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "--timing appends seconds and jq_calls, leaving the first four columns as they were" {
+  [ "$(sed -n 1p "$TIMING")" = "$(printf 'case\tstdout_bytes\trows\tgh_calls\tseconds\tjq_calls')" ]
+  [ "$(cut -f1-4 "$TIMING")" = "$(cat "$BENCH")" ]
+  [ "$(awk -F'\t' 'NR > 1 && ($5 !~ /^[0-9]+\.[0-9][0-9]$/ || $6 !~ /^[0-9]+$/)' "$TIMING" | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "--timing counts the scripts' jq processes, not the stub gh's" {
+  # excerpt.sh and the lane waiter start no jq; issue-candidates.sh's jq calls are counted though
+  # the stub serves its gh call with jq too.
+  [ "$(col excerpt-20k-failures jq_calls)" -eq 0 ]
+  [ "$(col lane-wait-unchanged jq_calls)" -eq 0 ]
+  [ "$(col dupes-400-identical jq_calls)" -gt 0 ]
+  # REST pr-ready reads per PR, so it starts more jq processes than the GraphQL path.
+  [ "$(col pr-ready-rest-100-ready jq_calls)" -gt "$(col pr-ready-100-ready jq_calls)" ]
+}
+
+@test "-h prints the header, which documents --timing; an unknown argument exits 2" {
+  run "$SCRIPTS/bench.sh" -h
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--timing"* ]]
+  [[ "$output" == *"Exit: 0 done, 2 bad usage."* ]]
+  run "$SCRIPTS/bench.sh" --timing --nope
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown argument: --nope"* ]]
 }
