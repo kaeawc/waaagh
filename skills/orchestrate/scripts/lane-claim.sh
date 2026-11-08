@@ -6,6 +6,8 @@
 #        lane-claim.sh add   --worktree DIR --branch B --issues N[,M] --files PATH[,PATH]
 #                            [--agent NAME] [--repo OWNER/REPO]
 #        lane-claim.sh set   --worktree DIR --status STATUS [--repo OWNER/REPO]
+#        lane-claim.sh on-issue --issues N[,M] [--repo OWNER/REPO]
+#        lane-claim.sh closed [--repo OWNER/REPO]
 #   check  reads the active rows of lanes.tsv and every open PR (its closing issues, "#N" in its
 #          title or body, and its changed files) and prints "ok" or one "conflict: ..." line per
 #          overlap. A path ending in "/" covers everything under it.
@@ -14,8 +16,14 @@
 #          Lane branches are named work/<first issue>-<slug>; add notes any other name on stderr
 #          (not refused: the merge loop selects PRs by author and readiness, never by branch name).
 #   set    sets a lane's status (last column), e.g. merged, closed, done, abandoned: those end it.
+#   on-issue  prints one "stop: lane WT branch B agent A issue N" line per active lane on one of
+#          the issues (nothing when none); issue-close.sh runs it after every close.
+#   closed prints the same stop lines for every active lane any of whose issues is now closed on
+#          GitHub, however it closed (merged PR, owner, sweep). Send each lane a stop message, then
+#          `set --status closed` once it has stopped.
 # lanes.tsv columns: worktree  branch  issues  files  agent  status
-# Exit: 0 ok | 3 conflict | 4 the open PRs could not be read (no verdict; see gh-read.sh) | 2 usage
+# Exit: 0 ok | 3 conflict | 4 the open PRs (check, add) or an issue (closed: the others are still
+#       printed) could not be read; no verdict, see gh-read.sh | 2 usage
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
@@ -33,15 +41,17 @@ while (($#)); do
     --branch) branch=$2; shift 2 ;;
     --agent) agent=$2; shift 2 ;;
     --status) status=$2; shift 2 ;;
-    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "lane-claim.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$cmd" in
-  check) [[ -n "$issues$files" ]] || { sed -n '2,18p' "$0" >&2; exit 2; } ;;
-  add) [[ -n "$worktree" && -n "$branch" && -n "$issues$files" ]] || { sed -n '2,18p' "$0" >&2; exit 2; } ;;
-  set) [[ -n "$worktree" && -n "$status" ]] || { sed -n '2,18p' "$0" >&2; exit 2; } ;;
-  *) sed -n '2,18p' "$0" >&2; exit 2 ;;
+  check) [[ -n "$issues$files" ]] || { sed -n '2,26p' "$0" >&2; exit 2; } ;;
+  add) [[ -n "$worktree" && -n "$branch" && -n "$issues$files" ]] || { sed -n '2,26p' "$0" >&2; exit 2; } ;;
+  set) [[ -n "$worktree" && -n "$status" ]] || { sed -n '2,26p' "$0" >&2; exit 2; } ;;
+  on-issue) [[ -n "$issues" ]] || { sed -n '2,26p' "$0" >&2; exit 2; } ;;
+  closed) ;;
+  *) sed -n '2,26p' "$0" >&2; exit 2 ;;
 esac
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
@@ -107,8 +117,36 @@ set_status() {
   echo "lane $worktree: $status"
 }
 
+# active_rows: the lanes that have not ended, as worktree<TAB>branch<TAB>issues<TAB>agent.
+active_rows() {
+  awk -F'\t' -v OFS='\t' '!/^#/ && NF >= 6 && $NF !~ /^(done|merged|closed|abandoned)$/ { print $1, $2, $3, $5 }' "$lanes"
+}
+# stop_lines ISSUES: one stop line per active lane on any of the comma-separated issues.
+stop_lines() {
+  local wt br iss ag i
+  while IFS=$'\t' read -r wt br iss ag; do
+    for i in ${iss//,/ }; do
+      if [[ ",$1," == *",$i,"* ]]; then echo "stop: lane $wt branch $br agent $ag issue $i"; fi
+    done
+  done < <(active_rows)
+}
+closed_lanes() {
+  local all i st rc=0 shut=""
+  all=$(active_rows | cut -f3 | tr ',' '\n' | awk 'NF && !seen[$0]++')
+  for i in $all; do
+    if ! st=$(orch_read_retry 3 gh issue view "$i" --repo "$repo" --json state); then
+      echo "unverified: issue $i could not be read" >&2; rc=4; continue
+    fi
+    [[ "$(jq -r .state <<<"$st")" != CLOSED ]] || shut+="$i,"
+  done
+  [[ -z "$shut" ]] || stop_lines "${shut%,}"
+  return "$rc"
+}
+
 case "$cmd" in
   check) check_and echo ok ;;
+  on-issue) stop_lines "$issues" ;;
+  closed) closed_lanes ;;
   add) with_lock check_and append ;;
   set) with_lock set_status ;;
 esac

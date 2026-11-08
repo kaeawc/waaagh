@@ -31,7 +31,8 @@ assign, create issues, or touch pull requests. At most 15 closes per pass.
    - fix clusters — issues one lane would fix together, the files it would touch, size S/M/L,
      whether it is unit-testable without a device, and what needs a device check;
    - cluster pairs that touch the same files and must not run in parallel;
-   - owner decisions needed — one sentence and the options each;
+   - owner decisions needed — one line each in the `decisions.md` format
+     (`- [ ] #N question — options — recommend: X — what it blocks`, `{{SCRIPTS}}/../owner-decisions.md`);
    - proposed closes you are not allowed to make, with the reason.
    And `{{STATE}}/hygiene/<date>-lanes.tsv`: `rank  issues  area  files  size  device-check  objective`,
    ranked by user impact (wrong result reported as success, lost or duplicated action, hang, leak
@@ -40,5 +41,5 @@ assign, create issues, or touch pull requests. At most 15 closes per pass.
 
 ## Report (under 300 words)
 Counts (read, closed fixed, closed duplicate, labelled, clusters, owner decisions); every close as
-`N → fixed by P` / `N → dup of M`; the top 12 lanes with issues and file sets; lane conflicts; the
+`N → fixed by P` / `N → dup of M`; every `stop: lane ...` line `issue-close.sh` printed, verbatim; the top 12 lanes with issues and file sets; lane conflicts; the
 owner-decision questions.

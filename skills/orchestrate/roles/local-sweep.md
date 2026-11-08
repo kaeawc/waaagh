@@ -45,5 +45,6 @@ or touch pull requests or devices.
    stay implementation work for local lanes, ranked as usual.
 
 ## Report (under 250 words)
-Bucket counts before and after your D pass; closes made (`N — PR — evidence`); proposed closes;
-the batches file path with issues per platform; D items still open with their blocking question.
+Bucket counts before and after your D pass; closes made (`N — PR — evidence`) and every
+`stop: lane ...` line they printed; proposed closes; the batches file path with issues per
+platform; D items still open with their blocking question.
