@@ -135,9 +135,24 @@ while :; do
     awk -v h="$work/headers" -v b="$body" 'NR == 1 { next } found { print >b; next }
       /^\r?$/ { found = 1; next } { gsub(/\r/, ""); print >h }' "$work/out"
   fi
-  if ((rc == 0)) && { [[ "$want_json" == no ]] || jq -e . "$body" >/dev/null 2>&1; }; then
+  if ((rc == 0)) && [[ "$want_json" == no ]]; then
     cat "$body"
     exit 0
+  fi
+  if ((rc == 0)); then
+    # --json: one jq both checks and prints the body (#177). It accepts what `jq -e .` accepts (one
+    # or more JSON values, the last neither null nor false) and prints the raw bytes unchanged. jq
+    # reads raw text as UTF-8 and turns invalid bytes into U+FFFD, so a body that holds U+FFFD
+    # (rare) is printed by cat instead, keeping the output byte-identical.
+    jrc=0
+    jq -nje --rawfile r "$body" --slurpfile v "$body" \
+      'if ($v | length) == 0 or ($v[-1] | . == null or . == false) then empty
+       elif ($r | contains("\ufffd")) then "" | halt_error(10) else $r end' 2>/dev/null || jrc=$?
+    if ((jrc == 10)); then cat "$body"; exit 0; fi
+    ((jrc != 0)) || exit 0
+    # Nothing printed: malformed, unless the body is JSON and writing it failed (a closed reader,
+    # 141 where SIGPIPE kills, as cat did before). Only failures pay for this second check.
+    if jq -e . "$body" >/dev/null 2>&1; then exit "$jrc"; fi
   fi
 
   # A failure, or output that is not JSON: read the status, request id and rate-limit timing.
