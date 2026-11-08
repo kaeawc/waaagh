@@ -14,11 +14,17 @@
 #            Last line, on stderr (with --summary, the only line, on stdout):
 #              threads unresolved=<n> answered=<n> resolve-now=#a,#b|- repair=#c|-
 #            resolve-now: every unresolved thread on the PR is answered, so resolving them is all it
-#            needs (not a repair target). repair: at least one thread is open. A PR with more than
-#            100 review threads is never resolve-now.
+#            needs (not a repair target). repair: at least one thread is open. Over GraphQL a PR
+#            with more than 100 review threads is never resolve-now.
 #   resolve  resolve each answered thread on PR N with thread-resolve.sh (no new reply: the answer
 #            is already on the thread); open threads are left alone. Prints thread-resolve.sh's
 #            lines, then "pr=<n> resolved=<n> open=<n> failed=<n>".
+# GraphQL first; where GitHub refuses it (Claude Code cloud sessions) the same scan runs over REST
+# (orch_gh_api / orch_gh_refused in _lib.sh, ORCHESTRATE_GH_API=auto|rest|graphql): the open PRs
+# from gh-rest-pr.sh list, each PR's threads from gh-rest-pr.sh thread-nodes (ccr/review_threads,
+# pulls/<n>/comments, pulls/<n>/commits; every page, so no 100-thread cap). Same answers; the
+# thread-id column is then the REST id of the thread's first comment, which thread-resolve.sh
+# resolves over REST.
 # Exit: 0 ok | 2 usage | 4 a read failed | 5 a resolve failed (rerun finishes it) |
 #       9 a resolve's outcome is unknown (rerun reconciles).
 set -euo pipefail
@@ -27,7 +33,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,23p' "$0"; }
+usage() { sed -n '2,29p' "$0"; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" pr="" summary=no dry=no
@@ -47,19 +53,23 @@ case "$cmd" in
   -h | --help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
+api=$(orch_gh_api thread-sweep.sh) || exit 2
 repo=$(orch_repo "$repo")
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 
 fields='number commits(last:100){nodes{commit{oid}}}
   reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated
     starter: comments(first:1){nodes{author{login} url}}
     latest: comments(last:1){totalCount nodes{author{login} body}}}}'
-# prs_json -> a JSON array of pull request nodes (every open PR, or PR $pr).
-prs_json() {
+# prs_graphql -> a JSON array of pull request nodes (every open PR, or PR $pr). A failed read
+# returns gh-read.sh's exit code, with its stderr in $work/err.
+prs_graphql() {
   local page cursor="" first=yes all="[]" args
   if [[ -n "$pr" ]]; then
     page=$("$here/gh-read.sh" --json --tries 3 -- api graphql -F owner="${repo%%/*}" -F name="${repo##*/}" \
       -F pr="$pr" -f query="query(\$owner:String!,\$name:String!,\$pr:Int!){repository(owner:\$owner,name:\$name){
-        pullRequest(number:\$pr){$fields}}}" 2>/dev/null) || return 1
+        pullRequest(number:\$pr){$fields}}}" 2>"$work/err") || return
     jq -ce '.data.repository.pullRequest | select(.reviewThreads.nodes | type == "array") | [.]' <<<"$page"
     return
   fi
@@ -69,12 +79,36 @@ prs_json() {
       repository(owner:\$owner,name:\$name){pullRequests(states:OPEN,first:25,after:\$cursor){
         pageInfo{hasNextPage endCursor} nodes{$fields}}}}")
     [[ -z "$cursor" ]] || args+=(-f cursor="$cursor")
-    page=$("$here/gh-read.sh" --json --tries 3 -- api graphql "${args[@]}" 2>/dev/null) &&
-      jq -e '.data.repository.pullRequests.nodes | type == "array"' >/dev/null 2>&1 <<<"$page" || return 1
+    page=$("$here/gh-read.sh" --json --tries 3 -- api graphql "${args[@]}" 2>"$work/err") || return
+    jq -e '.data.repository.pullRequests.nodes | type == "array"' >/dev/null 2>&1 <<<"$page" || return 1
     all=$(jq -c --argjson p "$page" '. + $p.data.repository.pullRequests.nodes' <<<"$all")
     cursor=$(jq -r '.data.repository.pullRequests.pageInfo | if .hasNextPage then (.endCursor // "") else "" end' <<<"$page")
   done
   echo "$all"
+}
+
+# prs_rest -> the same array over REST: the open PRs (gh-rest-pr.sh list), then each one's threads
+# with their comments and commits (gh-rest-pr.sh thread-nodes).
+prs_rest() {
+  local nums n
+  if [[ -n "$pr" ]]; then nums=$pr
+  else nums=$("$here/gh-rest-pr.sh" list --repo "$repo" 2>/dev/null | jq -r '.[].number') || return 1; fi
+  : >"$work/nodes"
+  for n in $nums; do
+    "$here/gh-rest-pr.sh" thread-nodes --repo "$repo" --pr "$n" 2>/dev/null >>"$work/nodes" || return 1
+  done
+  jq -sc . "$work/nodes"
+}
+
+# prs_json -> the array: GraphQL first (orch_gh_api), REST when GitHub refuses GraphQL.
+prs_json() {
+  local rc=0 out
+  if [[ "$api" == graphql ]]; then
+    out=$(prs_graphql) || rc=$?
+    if ((rc == 0)); then echo "$out"; return; fi
+    orch_gh_refused "$rc" "$(cat "$work/err")" || return 1
+  fi
+  prs_rest
 }
 
 prs=$(prs_json) || {

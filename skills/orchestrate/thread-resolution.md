@@ -39,6 +39,13 @@ reply yet, the reviewer spoke last (the answer was disputed), or a reply that na
 `resolveReviewThread`, reads the thread back, and logs it to `<state dir>/thread-actions.log`; it
 posts no new reply. Exit 5 or 9: rerun the same command; it reconciles.
 
+Where GitHub refuses GraphQL (an orchestrator that itself runs in a cloud session), both commands
+work over REST on their own (#136): `scan` reads `ccr/review_threads` with the PR's review comments
+and commits (`gh-rest-pr.sh thread-nodes`) and prints the same answers, with the thread's first
+comment id in place of the `PRRT_` id; `resolve` then calls
+`POST /pulls/{n}/ccr/comments/{id}/resolve`, reads the thread back and journals it the same way. A
+cloud *repair* session still does not resolve: the auto-mode classifier denies that route there.
+
 An `open` thread is a real repair target: a fix pass (local) or a cloud repair brief with the
 paragraph above. Threads that arrive after the first review round go through
 `review-followup.sh` instead (`roles/pr-doctor.md`).

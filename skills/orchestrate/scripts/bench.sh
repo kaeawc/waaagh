@@ -55,6 +55,7 @@ case "$*" in
   *"/check-runs"*) echo '{"total_count":1,"check_runs":[{"name":"build","status":"completed","conclusion":"success","started_at":"2026-09-27T01:00:00Z"}]}' ;;
   *"/status"*) echo '{"state":"pending","statuses":[]}' ;;
   "issue list"*) cat "$FX/issues.json" ;;
+  "api repos/o/r/issues?"*) cat "$FX/issues.json" ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 STUB
