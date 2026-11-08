@@ -48,6 +48,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `main-health.sh` | Sets or clears the merge hold from the default branch's newest completed runs |
 | `triage-tick.sh` | One-call snapshot for a recurring triage tick (main health and classifier verdict, open PRs, merge-loop liveness, dispatch queue, free device slots, cron expiry, answered review threads to resolve now) with one verdict line; one known-flake rerun per run, merge-loop heartbeat |
 | `campaign.sh` | Campaign ledger: merge mode, lane cap, merged-since-verification, pause label |
+| `loops.sh` | Long-lived campaign loops installed in `<state dir>/bin/` (never a session scratchpad), a per-pass heartbeat in `<state dir>/loops/`, and the startup status: last pass N min ago, alive/stale/dead/ended/never, exit 3 when a loop is not running and 4 when its script is not installed |
 | `counters.sh` | Cumulative campaign counters in the ledger (merged, dispatched, closed, owner blockers; today and campaign total) for the tick report (`skills/orchestrate/reporting.md`) |
 | `learning.sh` | Campaign learnings: one file per owner rule or procedural fix, an index in the ledger, `brief --role` for briefs, consolidation (`supersede`, `retire`) and `upstream` of repo-agnostic ones as waaagh issues (`skills/orchestrate/learnings.md`) |
 | `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first; `--route` filters to one route for cloud or local dispatch |
@@ -74,7 +75,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
 | `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue), the standard implement/repair briefs kept in the target repo (`briefs install`/`check`, templates in `skills/orchestrate/briefs/`), one-line `--brief-ref` prompts, and `created` to keep only the trigger id from a create response |
-| `loops.sh` | Long-lived campaign loops installed in `<state dir>/bin/` (never a session scratchpad), a per-pass heartbeat in `<state dir>/loops/`, and the startup status: last pass N min ago, alive/stale/dead/ended/never, exit 3 when a loop is not running and 4 when its script is not installed |
+| `open-blockers.sh` | One blocker check before any lane or cloud dispatch: native `blocked by` links plus "Blocked by #N" body lines, each blocker's state looked up; `<n> BLOCKED by #a #b` or `<n> clear` (exit 3 blocked, 4 unreadable); `issues-ranked.sh --drop-blocked` drops blocked candidates and ranks routable blockers in their place |
 
 ## Defaults
 
