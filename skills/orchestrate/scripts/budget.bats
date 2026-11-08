@@ -51,3 +51,22 @@ within() { # CASE COLUMN MAX
   within lane-wait-unchanged stdout_bytes 100
   within lane-wait-unchanged rows 1
 }
+
+@test "triage-tick snapshot with 50 open PRs takes the count and last reviews from one snapshot call" {
+  # main health, gh-snapshot.sh (one GraphQL page), the PR list for closing references, the issue
+  # list, then thread-sweep.sh at 25 PRs a page: 6 calls (#118).
+  within triage-tick-50-open gh_calls 6
+  within triage-tick-50-open rows 8
+}
+
+@test "triage-tick snapshot over REST (GraphQL refused) costs a constant plus three calls per open PR" {
+  # main health, the refused snapshot GraphQL page, the REST open list, then per PR check-runs,
+  # status and reviews (gh-snapshot.sh unchanged), then the refused PR list and thread sweep.
+  within triage-tick-rest-50-open gh_calls 155
+  within triage-tick-rest-50-open rows 8
+}
+
+@test "review-gate check with a fresh snapshot row and no review reads only the comments" {
+  within review-gate-check-cold gh_calls 3
+  within review-gate-check-snapshot gh_calls 1
+}
