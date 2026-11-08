@@ -16,7 +16,8 @@
 #   gh-read: <class> status=<http|-> request-id=<id|-> retry-at=<iso|-> msg=<sanitized message>
 # Exit: 0 ok | 2 not a read / usage | 3 not-found (404, 410) | 4 auth (401) | 5 forbidden (403
 #   without a rate limit) | 6 rate-limited (wait longer than the budget; see retry-at) |
-#   7 transient (5xx, network, timeout; budget or tries exhausted) | 8 malformed (not JSON)
+#   7 transient (5xx, network, timeout; budget or tries exhausted) | 8 malformed (not JSON) |
+#   9 budget (the local pacer gh-budget.sh refused the call: skip this pass until retry-at)
 # A rate limit is recorded in <state root>/gh-cooldown, so other lanes on this host wait for the
 # same reset instead of each probing GitHub. Env: ORCHESTRATE_STATE_DIR (state root),
 # GH_READ_FAKE_SLEEP=1 (tests: waits are logged to stderr as "gh-read: wait <s>", not slept),
@@ -31,11 +32,11 @@ while (($#)); do
     --tries) tries=$2; shift 2 ;;
     --json) want_json=yes; shift ;;
     --) shift; break ;;
-    -h | --help) sed -n '2,23p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "gh-read: unknown argument: $1 (put gh arguments after --)" >&2; exit 2 ;;
   esac
 done
-(($#)) || { sed -n '2,23p' "$0" >&2; exit 2; }
+(($#)) || { sed -n '2,24p' "$0" >&2; exit 2; }
 
 # --- only reads -------------------------------------------------------------------------------
 not_read() { echo "gh-read: refused: not a read: gh $*" >&2; exit 2; }
@@ -98,6 +99,15 @@ if [[ -f "$cooldown" ]]; then
   fi
 fi
 
+# Under the gh shim (gh-budget.sh), a pacing wait happens inside the attempt timeout: keep it to
+# half of it, so a longer wait comes back as a typed budget refusal instead of a killed call.
+half=$((timeout / 2 > 0 ? timeout / 2 : 1))
+for v in GH_BUDGET_MAX_WAIT GH_BUDGET_HIGH_MAX_WAIT; do
+  cur=${!v:-$half}
+  [[ "$cur" =~ ^[0-9]+$ ]] && ((cur <= half)) || cur=$half
+  export "$v=$cur"
+done
+
 is_api=no
 [[ "$1" == api ]] && is_api=yes
 work=$(mktemp -d)
@@ -141,6 +151,9 @@ while :; do
       exit 0
     fi
   elif ((rc == 142)); then class=timeout
+  elif ((rc == 75)) && grep -q '^gh-budget: ' "$work/err"; then
+    at=$({ grep -oE 'retry-at=[^ ]+' "$work/err" || true; } | tail -1 | cut -d= -f2)
+    fail budget - - "${at:--}" "$(grep '^gh-budget: ' "$work/err" | tail -1)" 9
   else
     case "$status" in
       404 | 410) fail not-found "$status" "$reqid" - "$msg" 3 ;;

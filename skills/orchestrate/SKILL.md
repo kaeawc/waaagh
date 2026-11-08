@@ -482,6 +482,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   `transient`, `malformed`), and one rate-limit cooldown shared by every lane on the host. A
   `rate-limited` result past the pass budget means: stop GitHub work until `retry-at`, do not
   retry in a loop. It never runs a write; writes are journaled and reconciled (`ops/`).
+- Pace the API budget across every local caller (`skills/orchestrate/gh-budget.md`): run loops with
+  `ORCHESTRATE_GH_BUDGET=1` so all `gh` calls go through `gh-budget.sh` by priority; a `budget`
+  result (exit 9, or 75 from the pacer) means skip the pass until `retry-at`. Take one
+  `gh-snapshot.sh` per pass instead of per-PR reads, and keep `gh run list` out of loops.
 - A classifier that reads only PR workflows misses push and default-branch runs; feed it both.
 - On slow platforms, setup and hook timeouts often surface as unnamed or anonymous failures:
   triage them as timeout headroom, not regression.

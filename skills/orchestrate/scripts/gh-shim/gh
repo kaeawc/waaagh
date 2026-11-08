@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# gh shim: put this directory first on PATH (sourcing _lib.sh with ORCHESTRATE_GH_BUDGET=1 does it)
+# and every `gh` call, including third-party and skill scripts nobody edited, runs through
+# gh-budget.sh at priority GH_BUDGET_PRIORITY (default normal). The shim drops itself from PATH
+# before the real gh runs; a call made under gh-budget.sh (GH_BUDGET_ACTIVE=1) goes straight to gh.
+set -euo pipefail
+self=$(cd "$(dirname "$0")" && pwd -P)
+keep=""
+IFS=: read -r -a parts <<<"$PATH"
+for p in ${parts[@]+"${parts[@]}"}; do
+  [[ -n "$p" && "$(cd "$p" 2>/dev/null && pwd -P)" != "$self" ]] || continue
+  keep="${keep:+$keep:}$p"
+done
+export PATH="$keep"
+if [[ "${GH_BUDGET_ACTIVE:-0}" == 1 ]]; then exec gh "$@"; fi
+exec "$self/../gh-budget.sh" run "${GH_BUDGET_PRIORITY:-normal}" -- "$@"
