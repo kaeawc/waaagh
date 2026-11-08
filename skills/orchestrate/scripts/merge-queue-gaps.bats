@@ -5,18 +5,19 @@
 # a dirty worktree, an unreadable known PR, a SKIP readiness row, and status/retry edge cases.
 # Real git against a local bare origin, stubbed gh. Run: bats scripts/merge-queue-gaps.bats
 
+# The origin and seed fixture: built once per file, copied per test (test_helper.bash, #112).
+setup_file() {
+  load test_helper
+  seed_origin_template
+}
+
 setup() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1790510400 ORCHESTRATE_READ_SLEEP=0
   unset ORCHESTRATE_REVIEW_BOTS ORCHESTRATE_REVIEW_EVERY ORCHESTRATE_REVIEW_PROBE_EVERY MERGE_QUEUE_CHECK_CMD MERGE_QUEUE_ADMIN_EVIDENCE MERGE_QUEUE_ADMIN_CHECKS ORCHESTRATE_DIRECT_MERGE \
     ORCHESTRATE_MERGE_SENSITIVE ORCHESTRATE_GENERATED_FILES ORCHESTRATE_FAST_PATH_OVER ORCHESTRATE_ADMIN_MERGE
-  git init -q --bare -b main "$BATS_TEST_TMPDIR/origin.git"
-  git clone -q "$BATS_TEST_TMPDIR/origin.git" "$BATS_TEST_TMPDIR/seed" 2>/dev/null
-  echo base >"$BATS_TEST_TMPDIR/seed/f.txt"
-  git -C "$BATS_TEST_TMPDIR/seed" add f.txt
-  git -C "$BATS_TEST_TMPDIR/seed" commit -qm init
-  git -C "$BATS_TEST_TMPDIR/seed" push -q origin HEAD:main
+  seed_origin_copy
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
   # Fixture switches in $FX:

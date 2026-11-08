@@ -16,7 +16,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/fx"
 cat >"$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$(printf '%s' "$*" | tr '\n' ' ')" >>"$FX/calls"   # one line per call
+all="$*"; printf '%s\n' "${all//$'\n'/ }" >>"$FX/calls"   # one line per call
 case "$*" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   *rules/branches*) echo '[]' ;;

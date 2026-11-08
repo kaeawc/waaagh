@@ -58,7 +58,7 @@ case "$1 ${2:-}" in
           [[ "$graphql" == no || "${!j:-}" != *mutation* ]] || not_read "$@" ;;
       esac
     done
-    method=$(tr '[:lower:]' '[:upper:]' <<<"$method")
+    [[ -z "$method" ]] || method=$(tr '[:lower:]' '[:upper:]' <<<"$method")
     if [[ "$graphql" == no ]]; then
       [[ -n "$method" ]] || { [[ "$fields" == yes ]] && method=POST || method=GET; }
       [[ "$method" == GET ]] || not_read "$@"
@@ -71,9 +71,10 @@ esac
 state_root=${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}
 cooldown="$state_root/gh-cooldown"
 fake=${GH_READ_FAKE_SLEEP:-0}
-clock_base=${ORCHESTRATE_NOW:-$(date +%s)}
+clock_base=${ORCHESTRATE_NOW:-${EPOCHSECONDS:-$(date +%s)}}
 waited=0
-now() { if [[ "$fake" == 1 ]]; then echo $((clock_base + waited)); else date +%s; fi; }
+# EPOCHSECONDS (bash 5) saves a date process per read; bash 3.2 falls back to date.
+now() { if [[ "$fake" == 1 ]]; then echo $((clock_base + waited)); elif [[ -n "${EPOCHSECONDS:-}" ]]; then echo "$EPOCHSECONDS"; else date +%s; fi; }
 start=$(now)
 elapsed() { echo $(($(now) - start)); }
 iso() { jq -rn --argjson t "$1" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")'; }
@@ -124,34 +125,39 @@ while :; do
   # In a subshell with its own stderr, so the shell's "Alarm clock" notice stays out of the output.
   (perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$timeout" gh "${args[@]}" >"$work/out" 2>"$work/err"; exit $?) 2>/dev/null || rc=$?
 
-  # Split headers (api --include) from the body.
+  # Split headers (api --include) from the body in one pass. Every read of every helper comes
+  # through here, so the success path spawns as few processes as it can (#112).
+  first="" headers=no body="$work/out"
+  IFS= read -r first <"$work/out" || true
+  if [[ "$is_api" == yes && "$first" =~ ^HTTP/[0-9.]+\ [0-9]{3} ]]; then
+    headers=yes body="$work/body"
+    : >"$work/headers"; : >"$body"
+    awk -v h="$work/headers" -v b="$body" 'NR == 1 { next } found { print >b; next }
+      /^\r?$/ { found = 1; next } { gsub(/\r/, ""); print >h }' "$work/out"
+  fi
+  if ((rc == 0)) && { [[ "$want_json" == no ]] || jq -e . "$body" >/dev/null 2>&1; }; then
+    cat "$body"
+    exit 0
+  fi
+
+  # A failure, or output that is not JSON: read the status, request id and rate-limit timing.
   status="" reqid="-" retry_after="" remaining="" reset=""
-  if [[ "$is_api" == yes ]] && head -1 "$work/out" | grep -qE '^HTTP/[0-9.]+ [0-9]{3}'; then
-    status=$(head -1 "$work/out" | awk '{print $2}')
-    awk 'NR > 1 && /^\r?$/ { exit } NR > 1 { print }' "$work/out" | tr -d '\r' >"$work/headers"
-    awk 'found { print; next } NR > 1 && /^\r?$/ { found = 1 }' "$work/out" >"$work/body"
+  if [[ "$headers" == yes ]]; then
+    status=$(awk '{ print $2; exit }' <<<"$first")
     hdr() { awk -v k="$1" 'index(tolower($0), tolower(k) ":") == 1 { sub(/^[^:]*: */, ""); print; exit }' "$work/headers"; }
     reqid=$(hdr X-GitHub-Request-Id); reqid=${reqid:--}
     retry_after=$(hdr Retry-After)
     remaining=$(hdr X-RateLimit-Remaining)
     reset=$(hdr X-RateLimit-Reset)
-  else
-    cp "$work/out" "$work/body"
   fi
   # "HTTP 403: ..." from most commands; "non-200 OK status code: 403 Forbidden ..." from some
   # GraphQL ones (issue list --label).
   [[ -n "$status" ]] || status=$({ grep -oE '(HTTP|status code:) [0-9]{3}' "$work/err" || true; } | tail -1 | grep -oE '[0-9]{3}$' || true)
   # awk reads to the end, so nothing upstream is cut off: where SIGPIPE is ignored (some CI
   # runners), an early-closed pipe makes cat print "Broken pipe" to stderr instead of dying quietly.
-  msg=$(cat "$work/err" "$work/body" 2>/dev/null | awk 'NF && n < 3 { print; n++ }' || true)
+  msg=$(cat "$work/err" "$body" 2>/dev/null | awk 'NF && n < 3 { print; n++ }' || true)
 
-  if ((rc == 0)); then
-    if [[ "$want_json" == yes ]] && ! jq -e . "$work/body" >/dev/null 2>&1; then
-      class=malformed
-    else
-      cat "$work/body"
-      exit 0
-    fi
+  if ((rc == 0)); then class=malformed   # the success path above already returned
   elif ((rc == 142)); then class=timeout
   elif ((rc == 75)) && grep -q '^gh-budget: ' "$work/err"; then
     at=$({ grep -oE 'retry-at=[^ ]+' "$work/err" || true; } | tail -1 | cut -d= -f2)
@@ -161,7 +167,7 @@ while :; do
       404 | 410) fail not-found "$status" "$reqid" - "$msg" 3 ;;
       401) fail auth 401 "$reqid" - "$msg" 4 ;;
       403 | 429)
-        if [[ "$status" == 429 || -n "$retry_after" || "$remaining" == 0 ]] || grep -qi 'rate limit' "$work/err" "$work/body"; then
+        if [[ "$status" == 429 || -n "$retry_after" || "$remaining" == 0 ]] || grep -qi 'rate limit' "$work/err" "$body"; then
           class=rate-limited
         else
           fail forbidden 403 "$reqid" - "$msg" 5

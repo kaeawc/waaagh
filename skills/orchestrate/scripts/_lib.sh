@@ -5,7 +5,10 @@
 # (pace every gh call through gh-budget.sh; see orch_gh_priority below), ORCHESTRATE_GH_API
 # (auto|rest|graphql; see orch_gh_api below).
 
-orch_now() { echo "${ORCHESTRATE_NOW:-$(date +%s)}"; }
+orch_now() { echo "${ORCHESTRATE_NOW:-${EPOCHSECONDS:-$(date +%s)}}"; }   # EPOCHSECONDS: bash 5
+
+# This file's directory, without a dirname process per call (#112).
+case "${BASH_SOURCE[0]}" in */*) _orch_lib_dir=${BASH_SOURCE[0]%/*} ;; *) _orch_lib_dir=. ;; esac
 
 # orch_repo [OWNER/REPO] -> OWNER/REPO (falls back to the checkout's repository). A checkout with
 # exactly one remote, on github.com, and no `gh repo set-default` choice is read from git with no
@@ -56,7 +59,7 @@ orch_author() {
 # orch_state_dir OWNER/REPO -> the repo's durable campaign directory (created on demand).
 orch_state_dir() {
   local d="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/${1//\//__}"
-  mkdir -p "$d"
+  [[ -d "$d" ]] || mkdir -p "$d"
   echo "$d"
 }
 
@@ -105,7 +108,7 @@ orch_iso() { jq -rn --argjson t "$1" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")'; }
 
 # orch_journal FILE JSON: write an operation journal entry atomically (temp file + mv).
 orch_journal() {
-  mkdir -p "$(dirname "$1")"
+  [[ "$1" != */* || -d "${1%/*}" ]] || mkdir -p "${1%/*}"
   printf '%s\n' "$2" >"$1.tmp.$$" && mv "$1.tmp.$$" "$1"
 }
 
@@ -117,7 +120,7 @@ orch_read_retry() {
   shift
   if [[ "$1" == gh ]]; then
     shift
-    "$(dirname "${BASH_SOURCE[0]}")/gh-read.sh" --tries "$n" --budget "${ORCHESTRATE_READ_BUDGET:-60}" -- "$@" 2>/dev/null
+    "$_orch_lib_dir/gh-read.sh" --tries "$n" --budget "${ORCHESTRATE_READ_BUDGET:-60}" -- "$@" 2>/dev/null
     return
   fi
   for ((i = 1; i <= n; i++)); do

@@ -5,17 +5,32 @@
 setup() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-  export ORCHESTRATE_SLOT_DIR="$BATS_TEST_TMPDIR/slots" SLOT_POLL=0.2
+  export ORCHESTRATE_SLOT_DIR="$BATS_TEST_TMPDIR/slots" SLOT_POLL=0.05
   unset ORCHESTRATE_GATE_ENV
 }
 
 gate() { "$SCRIPTS/gate-slot.sh" "$@"; }
 holders() { find "$ORCHESTRATE_SLOT_DIR/$1" -name holder 2>/dev/null | wc -l | tr -d ' '; }
+# Order is made observable through files, not sleeps (#112): a held command runs until its release
+# file appears, and the test waits (bounded, 10 s) for the state it needs before the next step.
+held() { echo "while [ ! -e '$BATS_TEST_TMPDIR/release-$1' ]; do sleep 0.05; done"; }
+release() { touch "$BATS_TEST_TMPDIR/release-$1"; }
+await() { local _; for _ in $(seq 1 200); do eval "$1" && return 0; sleep 0.05; done; echo "timed out: $1"; return 1; }
+
+# A background child left running holds bats' fd 3 and hangs the run: a failed test still releases
+# its held commands and stops the process it parked in a worktree.
+teardown() {
+  release a
+  if [[ -n "${busy_pid:-}" ]]; then kill "$busy_pid" 2>/dev/null || true; fi
+}
 
 @test "gates beyond the slot count wait, and every slot is freed afterwards" {
-  for i in 1 2 3; do gate --slots 2 -- bash -c "echo start >>'$BATS_TEST_TMPDIR/log'; sleep 1; echo end >>'$BATS_TEST_TMPDIR/log'" & done
-  sleep 0.5
+  for i in 1 2 3; do gate --slots 2 -- bash -c "echo start >>'$BATS_TEST_TMPDIR/log'; $(held a); echo end >>'$BATS_TEST_TMPDIR/log'" & done
+  await '[ "$(grep -c start "$BATS_TEST_TMPDIR/log" 2>/dev/null)" = 2 ]'
+  sleep 0.3   # time for a third gate to start, if it did not wait
   [ "$(holders gate)" -eq 2 ]
+  [ "$(grep -c start "$BATS_TEST_TMPDIR/log")" -eq 2 ]
+  release a
   wait
   [ "$(grep -c start "$BATS_TEST_TMPDIR/log")" -eq 3 ]
   [ "$(holders gate)" -eq 0 ]
@@ -39,11 +54,12 @@ holders() { find "$ORCHESTRATE_SLOT_DIR/$1" -name holder 2>/dev/null | wc -l | t
   run gate --slots 1 --wait 2 -- true
   [ "$status" -eq 0 ]
   # A live holder blocks until the bounded wait runs out (exit 75).
-  gate --slots 1 -- sleep 3 &
-  sleep 0.5
+  gate --slots 1 -- bash -c "$(held a)" &
+  await '[ "$(holders gate)" = 1 ]'
   run gate --slots 1 --wait 1 -- true
   [ "$status" -eq 75 ]
   [[ "$output" == *"no gate slot within 1s"* ]]
+  release a
   wait
 }
 
@@ -60,22 +76,28 @@ holders() { find "$ORCHESTRATE_SLOT_DIR/$1" -name holder 2>/dev/null | wc -l | t
 
 @test "a heavy build never overlaps a gate, in either order" {
   L="$BATS_TEST_TMPDIR/order"
-  gate -- bash -c "echo gate-start >>'$L'; sleep 1; echo gate-end >>'$L'" &
-  sleep 0.3
-  "$SCRIPTS/heavy-build-slot.sh" -- bash -c "echo heavy-start >>'$L'; sleep 1; echo heavy-end >>'$L'" &
-  sleep 0.3
+  gate -- bash -c "echo gate-start >>'$L'; $(held a); echo gate-end >>'$L'" &
+  await '[ -s "$L" ]'
+  # The heavy build takes its slot, then waits for the running gate; a gate asked for after that
+  # waits for the heavy build.
+  "$SCRIPTS/heavy-build-slot.sh" -- bash -c "echo heavy-start >>'$L'; sleep 0.2; echo heavy-end >>'$L'" &
+  await '[ "$(holders heavy)" = 1 ]'
   gate -- bash -c "echo gate2-start >>'$L'; echo gate2-end >>'$L'" &
+  sleep 0.2   # time for either to start, if it did not wait
+  [ "$(cat "$L")" = gate-start ]
+  release a
   wait
   [ "$(tr '\n' ' ' <"$L")" = "gate-start gate-end heavy-start heavy-end gate2-start gate2-end " ]
 }
 
 @test "a heavy build that cannot start in time exits 75 and releases its slot" {
-  gate -- sleep 2 &
-  sleep 0.3
+  gate -- bash -c "$(held a)" &
+  await '[ "$(holders gate)" = 1 ]'
   run "$SCRIPTS/heavy-build-slot.sh" --wait 1 -- true
   [ "$status" -eq 75 ]
   [[ "$output" == *"gates still running"* ]]
   [ "$(holders heavy)" -eq 0 ]
+  release a
   wait
 }
 

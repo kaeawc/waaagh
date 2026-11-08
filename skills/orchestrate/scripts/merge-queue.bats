@@ -2,20 +2,19 @@
 # Self-test for merge-queue.sh: real git against a local bare origin, stubbed gh.
 # Run: bats scripts/merge-queue.bats
 
+# The bare origin and its seed clone with one commit, built once per file and copied into each
+# test (seed_origin_template and seed_origin_copy in test_helper.bash, #112).
+setup_file() {
+  load test_helper
+  seed_origin_template
+}
+
 setup() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1790510400 ORCHESTRATE_READ_SLEEP=0
   unset MERGE_QUEUE_CHECK_CMD MERGE_QUEUE_ADMIN_EVIDENCE
-  git init -q --bare -b main "$BATS_TEST_TMPDIR/origin.git"
-  git clone -q "$BATS_TEST_TMPDIR/origin.git" "$BATS_TEST_TMPDIR/seed" 2>/dev/null
-  git -C "$BATS_TEST_TMPDIR/seed" config user.email t@example.com
-  git -C "$BATS_TEST_TMPDIR/seed" config user.name t
-  git -C "$BATS_TEST_TMPDIR/seed" config commit.gpgsign false
-  echo base >"$BATS_TEST_TMPDIR/seed/f.txt"
-  git -C "$BATS_TEST_TMPDIR/seed" add f.txt
-  git -C "$BATS_TEST_TMPDIR/seed" commit -qm init
-  git -C "$BATS_TEST_TMPDIR/seed" push -q origin HEAD:main
+  seed_origin_copy
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
   # An unprotected server: it accepts any merge whose --match-head-commit matches. The PR head
