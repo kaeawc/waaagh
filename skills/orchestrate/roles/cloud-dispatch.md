@@ -32,7 +32,7 @@ issue then gets a local route for that remainder (`issue-route.sh set`), never a
 
 ## Steps
 
-1. **Queue.** `{{SCRIPTS}}/issues-ranked.sh --route cloud-ready --skip-in-pr` (after the router has
+1. **Queue.** `{{SCRIPTS}}/issues-ranked.sh --route cloud-ready --skip-in-pr --drop-blocked` (blocked issues out: `open-blockers.sh`; after the router has
    run), then `cloud-dispatch.sh queue add <N>...`. The queue (`{{STATE}}/cloud-queue.txt`) and the
    ledger (`{{STATE}}/cloud-sessions.tsv`: issue, trigger id, run_at, created_at) live in the state
    directory, so dispatch resumes after a compaction from `cloud-dispatch.sh status` and `next`;

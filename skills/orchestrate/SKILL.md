@@ -136,7 +136,8 @@ review on every poll or push.
 - **Lane drivers wait once and own their devices** (`subagent-hygiene.md`, "Lane drivers"). A
   backgrounded gate gets one blocking wait, never a repeating monitor; a driver is not resumed on
   a monitor expiry alone. Before any `adb` or `simctl` command a driver runs `device-lock.sh
-  check` against the serial or UDID its claim recorded. Check `blocked by` links before dispatch.
+  check` against the serial or UDID its claim recorded. Check blockers before dispatch:
+  `open-blockers.sh <n>...` (planners: `issues-ranked.sh --drop-blocked`).
 - With many lanes the host saturates and whole-suite gates hit their wall caps. Lanes run targeted
   suites; CI's clean runners carry the full suite. Say so in the PR.
 
