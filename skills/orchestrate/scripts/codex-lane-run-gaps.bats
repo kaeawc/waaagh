@@ -33,7 +33,8 @@ SH
     --cd "$CD" --poll 1 --soft 1
   [ "$status" -eq 0 ]
   logs=("$HOME/.claude/codex-lanes/my_lane/"luna-*-*.jsonl)
-  [ "${#logs[@]}" -eq 1 ] && [ -f "${logs[0]}" ]
+  [ "${#logs[@]}" -eq 1 ]
+  [ -f "${logs[0]}" ]
   L=${logs[0]}
   [[ "$output" == *"log=$L "* ]]
   [ "$(cat "$L.exit")" = 0 ]

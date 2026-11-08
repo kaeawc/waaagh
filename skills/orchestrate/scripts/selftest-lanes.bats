@@ -210,7 +210,7 @@ setup() {
   printf 'a\nb\nerror one\nc\nd\ne\nf\ng\nfatal two\nh\n' >"$log"
   run "$SCRIPTS/excerpt.sh" "$log" 1
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "$output" | head -7 | tr '\n' '|')" = "2-b|3:error one|4-c|--|8-g|9:fatal two|10-h|" ]
+  [ "$(printf '%s\n' "$output" | sed -n 1,7p | tr '\n' '|')" = "2-b|3:error one|4-c|--|8-g|9:fatal two|10-h|" ]
   run "$SCRIPTS/excerpt.sh" "$log" x
   [ "$status" -eq 2 ]
 }
@@ -389,7 +389,8 @@ SH
   out=$(PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna --effort "" <<<"my task")
   log=$(printf '%s\n' "$out" | sed -n 's/^LOG=//p')
   run_dir=$(printf '%s\n' "$out" | sed -n 's/^RUN_DIR=//p')
-  [ -n "$log" ] && [ -f "$run_dir/spec.md" ]
+  [ -n "$log" ]
+  [ -f "$run_dir/spec.md" ]
   [ "$(head -1 "$run_dir/spec.md")" = "LANE-WORKTREE: $(pwd -P)" ]
   grep -q 'explicit opt-out' "$run_dir/spec.md"
   [ "$(tail -1 "$run_dir/spec.md")" = "my task" ]

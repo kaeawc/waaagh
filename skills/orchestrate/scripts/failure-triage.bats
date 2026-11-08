@@ -107,13 +107,16 @@ decide() { ft decide --pr 5 --head "${HEAD:0:9}" "$@"; }
   run ft match --check "lint / oxlint" --log "$FX/log"
   [ "$status" -eq 1 ]
   run ft record --check "lint*" --pattern 'oxlint did not emit parseable JSON' --note "oxlint JSON flake" --source "PR 5 run 77"
-  [ "$status" -eq 0 ] && [ "$output" = sig-1 ]
+  [ "$status" -eq 0 ]
+  [ "$output" = sig-1 ]
   run ft record --check "lint*" --pattern 'oxlint did not emit parseable JSON' --note dup
-  [ "$status" -eq 3 ] && [ "$output" = "refused: already recorded as sig-1" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "refused: already recorded as sig-1" ]
   run ft record --check "e2e" --pattern 'timeout' --note "e2e timeout"
   [ "$output" = sig-2 ]
   run ft match --check "lint / oxlint" --log "$FX/log"
-  [ "$status" -eq 0 ] && [ "$output" = "$(printf 'sig-1\toxlint JSON flake')" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'sig-1\toxlint JSON flake')" ]
   run ft match --check "e2e" --log "$FX/log"
   [ "$status" -eq 1 ]
   # known signature: re-run even where the domain intersects the diff
@@ -134,7 +137,8 @@ decide() { ft decide --pr 5 --head "${HEAD:0:9}" "$@"; }
   [ "$status" -eq 2 ]
   touch "$FX/files-fail"
   run decide --check lint
-  [ "$status" -eq 9 ] && [[ "$output" == unverified:* ]]
+  [ "$status" -eq 9 ]
+  [[ "$output" == unverified:* ]]
   run "$SCRIPTS/failure-triage.sh" -h
   [ "$status" -eq 0 ]
   [[ "${lines[${#lines[@]}-1]}" == "#       rerun | 9 unverified (changed paths or head unreadable)" ]]
