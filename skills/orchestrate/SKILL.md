@@ -199,6 +199,8 @@ Everything a campaign must remember lives in one directory per repository:
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
 | `GITHUB_OUTAGE` | `pr-merge.sh` | present while githubstatus.com reports Pull Requests down; pauses merges |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
+| `merge-sensitive` | you | merge-sensitive path globs (optional): PRs touching one merge serially and only up to date |
+| `locks/` | `pr-merge.sh` | one lock per merge-sensitive path while a merge over it is in flight |
 | `reruns.log`, `merge-loop.beat`, `triage-cron` | `triage-tick.sh` | known-flake reruns of default-branch runs (one per run); the merge loop's heartbeat and why it ended; when the session cron was created |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
 | `ops/` | `pr-merge.sh`, `issue-close.sh` | journal of each GitHub write (intent, attempt, state) and its raw output, so a lost answer is reconciled, never replayed |
@@ -345,6 +347,15 @@ against its PR's own changes.
   (`"$SCRIPTS/gh-status.sh"`), re-reads after waits of 60 s or more, and exits 10 if still OPEN.
   While Pull Requests is in an outage it writes `GITHUB_OUTAGE` and every merge pauses (the queue
   stops its pass) until the status is operational, instead of logging a failure each pass.
+- **Merge-sensitive paths: green alone is not green together.** Two PRs that each grow a size
+  budget, or each add keys to a version catalog in different places, merge cleanly in git and
+  break main. List such shared, append-mostly paths (catalogs, budget tests, generated contracts)
+  in `<state dir>/merge-sensitive`, one glob or `dir/` per line. `pr-merge.sh` then serializes
+  merges per path (a lock in `locks/`; exit 12 `busy:`) and refuses a PR touching one whose head
+  lacks the current base (exit 11 `stale:`) unless a cheap merge-result check passes on base +
+  head (`--worktree DIR --merge-check CMD`, e.g. `gradle help` or the budget test). A stale PR goes
+  back for a fresh base merge and a green run; the merge queue does that on its next pass.
+  `"$SCRIPTS/merge-sensitive.sh" check --pr N --head SHA` answers the same question read-only.
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
   every stacked merge: take the default branch's copy and regenerate it, never hand-merge.
   `"$SCRIPTS/regen-merge.sh"` does this from `<state dir>/generated-files.tsv` and refuses an
