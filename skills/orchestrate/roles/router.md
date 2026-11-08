@@ -32,7 +32,10 @@ pull requests. Already-done and needs-decision issues are reported, not acted on
      it; report the question, the options, and your recommendation.
    - **skip** — it carries a skip label, or is not actionable for another stated reason.
    When unsure between cloud and local, choose local only if a device or a local measurement is
-   truly required to finish; most code with device-free tests is cloud.
+   truly required to finish; most code with device-free tests is cloud. An issue that needs
+   captured fixtures it does not carry (only an excerpt or a local path) is not yet cloud-ready:
+   route it `needs-local:<type>` with `--what "attach the captured fixtures
+   (device-cloud-handoff.md)"`.
 4. **Rate limits.** `issue-route.sh set` already falls back to the REST API. Exit 5 means the
    write did not finish: rerun the same command once. Exit 9: re-run `status` before going on.
    Two consecutive rate-limit failures: stop and report how far you got.

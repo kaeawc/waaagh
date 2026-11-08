@@ -42,7 +42,8 @@ change code, commit, push, comment on PRs, relabel, or reopen.
 7. **Failures.** A FAIL reproduced twice (two separate runs from a clean start) → search for an
    existing issue, else `gh issue create` with the exact repro (calls, device, OS level, tested
    SHA), expected, observed, and the evidence. One reproduction only: post the FAIL verdict and
-   report it as unconfirmed. At most 8 new issues.
+   report it as unconfirmed. At most 8 new issues. An issue a cloud lane will fix from your
+   captured output gets every fixture attached (`{{SCRIPTS}}/../device-cloud-handoff.md`).
 
 ## Reporting
 - `{{STATE}}/verify/<name>/REPORT.md`: tested SHA, device, then
