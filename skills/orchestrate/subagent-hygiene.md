@@ -84,7 +84,9 @@ Lane briefs and role templates state them; `roles/_common.md` rules 1 and 6 carr
    review, and its body lists the device evidence still missing (what to exercise, on which
    platform). A draft opened while device evidence is pending skips bot review (CodeRabbit does
    not review drafts), so findings arrive late.
-4. **Check blockers before dispatch.** Before launching a lane, read the issue's `blocked by`
-   links (`gh-read.sh -- api repos/<owner>/<repo>/issues/<n>/dependencies/blocked_by`) and any
-   "blocked by #N" in its body. An open blocker: do not dispatch; route the blocker first or
-   wait. Two lanes spent a launch only to stop on an open blocker.
+4. **Check blockers before dispatch.** Before launching a lane, run `open-blockers.sh <n>...`:
+   it reads the issue's native `blocked by` links and any "Blocked by #N" in its body, looks up
+   each one's state, and prints `<n> BLOCKED by #a #b` or `<n> clear` (exit 3 when any is
+   blocked, 4 when one could not be read). An open blocker: do not dispatch; route the blocker
+   first or wait. Two lanes spent a launch only to stop on an open blocker. Planners filter
+   their candidates the same way first (`issues-ranked.sh --drop-blocked`).
