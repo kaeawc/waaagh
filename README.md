@@ -43,7 +43,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 
 | Script | Purpose |
 |---|---|
-| `pr-ready.sh` | One verdict per open PR: `READY`, `WAIT`, `BLOCK` (with reasons) or `SKIP`; falls back to smaller pages when the list times out (`PR_READY_EXTRA` names PRs to classify anyway) |
+| `pr-ready.sh` | One verdict per open PR: `READY`, `WAIT`, `BLOCK` (with reasons) or `SKIP`; falls back to smaller pages when the list times out (`PR_READY_EXTRA` names PRs to classify anyway); reads over REST when GraphQL is refused |
 | `pr-merge.sh` | Merge one PR after re-checking head, author, draft and fork state; honours the red-main hold; `--admin` only in the fast path and only with evidence |
 | `merge-queue.sh` | Serial local merge queue (`add`, `run-once`, `status`, `retry`): merge base in, run the check command, hand off to `pr-merge.sh`; records a per-item outcome and only `merged` satisfies dependents |
 | `merge-sensitive.sh` | Which merge-sensitive paths a PR touches, and whether it may merge: its head contains the base, or a merge-result check passes on base + head |
@@ -77,7 +77,8 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `gh-read.sh` | Bounded, typed GitHub reads: per-call timeout, backoff inside a time budget, Retry-After and rate-limit reset handling with a cooldown shared by local lanes; refuses writes |
 | `gh-issues.sh` | Issue-side list reads (open issues, open and merged PRs) as `gh ... --json` would print them: GraphQL first, REST when GitHub refuses GraphQL (Claude Code cloud sessions), remembered for 12 hours; used by `campaign.sh status`, `issues-ranked.sh`, `issue-candidates.sh`, `issue-route.sh status` |
 | `gh-budget.sh`, `gh-shim/gh` | One API pacer for every local caller: per-priority floors (high 150, normal 1000, low 2500), calls spaced until the reset from a shared `/rate_limit` cache, exit 75 to skip a pass, endpoint-scoped backoff for a 403 with headroom; the shim budgets any `gh` call (`ORCHESTRATE_GH_BUDGET=1`) |
-| `gh-snapshot.sh` | One GraphQL snapshot per pass of every open PR (head, check roll-up, last review state and commit), cached per head SHA |
+| `gh-snapshot.sh` | One GraphQL snapshot per pass of every open PR (head, check roll-up, last review state and commit), cached per head SHA; REST per PR where GraphQL is refused |
+| `gh-rest-pr.sh` | REST reads of the PR side in `gh pr list --json` shapes (open list, one PR with mergeable and check roll-up, review threads via `ccr/review_threads`, files, last review), used by `pr-ready.sh`, `gh-snapshot.sh` and `lane-claim.sh` when GraphQL answers 403 (cloud sessions) |
 | `gh-status.sh` | Read githubstatus.com and name non-operational components; exit 4 while Pull Requests (or a named component) is down, so merges pause instead of failing |
 | `job-log.sh` | One Actions job's log via the job-scoped endpoint (works while the workflow still runs), saved per run/attempt/job and excerpted, with explicit not-available outcomes |
 | `failure-triage.sh` | Rerun first, reproduce second: re-run a failing PR check once when the classifier can't place it and its domain (`check-domains`) misses the diff, refuse a second rerun on the same head, and keep a failure-signature store so the next occurrence is classified |

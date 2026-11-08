@@ -636,6 +636,9 @@ as PRs and issue comments, which the triage loop reads. A cloud-ready follow-up 
 work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
 `device-cloud-handoff.md`. The standard implement and repair briefs live in the target repository
 (`.claude/briefs/`, installed from `briefs/`, changed by PR), so each dispatched prompt is one line.
+Cloud sessions refuse GraphQL (HTTP 403, `gh pr list` included): `pr-ready.sh`, `gh-snapshot.sh`
+and `lane-claim.sh` then read the PR side over REST through `gh-rest-pr.sh` on their own
+(`ORCHESTRATE_GH_API=rest` skips the refused attempt); REST costs a few calls per candidate PR.
 
 **Session topology.** A campaign split over an owner-facing orchestrator, a triage session, a
 manual-test session, cloud routines and local lanes follows `session-topology.md`: who owns what

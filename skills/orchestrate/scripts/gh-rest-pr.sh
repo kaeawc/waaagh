@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# REST reads for the PR side, in the JSON shapes `gh pr list/view --json ...` gives, so callers keep
+# their jq programs when GraphQL is refused (Claude Code cloud sessions answer every GraphQL call,
+# `gh pr list` and `gh pr view` included, with HTTP 403). Read-only; every call goes through
+# gh-read.sh (bounded, typed, paced by gh-budget.sh when that is on).
+#
+# Usage: gh-rest-pr.sh list    [--repo OWNER/REPO] [--limit N] [--asc]
+#        gh-rest-pr.sh view    [--repo OWNER/REPO] --pr N [--checks]
+#        gh-rest-pr.sh rollup  [--repo OWNER/REPO] --sha SHA
+#        gh-rest-pr.sh threads [--repo OWNER/REPO] --pr N
+#        gh-rest-pr.sh files   [--repo OWNER/REPO] --pr N
+#        gh-rest-pr.sh review  [--repo OWNER/REPO] --pr N
+#   list     open PRs, newest first (--asc: oldest first), at most --limit (default 300), from
+#            GET pulls?state=open in pages of 100: number title body state author{login}
+#            isDraft isCrossRepository baseRefName headRefName headRefOid labels createdAt
+#            updatedAt url closingIssuesReferences, with mergeable "UNKNOWN" and an empty
+#            statusCheckRollup (the list endpoint carries neither; use view --checks).
+#   view     one PR (GET pulls/<n>) in the same shape, with mergeable read (true MERGEABLE, false
+#            CONFLICTING, null UNKNOWN) and state OPEN|CLOSED|MERGED; --checks adds its head's
+#            statusCheckRollup (see rollup).
+#   rollup   the statusCheckRollup of a commit: GET commits/<sha>/check-runs as CheckRun items
+#            (name, status, conclusion upper-cased, startedAt, detailsUrl, workflowName) plus
+#            GET commits/<sha>/status as StatusContext items (context, state, targetUrl,
+#            createdAt). workflowName comes from GET actions/runs?head_sha=<sha>, read only when a
+#            check's details URL names an Actions run; a run it does not list leaves it "".
+#   threads  the number of unresolved, current review threads, from GET
+#            pulls/<n>/ccr/review_threads (all pages). That route's response shape is not
+#            documented: a list of threads, or an object holding one under threads, review_threads,
+#            reviewThreads, nodes or data, each thread with isResolved/is_resolved/resolved and
+#            optionally isOutdated/is_outdated/outdated (absent: current). A thread without a
+#            resolved flag, or any other shape, is unreadable (exit 3), never "0".
+#   files    the changed files, [{path}], from GET pulls/<n>/files.
+#   review   the last review, {state, commit} (both null when there is none), from GET
+#            pulls/<n>/reviews.
+# closingIssuesReferences over REST is parsed from the body: "close(s|d) / fix(es|ed) /
+# resolve(s|d) #N" (or OWNER/REPO#N naming this repository). GraphQL also counts issues linked by
+# hand in the Development sidebar; REST cannot see those.
+# Exit: 0 ok | 2 usage | 3 unreadable (the gh-read.sh line or the reason is on stderr)
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=_lib.sh
+source "$here/_lib.sh"
+orch_gh_priority normal
+
+usage() { sed -n '2,38p' "$0"; }
+case "${1:-}" in -h | --help) usage; exit 0 ;; -*) echo "gh-rest-pr.sh: unknown argument: $1" >&2; exit 2 ;; esac
+cmd=${1:-}
+if [[ -n "$cmd" ]]; then shift; fi
+repo="" limit=300 asc=no pr="" sha="" checks=no
+while (($#)); do
+  case "$1" in
+    --repo) repo=$2; shift 2 ;;
+    --limit) limit=$2; shift 2 ;;
+    --asc) asc=yes; shift ;;
+    --pr) pr=$2; shift 2 ;;
+    --sha) sha=$2; shift 2 ;;
+    --checks) checks=yes; shift ;;
+    -h | --help) usage; exit 0 ;;
+    *) echo "gh-rest-pr.sh: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+case "$cmd" in
+  list) [[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "gh-rest-pr.sh: --limit must be a positive number" >&2; exit 2; } ;;
+  view | threads | files | review) [[ "$pr" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; } ;;
+  rollup) [[ "$sha" =~ ^[0-9a-fA-F]+$ ]] || { usage >&2; exit 2; } ;;
+  *) usage >&2; exit 2 ;;
+esac
+repo=$(orch_repo "$repo")
+
+ghr() { "$here/gh-read.sh" --json -- "$@"; }
+unreadable() { echo "gh-rest-pr: $*" >&2; exit 3; }
+
+# The `gh pr list --json` shape of one REST pull request object.
+# shellcheck disable=SC2016  # jq variables, not shell expansions
+shape='def pr_shape($repo):
+  {number, title: (.title // ""), body: (.body // ""),
+   state: (if .merged_at != null then "MERGED" else ((.state // "open") | ascii_upcase) end),
+   author: {login: (if (.user.type // "") == "Bot" then "app/" + ((.user.login // "") | sub("\\[bot\\]$"; ""))
+                    else (.user.login // "") end)},
+   isDraft: (.draft // false),
+   isCrossRepository: (((.head.repo // {}).full_name // null) != ((.base.repo // {}).full_name // $repo)),
+   baseRefName: .base.ref, headRefName: .head.ref, headRefOid: .head.sha,
+   labels: [(.labels // [])[] | {name}],
+   createdAt: .created_at, updatedAt: .updated_at, url: .html_url,
+   mergeable: (if .mergeable == true then "MERGEABLE" elif .mergeable == false then "CONFLICTING" else "UNKNOWN" end),
+   statusCheckRollup: [],
+   closingIssuesReferences: ([(.body // "")
+       | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#([0-9]+)")
+       | select(.[0] == null or (.[0] | ascii_downcase) == ($repo | ascii_downcase))
+       | {number: (.[1] | tonumber)}] | unique_by(.number))};'
+
+list_prs() {
+  local rows='[]' page=1 out n order=""
+  [[ "$asc" == no ]] || order="&sort=created&direction=asc"
+  while :; do
+    out=$(ghr api "repos/$repo/pulls?state=open&per_page=100&page=$page$order") || exit 3
+    jq -e 'type == "array"' >/dev/null <<<"$out" || unreadable "pulls page $page is not a list"
+    n=$(jq length <<<"$out")
+    rows=$(jq -c --argjson rows "$rows" --argjson lim "$limit" --arg repo "$repo" "$shape"'
+      ($rows + map(pr_shape($repo)))[:$lim]' <<<"$out")
+    ((n == 100 && $(jq length <<<"$rows") < limit)) || break
+    page=$((page + 1))
+  done
+  printf '%s\n' "$rows"
+}
+
+rollup() { # SHA -> statusCheckRollup items
+  local s=$1 cr st runs='{}'
+  cr=$(ghr api --paginate "repos/$repo/commits/$s/check-runs?per_page=100") || exit 3
+  cr=$(jq -sc '[.[] | (.check_runs // [])[]]' <<<"$cr") || unreadable "check runs of $s are malformed"
+  st=$(ghr api "repos/$repo/commits/$s/status?per_page=100") || exit 3
+  if jq -e 'any(.[]; (.details_url // "") | test("/actions/runs/[0-9]+"))' >/dev/null <<<"$cr"; then
+    runs=$(ghr api "repos/$repo/actions/runs?head_sha=$s&per_page=100") || exit 3
+  fi
+  jq -nc --argjson cr "$cr" --argjson st "$st" --argjson runs "$runs" '
+    (($runs.workflow_runs // []) | map({key: (.id | tostring), value: (.name // "")}) | from_entries) as $wf
+    | [$cr[] | ((.details_url // "") | (capture("/actions/runs/(?<r>[0-9]+)") // {}) | .r) as $r
+       | {__typename: "CheckRun", name, status: ((.status // "") | ascii_upcase),
+          conclusion: ((.conclusion // "") | ascii_upcase), startedAt: (.started_at // ""),
+          detailsUrl: (.details_url // .html_url // ""),
+          workflowName: (if $r == null then "" else ($wf[$r] // "") end)}]
+    + [($st.statuses // [])[] | {__typename: "StatusContext", context, state: ((.state // "") | ascii_upcase),
+         targetUrl: (.target_url // ""), createdAt: (.created_at // .updated_at // "")}]'
+}
+
+view_pr() {
+  local out one
+  out=$(ghr api "repos/$repo/pulls/$pr") || exit 3
+  one=$(jq -c --arg repo "$repo" "$shape"' if type == "object" and has("number") then pr_shape($repo)
+    else error("not a pull request") end' <<<"$out" 2>/dev/null) || unreadable "PR $pr: not a pull request object"
+  if [[ "$checks" == yes ]]; then
+    one=$(jq -c --argjson c "$(rollup "$(jq -r .headRefOid <<<"$one")")" '.statusCheckRollup = $c' <<<"$one")
+  fi
+  printf '%s\n' "$one"
+}
+
+threads() {
+  local out
+  out=$(ghr api --paginate "repos/$repo/pulls/$pr/ccr/review_threads") || exit 3
+  jq -se '
+    def flag($a; $b; $c): if has($a) then .[$a] elif has($b) then .[$b] elif has($c) then .[$c] else null end;
+    def list: if type == "array" then .
+      elif type == "object" then
+        ([.threads, .review_threads, .reviewThreads, .nodes, .data] | map(select(. != null)) | first // null)
+        | if type == "object" and has("nodes") then .nodes else . end
+        | if type == "array" then . else error("no thread list") end
+      else error("no thread list") end;
+    [.[] | list[]]
+    | map(if type != "object" then error("thread is not an object") else . end
+          | flag("isResolved"; "is_resolved"; "resolved") as $r
+          | (flag("isOutdated"; "is_outdated"; "outdated") // false) as $o
+          | if ($r | type) != "boolean" then error("thread without a resolved flag")
+            else select(($r | not) and ($o | not)) end)
+    | length' <<<"$out" 2>/dev/null || unreadable "PR $pr: review threads in an unrecognised shape"
+}
+
+files() {
+  local out
+  out=$(ghr api --paginate "repos/$repo/pulls/$pr/files?per_page=100") || exit 3
+  jq -sc '[.[][] | {path: .filename}]' <<<"$out" 2>/dev/null || unreadable "PR $pr: files are malformed"
+}
+
+review() {
+  local out
+  out=$(ghr api --paginate "repos/$repo/pulls/$pr/reviews?per_page=100") || exit 3
+  jq -sc '(add // []) | last | {state: (if . == null then null else .state end),
+    commit: (if . == null then null else .commit_id end)}' <<<"$out" 2>/dev/null || unreadable "PR $pr: reviews are malformed"
+}
+
+case "$cmd" in
+  list) list_prs ;;
+  view) view_pr ;;
+  rollup) rollup "$sha" ;;
+  threads) threads ;;
+  files) files ;;
+  review) review ;;
+esac
