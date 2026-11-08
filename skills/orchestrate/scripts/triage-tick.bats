@@ -9,7 +9,9 @@ setup() {
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export ORCHESTRATE_NOW=1790510400   # 2026-09-27T12:00:00Z
-  unset ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD
+  unset ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_HOST_LOAD
+  # host-load.sh reads these instead of the machine: an idle host that admits lanes
+  export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
   ST="$ORCHESTRATE_STATE_DIR/o__r"; mkdir -p "$ST"
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -59,8 +61,9 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   [ "${lines[4]}" = "dispatch 0 next=-" ]
   [ "${lines[5]}" = "slots android=1/1,ios=1/2" ]
   [ "${lines[6]}" = "cron none" ]
-  [ "${#lines[@]}" -eq 8 ]
+  [ "${#lines[@]}" -eq 9 ]
   [ "${lines[7]}" = "threads unresolved=0 answered=0 resolve-now=- repair=-" ]
+  [[ "${lines[8]}" == "host ADMIT cause="*" free_gb=32.0 load=0.50 limit=12.00" ]]
 }
 
 @test "the dispatch queue skips issues in an open PR, in an active lane, or excluded" {
@@ -203,6 +206,81 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   [ "${lines[6]}" = "cron age=145h expires_in=23h" ]
 }
 
+# host_stub RC [OUTPUT]: ORCHESTRATE_HOST_LOAD prints OUTPUT (TSV, as host-load.sh does) and exits RC.
+host_stub() {
+  printf '%s\n' "${2-}" >"$FX/host-load.out"
+  printf '#!/usr/bin/env bash\necho "$*" >>"$FX/host-load.args"\ncat "$FX/host-load.out"\nexit %s\n' "$1" >"$BATS_TEST_TMPDIR/bin/host-load"
+  chmod +x "$BATS_TEST_TMPDIR/bin/host-load"
+  export ORCHESTRATE_HOST_LOAD="$BATS_TEST_TMPDIR/bin/host-load"
+}
+
+@test "host ADMIT adds the host line and no reason: dispatch stands (#114)" {
+  echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
+  run snap
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "verdict act dispatch=3" ]
+  [ "${lines[4]}" = "dispatch 3 next=#6,#8,#9" ]
+  [[ "${lines[8]}" == "host ADMIT cause="* ]]
+  [ "${#lines[@]}" -eq 9 ]
+}
+
+@test "host HOLD or BACKOFF with a cause turns dispatch into host-hold; the queue is still listed (#114)" {
+  echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
+  host_stub 3 "$(printf 'verdict\tHOLD\t1-min load 30.1 >= 12.00 (1.5 x 8 CPUs)\nload\t30.1\t8 CPUs, limit 12.00\nmemory\t20.0\tmin 8, backoff 4\ndevice-slots\t3\ncause\tindexing\tmds_stores 240%%\nhint\tremove worktrees\ntop-cpu\t9\t240\t900\tmds_stores\t-')"
+  run snap
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "verdict act host-hold" ]
+  [ "${lines[4]}" = "dispatch 3 next=#6,#8,#9" ]
+  [ "${lines[8]}" = "host HOLD cause=indexing free_gb=20.0 load=30.1 limit=12.00" ]
+  [ "$(cat "$FX/host-load.args")" = "--top 3" ]
+  host_stub 4 "$(printf 'verdict\tBACKOFF\tfree memory 2.0 GB < 4 GB\nload\t1.0\t8 CPUs, limit 12.00\nmemory\t2.0\tmin 8, backoff 4\ncause\tlanes\tjava 300%%')"
+  run snap
+  [ "${lines[0]}" = "verdict act host-hold" ]
+  [ "${lines[8]}" = "host BACKOFF cause=lanes free_gb=2.0 load=1.0 limit=12.00" ]
+  # nothing to dispatch: a held host adds no reason
+  echo '[]' >"$FX/issues.json"
+  run snap
+  [ "${lines[0]}" = "verdict ok" ]
+  [[ "${lines[8]}" == "host BACKOFF "* ]]
+}
+
+@test "the real host-load.sh over a loaded host holds dispatch (#114)" {
+  echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
+  ORCHESTRATE_HOST_LOAD1=99 run snap
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "verdict act host-hold" ]
+  [[ "${lines[8]}" == "host HOLD cause="*" free_gb=32.0 load=99 limit=12.00" ]]
+}
+
+@test "a host-load failure says host unknown and blocks nothing (#114)" {
+  echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
+  for out in "2:host-load.sh: bad --top" "0:no verdict here" "9:"; do
+    host_stub "${out%%:*}" "${out#*:}"
+    run snap
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "verdict act dispatch=3" ]
+    [ "${lines[8]}" = "host unknown" ]
+    [ "${#lines[@]}" -eq 9 ]
+  done
+  ORCHESTRATE_HOST_LOAD="$BATS_TEST_TMPDIR/no-such-command" run snap
+  [ "$status" -eq 0 ]
+  [ "${lines[8]}" = "host unknown" ]
+}
+
+@test "an issue row without labels, or with labels null, is unlabelled, not a failed snapshot (#130)" {
+  echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
+  echo '[{"number":6},{"number":7,"labels":null},{"number":8,"labels":[{"name":"blocked"}]},{"number":9,"labels":[{"name":"cloud-ready"}]}]' >"$FX/issues.json"
+  run snap
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 9 ]
+  [ "${lines[0]}" = "verdict act dispatch=3" ]
+  [ "${lines[4]}" = "dispatch 3 next=#6,#7,#9" ]
+  # unlabelled: never matches a ready label
+  run snap --ready-label cloud-ready
+  [ "$status" -eq 0 ]
+  [ "${lines[4]}" = "dispatch 1 next=#9" ]
+}
+
 @test "the header is the -h text exactly" {
   run "$SCRIPTS/triage-tick.sh" -h
   [ "$status" -eq 0 ]
@@ -218,6 +296,8 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   has "$R/triage-tick.md" "only while the REPL is idle"
   has "$R/triage-tick.md" "beat --end bound"
   has "$R/triage-tick.md" "keeps merges held until"
+  has "$R/triage-tick.md" "host-hold"
+  has "$R/triage-tick.md" "host unknown"
   has "$R/README.md" "triage-tick.md"
   has "$ROOT/skills/orchestrate/SKILL.md" "roles/triage-tick.md"
   has "$ROOT/README.md" "triage-tick.sh"

@@ -13,6 +13,9 @@ Before starting a lane (and in every tick that wants to refill), run:
 "$SCRIPTS/host-load.sh"          # exit 0 ADMIT, 3 HOLD, 4 BACKOFF
 ```
 
+`triage-tick.sh snapshot` runs it too: its last line is `host <verdict> cause=<c> ...`, and a
+HOLD or BACKOFF turns the `dispatch=<n>` reason into `host-hold`.
+
 - **Admit** only with the 1-minute load below 1.5x the CPU count and at least 8 GB free (free +
   inactive + speculative pages on macOS, `MemAvailable` on Linux).
 - **Hold** (exit 3): start nothing new, keep running lanes. **Back off** (exit 4, under 4 GB
