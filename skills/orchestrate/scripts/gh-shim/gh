@@ -3,6 +3,8 @@
 # and every `gh` call, including third-party and skill scripts nobody edited, runs through
 # gh-budget.sh at priority GH_BUDGET_PRIORITY (default normal). The shim drops itself from PATH
 # before the real gh runs; a call made under gh-budget.sh (GH_BUDGET_ACTIVE=1) goes straight to gh.
+# Local-only commands (config, auth but `auth status`, help, version, ...) are never paced: see the
+# list in gh-budget.sh's header.
 set -euo pipefail
 self=$(cd "$(dirname "$0")" && pwd -P)
 keep=""
