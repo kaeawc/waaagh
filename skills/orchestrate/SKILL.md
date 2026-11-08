@@ -572,6 +572,11 @@ flagged issues, memory upkeep) run independently and share three things with a c
 label, the device lock, and the rule that every run ends with a posted trace. Before a
 verification batch, check the device lock those routines use; never start a batch over a live one.
 
+**Cloud dispatch.** When the owner wants one cloud session per `cloud-ready` issue with no click,
+the main session (subagents lack `RemoteTrigger`) creates one run-once routine per issue, paced and
+recorded through `"$SCRIPTS/cloud-dispatch.sh"`: `roles/cloud-dispatch.md`. Results come back only
+as PRs and issue comments, which the triage loop reads.
+
 ## Final report
 
 Per lane: model and effort as run, artifact (diff or PR), validation key and result, review
