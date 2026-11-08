@@ -8,7 +8,8 @@
 #                line through one pipe, so parallel suites only contend for it and run slower)
 #   FILE         run only these suites (passed to dev/test.sh; default every suite). The numbers are
 #                partial: a script another suite also exercises reads low. The table says so, and the
-#                suites run are listed in coverage/subset.txt beside the resultset.
+#                suites run are listed in coverage/subset.txt beside the resultset. A FILE that is
+#                not a path is looked for in skills/orchestrate/scripts/ (a bare gh-read.bats works).
 #   --check F    run no suites: compare an existing resultset to the floors in F (script<TAB>min%,
 #                # comments and blank lines allowed). Fails when a script is below its floor or a
 #                measured script has no row, and names each one. A row for a script that was not
@@ -40,11 +41,14 @@ while (($#)); do
       floor=$2; shift 2 ;;
     --resultset) [[ -n "${2:-}" ]] || { echo "dev/coverage.sh: --resultset needs a file" >&2; exit 2; }
       resultset=$2; shift 2 ;;
-    -h | --help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,31p' "$0"; exit 0 ;;
     -*) echo "dev/coverage.sh: unknown argument: $1" >&2; exit 2 ;;
-    *) [[ -f "$1" ]] || { echo "dev/coverage.sh: no such suite: $1" >&2; exit 2; }
+    *) s=$1; shift
+      # A bare suite name: every suite lives in skills/orchestrate/scripts/.
+      [[ -f "$s" || ! -f "$root/skills/orchestrate/scripts/$s" ]] || s=$root/skills/orchestrate/scripts/$s
+      [[ -f "$s" ]] || { echo "dev/coverage.sh: no such suite: $s" >&2; exit 2; }
       # Absolute, since the run starts from the repo root.
-      suites+=("$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"); shift ;;
+      suites+=("$(cd "$(dirname "$s")" && pwd)/$(basename "$s")") ;;
   esac
 done
 [[ -z "$resultset" || -n "$floor" ]] || { echo "dev/coverage.sh: --resultset needs --check" >&2; exit 2; }
