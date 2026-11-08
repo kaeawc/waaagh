@@ -247,7 +247,10 @@ agent reports or a PR changes. Do not tick on a timer.
 6. **Fill lanes** up to the cap (below) from the ranked lane list. Start each through
    `"$SCRIPTS/lane-claim.sh" add --worktree … --branch … --issues … --files …`, which refuses a lane
    whose issue or files an active lane or an open PR already has, and records it in `lanes.tsv`;
-   mark it ended with `lane-claim.sh set --status merged|closed|abandoned`.
+   mark it ended with `lane-claim.sh set --status merged|closed|abandoned`. Name every lane
+   branch `work/<issue>-<slug>`, whoever drives the lane. Nothing may select PRs by that name:
+   the merge bot selects by author and readiness and excludes by labels, and `pr-ready.sh` reports
+   any otherwise-ready PR an exclusion hid as `ready-but-skipped=<n>`.
 7. **Report** only what changed: merged, opened, blocked, decisions queued.
 
 Findings feed back: verification and review findings become issues, and the next plan ranks them.

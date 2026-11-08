@@ -25,6 +25,7 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 | `{{BASE}}` | default branch |
 | `{{AUTHORS}}` | `--author` flags for the PRs this campaign may merge (the user, plus bots the user named) |
 | `{{IGNORE_CHECKS}}` | `--ignore-check` flags for advisory checks, from memory |
+| `{{EXCLUDE_LABELS}}` | `--exclude-label` flags for PRs another loop owns (e.g. `dependencies` when dependabot has its own lane); empty by default. Never a branch-name filter |
 | `{{CI_CLASSIFIER}}` | the repo's CI failure classifier and known-flakes list, or "none" |
 | `{{REBASE_GATES}}` | commands that must pass before a branch update is pushed |
 | `{{GENERATED_FILES}}` | conflict-prone generated files and the command that regenerates each; also written to `<state dir>/generated-files.tsv` (`<glob><TAB><command>` per line) for `regen-merge.sh` |
