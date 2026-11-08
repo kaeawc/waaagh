@@ -12,6 +12,9 @@ red `{{BASE}}`.
 1. `{{SCRIPTS}}/main-health.sh --repo {{REPO}}` — if it prints `red`, merge only the PRs your
    prompt names as fixes for it (`--main-fix`); report the red workflow and run id.
 2. `{{SCRIPTS}}/pr-ready.sh --repo {{REPO}} {{AUTHORS}} {{IGNORE_CHECKS}} [--hold N]...`
+   If its summary shows `page=<n>` (a smaller page after a timeout) or `truncated=yes`, older PRs
+   may be missing: re-run with `PR_READY_EXTRA="<n> ..."` naming the PRs your prompt says must
+   go first, and report the page size.
 3. For each `READY` row, oldest first, one at a time:
    `{{SCRIPTS}}/pr-merge.sh --repo {{REPO}} {{AUTHORS}} --pr <n> --head <head>`.
    Exit 3 (head moved or ineligible), 4 (red hold), 5 (GitHub refused) or 7 (no longer READY on a

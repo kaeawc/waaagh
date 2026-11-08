@@ -310,6 +310,10 @@ against its PR's own changes.
 
 ### Merge queue lessons
 
+- **A merge loop's PR list is never silently short.** `pr-ready.sh` falls back to smaller pages
+  (300, 120, 60, 30) when the `statusCheckRollup` query times out, and reports `page=<n>`; name the
+  PRs that must be judged anyway (the front of a serialized line) in `PR_READY_EXTRA`. Any
+  `gh pr list` a loop runs itself passes an explicit `--limit`: gh's default of 30 drops old PRs.
 - **`"$SCRIPTS/merge-queue.sh"` is the local queue**: serial, one pass per `run-once`, no daemon.
   Each pass refreshes main health and merges an item only when a fresh `pr-ready.sh` row for the
   exact pushed head is READY, whatever the server's protection would accept. Outcomes: `merged`

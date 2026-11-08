@@ -191,11 +191,11 @@ case "$cmd" in
         local_head=$(git -C "$qwt" rev-parse HEAD)
         printf '%s\n' "$local_head" >"$qdir/$qid.pushed"
       fi
-      list_open() { orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state open --json number,headRefOid; }
+      list_open() { orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state open --limit 100 --json number,headRefOid; }
       if ! prs=$(list_open); then set_outcome "$qid" waiting "PR lookup failed (transient)"; continue; fi
       if [[ "$(jq length <<<"$prs")" == 0 ]]; then
         # Already merged at this exact head (an earlier pass lost the answer)? Then it is done.
-        if ! merged=$(orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state merged --json number,headRefOid); then
+        if ! merged=$(orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state merged --limit 100 --json number,headRefOid); then
           set_outcome "$qid" waiting "PR lookup failed (transient)"; continue
         fi
         mpr=$(jq -r --arg h "$local_head" '[.[] | select(.headRefOid == $h)][0].number // empty' <<<"$merged")
