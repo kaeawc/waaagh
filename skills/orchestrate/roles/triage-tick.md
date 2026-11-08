@@ -13,7 +13,7 @@ from memory (advisory workflows, ready label, device slot types).
    [--classifier "<command>"] [--ready-label L] [--device-slots android=2,ios=2,xcode=2]`
    The classifier command comes from {{CI_CLASSIFIER}}; it is called as `<command> --repo R --run ID`
    and the first word it prints is the verdict. Without one, no red run is treated as a flake.
-   Eight lines; the first is the verdict: `verdict ok`, or `verdict act <reason>,...`. It refreshes
+   Nine lines; the first is the verdict: `verdict ok`, or `verdict act <reason>,...`. It refreshes
    main health (sets or clears `MAIN_RED`) in the same call. Work only from these lines.
 2. Act on each reason:
    - `flake-rerun` (main is red only because of runs the classifier calls a known flake or infra):
@@ -31,6 +31,11 @@ from memory (advisory workflows, ready label, device slot types).
    - `dispatch=<n>`: report the `next=` issues and the free `slots` by type. New issues without a
      route label go to the router first (`{{SCRIPTS}}/../routing.md`, `roles/router.md`); pass
      `--ready-label cloud-ready` so the queue holds only issues a cloud lane can take.
+   - `host-hold` (in place of `dispatch=<n>`): the last line, `host HOLD|BACKOFF cause=<c>
+     free_gb=<g> load=<l> limit=<x>`, says this host should start no lane now (`host-load.sh`).
+     Report the `dispatch` queue as waiting on the host, with the cause; for `cause=indexing` the
+     owner action from `host-load.sh` (fewer worktrees, Spotlight exclusion). `host unknown` (the
+     read failed) holds nothing: dispatch is reported as usual.
    - `cron-expiring`: the session cron dies within a day; report it so it is re-created.
    - `resolve-now=<n>`: the `threads` line's `resolve-now=` PRs have every unresolved review
      thread answered (an issue link or a pushed fix in the last reply). They are not repair

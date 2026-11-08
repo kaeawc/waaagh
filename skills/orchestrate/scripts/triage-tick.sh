@@ -26,11 +26,15 @@
 #             | threads unresolved=<n> answered=<n> resolve-now=#a,...|- repair=#b,...|-
 #                  review threads on open PRs (thread-sweep.sh scan --summary): resolve-now PRs have
 #                  every unresolved thread answered (an issue link or a pushed fix in the last reply)
+#       host <ADMIT|HOLD|BACKOFF> cause=<indexing|lanes|other|-> free_gb=<g|unknown> load=<l> limit=<x>
+#            | host unknown      lane admission on this host (host-load.sh --top 3; the command is
+#                  ORCHESTRATE_HOST_LOAD, default host-load.sh beside this script)
 #     Reasons: main-red, flake-rerun, rerun-pending, main-unknown, merge-loop-<state> (only while PRs
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
-#     cron-expiring (under 24h left), resolve-now=<n> (PRs whose threads only need resolving: the
-#     local orchestrator resolves them, they are not repair targets). A part that could not be read
-#     says "unknown"; never a guess.
+#     host-hold (in place of dispatch=<n> while the host line is HOLD or BACKOFF; "host unknown"
+#     holds nothing), cron-expiring (under 24h left), resolve-now=<n> (PRs whose threads only need
+#     resolving: the local orchestrator resolves them, they are not repair targets). A part that
+#     could not be read says "unknown"; never a guess.
 #     Device slots: an active lanes.tsv row whose agent column reads "<type>:<agent>" holds one
 #     <type> slot. Types and sizes: --device-slots or ORCHESTRATE_DEVICE_SLOTS (e.g.
 #     android=2,ios=2,xcode=2). A rerun that is still running holds merges (MAIN_RED is rewritten),
@@ -55,7 +59,7 @@ orch_gh_priority normal
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 
-usage() { sed -n '2,49p' "$0"; }
+usage() { sed -n '2,53p' "$0"; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 case "$cmd" in -h | --help) usage; exit 0 ;; esac
@@ -227,7 +231,7 @@ if ((pr_rc == 0)); then
       | ([$lanes | split("\n")[] | select(length > 0 and (startswith("#") | not)) | split("\t")
           | select(length >= 6 and (.[5] | IN("done", "merged", "closed", "abandoned") | not))
           | .[2] | split(",")[] | gsub("[^0-9]"; "") | select(length > 0) | tonumber]) as $laned
-      | [.[] | ([.labels[].name]) as $l
+      | [.[] | ([(.labels // [])[].name]) as $l
          | select(($ready | length) == 0 or ($l | has_any($ready)))
          | select($l | has_any($exclude) | not)
          | .number | select(. as $n | ($in_pr | index($n) | not) and ($laned | index($n) | not))]
@@ -280,7 +284,19 @@ if [[ -n "$device" ]]; then
     slots="${slots:+$slots,}$name=$busy/$n"
   done
 fi
-if [[ "$dispatch" =~ ^[0-9]+$ ]] && ((dispatch > 0)) && [[ -z "$device" || "$free" == yes ]]; then reasons+=("dispatch=$dispatch"); fi
+
+# Host admission (host-load.sh): refill lanes only while it says ADMIT. A failed read holds nothing.
+host="host unknown" hl_rc=0
+hl=$("${ORCHESTRATE_HOST_LOAD:-$here/host-load.sh}" --top 3 2>/dev/null) || hl_rc=$?
+if ((hl_rc == 0 || hl_rc == 3 || hl_rc == 4)); then
+  h=$(awk -F'\t' '$1 == "verdict" { v = $2 } $1 == "load" { l = $2; x = $3; sub(/.*limit /, "", x) }
+      $1 == "memory" { g = $2 } $1 == "cause" { c = $2 }
+      END { if (v ~ /^(ADMIT|HOLD|BACKOFF)$/) printf "host %s cause=%s free_gb=%s load=%s limit=%s", v, (c == "" ? "-" : c), (g == "" ? "unknown" : g), (l == "" ? "unknown" : l), (x == "" ? "unknown" : x) }' <<<"$hl")
+  [[ -z "$h" ]] || host=$h
+fi
+if [[ "$dispatch" =~ ^[0-9]+$ ]] && ((dispatch > 0)) && [[ -z "$device" || "$free" == yes ]]; then
+  case "$host" in "host HOLD "* | "host BACKOFF "*) reasons+=("host-hold") ;; *) reasons+=("dispatch=$dispatch") ;; esac
+fi
 
 # Session cron age (session crons expire after 7 days).
 cron=none
@@ -310,3 +326,4 @@ echo "dispatch $dispatch next=$next"
 echo "slots $slots"
 echo "cron $cron"
 echo "$threads"
+echo "$host"

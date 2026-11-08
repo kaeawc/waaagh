@@ -61,6 +61,8 @@ STUB
 chmod +x "$work/bin/gh"
 export FX="$work/fx" PATH="$work/bin:$PATH" ORCHESTRATE_STATE_DIR="$work/state" ORCHESTRATE_AUTHOR=me
 export ORCHESTRATE_NOW=1790510400
+# triage-tick.sh reads host-load.sh: fixed readings, not this machine's load
+export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
 
 printf 'case\tstdout_bytes\trows\tgh_calls\n'
 measure() { # NAME CMD...: run CMD, report its stdout size, row count and gh calls
