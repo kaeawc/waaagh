@@ -36,6 +36,15 @@ within() { # CASE COLUMN MAX
   within pr-ready-100-ready rows 100
 }
 
+@test "pr-ready over REST (GraphQL refused) makes a constant plus four gh calls per ready PR" {
+  # 3 constant (rules, branch protection, the refused GraphQL list) + one list call per 100 PRs
+  # (and one more when the last page is full), then per PR: pulls/<n>, check-runs, status, threads.
+  within pr-ready-rest-20-ready gh_calls 84
+  within pr-ready-rest-20-ready rows 20
+  within pr-ready-rest-100-ready gh_calls 405
+  within pr-ready-rest-100-ready rows 100
+}
+
 @test "an unchanged pr-ready --delta pass and an unchanged lane wait print one short line" {
   within pr-ready-delta-unchanged stdout_bytes 80
   within pr-ready-delta-unchanged rows 1

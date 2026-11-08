@@ -13,6 +13,7 @@
 #          | missing-required:<checks> | few-checks=<n> | pending:<checks> | mergeable=<state>
 #          | threads=<n> | threads=unknown (a page of review threads was unreadable)
 #          | policy=unknown (required checks could not be read)
+#          | checks=unknown (REST path: the PR's checks or mergeable state could not be read)
 #          Review threads and policy are checked for BLOCK rows too, so a row whose only blocker
 #          is a failed check really has no other: the admin path depends on that.
 #   SKIP   draft | fork | hold | label:<label> | branch, then " ready-but-skipped" when the PR
@@ -50,7 +51,15 @@
 # Last line on stderr: "open=<n> ready=<n>" (+ " ready-but-skipped=<n> skipped-by=<reason>:<n>,..."
 # when a skipped PR is otherwise READY, + " changed=<n>" with --delta, + " truncated=yes"
 # when the PR list hit its row limit, + " page=<limit>" when a smaller page was used,
-# + " extra-unreadable=<n,...>", + " policy=unknown", + " diagnostics=<path>").
+# + " extra-unreadable=<n,...>", + " policy=unknown", + " api=rest", + " diagnostics=<path>").
+# GraphQL refused (Claude Code cloud sessions answer it with HTTP 403): ORCHESTRATE_GH_API=auto
+# (default) reads the PR list over GraphQL and, on a 403 that names GraphQL, does the whole pass
+# over REST through gh-rest-pr.sh (summary " api=rest"); =rest skips the GraphQL attempt, =graphql
+# never falls back. REST reads: the open list in pages of 100, then only for candidates (author
+# and base match, not draft or fork, hold/label skips included) pulls/<n> for mergeable, the head's
+# check-runs and status, actions/runs for workflow names when a check names an Actions run, and
+# ccr/review_threads for each READY or BLOCK PR, PR_READY_REST_JOBS (default 4) PRs at a time. Draft and fork rows are not read: they show
+# mergeable UNKNOWN and 0 passed. Verdicts are otherwise the same as over GraphQL.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
@@ -74,10 +83,12 @@ while (($#)); do
     --no-threads) threads=no; shift ;;
     --delta) delta=yes; shift ;;
     --pr) only_pr=$2; shift 2 ;;
-    -h | --help) sed -n '2,53p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,62p' "$0"; exit 0 ;;
     *) echo "pr-ready.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+api=${ORCHESTRATE_GH_API:-auto}
+case "$api" in auto | rest | graphql) ;; *) echo "pr-ready.sh: ORCHESTRATE_GH_API must be auto, rest or graphql" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 [[ -n "$base" ]] || base=$(orch_default_branch "$repo")
@@ -126,6 +137,7 @@ fields=number,author,isDraft,isCrossRepository,baseRefName,headRefName,headRefOi
 limits=(300 120 60 30)
 prs="" list_limit=""
 for ((li = 0; li < ${#limits[@]}; li++)); do
+  [[ "$api" != rest ]] || break
   lim=${limits[li]}
   tries=2; ((li < ${#limits[@]} - 1)) || tries=4   # the same size rarely recovers; the last gets more
   rc=0
@@ -133,6 +145,7 @@ for ((li = 0; li < ${#limits[@]}; li++)); do
     --json "$fields" 2>"$diag_dir/.prlist-$$") || rc=$?
   err=$(cat "$diag_dir/.prlist-$$" 2>/dev/null || true); rm -f "$diag_dir/.prlist-$$"
   if ((rc == 0)); then list_limit=$lim; break; fi
+  if ((rc == 5)) && [[ "$api" == auto && "$err" == *GraphQL* ]]; then api=rest; break; fi
   note "PR list at limit $lim unreadable (exit $rc): ${err:0:500}"
   if ((rc != 7 && rc != 8)) || ((li == ${#limits[@]} - 1)); then
     echo "pr-ready: the open PR list could not be read; no verdicts (diagnostics: $diag)" >&2
@@ -140,6 +153,16 @@ for ((li = 0; li < ${#limits[@]}; li++)); do
   fi
   echo "pr-ready: open PR list at limit $lim failed (exit $rc); retrying with limit ${limits[li + 1]}" >&2
 done
+rest="$here/gh-rest-pr.sh"
+if [[ "$api" == rest ]]; then
+  list_limit=300
+  prs=$("$rest" list --repo "$repo" --limit "$list_limit" 2>"$diag_dir/.prlist-$$") || {
+    note "REST PR list unreadable: $(awk 'NR<=3' "$diag_dir/.prlist-$$" 2>/dev/null)"; rm -f "$diag_dir/.prlist-$$"
+    echo "pr-ready: the open PR list could not be read; no verdicts (diagnostics: $diag)" >&2
+    exit 3
+  }
+  rm -f "$diag_dir/.prlist-$$"
+fi
 truncated=no
 [[ "$(jq length <<<"$prs")" -lt "$list_limit" ]] || truncated=yes
 
@@ -149,7 +172,8 @@ if [[ "$truncated" == yes ]]; then
   for n in ${PR_READY_EXTRA:-} $only_pr; do
     [[ "$n" =~ ^[0-9]+$ ]] || { note "PR_READY_EXTRA: not a PR number: $n"; continue; }
     [[ "$(jq --argjson n "$n" 'any(.[]; .number == $n)' <<<"$prs")" == false ]] || continue
-    if one=$(ghr pr view "$n" --repo "$repo" --json "$fields,state" 2>"$diag_dir/.prview-$$") &&
+    if if [[ "$api" == rest ]]; then one=$("$rest" view --repo "$repo" --pr "$n" 2>"$diag_dir/.prview-$$")
+       else one=$(ghr pr view "$n" --repo "$repo" --json "$fields,state" 2>"$diag_dir/.prview-$$"); fi &&
       jq -e 'type == "object" and has("number")' >/dev/null 2>&1 <<<"$one"; then
       prs=$(jq -c --argjson one "$one" 'if $one.state == "OPEN" then . + [$one | del(.state)] else . end' <<<"$prs")
     else
@@ -158,6 +182,37 @@ if [[ "$truncated" == yes ]]; then
     fi
     rm -f "$diag_dir/.prview-$$"
   done
+fi
+# REST: the list carries neither checks nor mergeable. Read both for each candidate only (the PRs
+# the verdict loop judges); a candidate whose reads fail becomes a BLOCK row "checks=unknown".
+# rest_each SUBCOMMAND NUMBERS...: run `gh-rest-pr.sh SUBCOMMAND --pr N` for each number,
+# PR_READY_REST_JOBS (default 4) at a time, into $restdir/<subcommand>-<n>.out|.err|.bad.
+rest_each() {
+  local sub=$1
+  shift
+  (($#)) || return 0
+  printf '%s\n' "$@" | xargs -P "${PR_READY_REST_JOBS:-4}" -I{} sh -c \
+    '"$1" "$2" --repo "$3" --pr "$4" $5 >"$6/$2-$4.out" 2>"$6/$2-$4.err" || : >"$6/$2-$4.bad"' \
+    sh "$rest" "$sub" "$repo" {} "$( [[ "$sub" == view ]] && echo --checks)" "$restdir"
+}
+unread=""
+if [[ "$api" == rest ]]; then
+  restdir="$diag_dir/.rest-$$"; mkdir -p "$restdir"
+  trap 'rm -rf "$restdir"' EXIT
+  cands=()
+  while IFS= read -r n; do [[ -z "$n" ]] || cands+=("$n"); done < <(jq -r --argjson authors "$authors_json" \
+    --arg base "$base" --arg only_pr "$only_pr" '.[] | select($only_pr == "" or (.number | tostring) == $only_pr)
+      | select((.author.login as $a | $authors | index($a)) and .baseRefName == $base
+               and (.isDraft | not) and (.isCrossRepository | not)) | .number' <<<"$prs")
+  rest_each view ${cands[@]+"${cands[@]}"}
+  for n in ${cands[@]+"${cands[@]}"}; do
+    [[ -f "$restdir/view-$n.bad" ]] || continue
+    note "PR $n: REST checks or mergeable unreadable: $(awk 'NR<=3' "$restdir/view-$n.err")"
+    unread+="$n "
+  done
+  prs=$(cat "$restdir"/view-*.out 2>/dev/null | jq -sc --argjson prs "$prs" '
+    (map(select(type == "object" and has("number")) | {key: (.number | tostring), value: del(.state)}) | from_entries) as $by
+    | $prs | map($by[.number | tostring] // .)')
 fi
 rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" --argjson holds "$holds_json" \
     --argjson required "$required" --arg base "$base" --arg hold_label "$hold_label" \
@@ -225,6 +280,10 @@ rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" 
        else $judged + ["-"] end) as $v
     # Column 7 (internal): the verdict a SKIP row would have had without its exclusion.
     | [.number, $v[0], .headRefOid[0:9], .mergeable, ($pass | length), $v[1], $v[2]] | @tsv' <<<"$prs" | sort -n)
+if [[ -n "$unread" ]]; then
+  rows=$(awk -F'\t' -v OFS='\t' -v bad=" $unread" 'index(bad, " " $1 " ") {
+      if ($2 == "SKIP") $7 = "-"; else { $2 = "BLOCK"; $6 = "checks=unknown" } } { print }' <<<"$rows")
+fi
 
 # Unresolved, current review threads per READY or BLOCK PR, in batched GraphQL calls; a PR with
 # more than one page is followed page by page through its cursor. Prints "number<TAB>count", where
@@ -273,6 +332,17 @@ tcounts=""
 if [[ "$threads" == yes ]]; then
   ready_nums=()
   while IFS= read -r n; do ready_nums+=("$n"); done < <(awk -F'\t' '$2 == "READY" || $2 == "BLOCK" || $7 == "READY" { print $1 }' <<<"$rows")
+  if [[ "$api" == rest ]]; then
+    rest_each threads ${ready_nums[@]+"${ready_nums[@]}"}
+    for n in ${ready_nums[@]+"${ready_nums[@]}"}; do
+      count=$(cat "$restdir/threads-$n.out" 2>/dev/null)
+      if [[ -f "$restdir/threads-$n.bad" || ! "$count" =~ ^[0-9]+$ ]]; then
+        note "PR $n: review threads unreadable over REST: $(awk 'NR<=3' "$restdir/threads-$n.err" 2>/dev/null)"; count=unknown
+      fi
+      tcounts+="$n"$'\t'"$count"$'\n'
+    done
+    ready_nums=()
+  fi
   for ((i = 0; i < ${#ready_nums[@]}; i += 50)); do
     while IFS=$'\t' read -r n count cursor; do
       [[ -n "$n" ]] || continue
@@ -348,5 +418,6 @@ fi
 [[ "$list_limit" == "${limits[0]}" ]] || summary+=" page=$list_limit"
 [[ -z "$extra_bad" ]] || summary+=" extra-unreadable=$extra_bad"
 [[ "$policy" == known ]] || summary+=" policy=unknown"
+[[ "$api" != rest ]] || summary+=" api=rest"
 if [[ -s "$diag" ]]; then summary+=" diagnostics=$diag"; else rm -f "$diag"; fi
 echo "$summary" >&2

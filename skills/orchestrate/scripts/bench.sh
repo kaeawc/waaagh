@@ -24,7 +24,18 @@ case "$*" in
   *graphql*) jq -n --args '{data: {repository: (reduce $ARGS.positional[] as $n ({};
       .["p" + $n] = {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: []}}))}}' \
       $(printf '%s\n' "$*" | grep -oE ' p[0-9]+:' | tr -dc '0-9\n') ;;
-  "pr list"*) cat "$FX/prs.json" ;;
+  "pr list"*) if [ -f "$FX/rest" ]; then echo "HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the REST API" >&2; exit 1; fi
+    cat "$FX/prs.json" ;;
+  # The REST path (#109), from the same rows: list pages, then per PR mergeable, checks, status and threads.
+  *"pulls?state=open"*) p=$(printf '%s\n' "$*" | sed -nE 's/.*[?&]page=([0-9]+).*/\1/p')
+    jq --argjson p "$p" '.[(($p - 1) * 100):($p * 100)] | map({number, draft: false, user: {login: .author.login},
+      base: {ref: "main", repo: {full_name: "o/r"}}, head: {ref: "b", sha: .headRefOid, repo: {full_name: "o/r"}}, labels: []})' "$FX/prs.json" ;;
+  *"/ccr/review_threads"*) echo '[]' ;;
+  "api repos/o/r/pulls/"*) n=${2#repos/o/r/pulls/}
+    jq --argjson n "$n" '.[] | select(.number == $n) | {number, draft: false, user: {login: .author.login}, mergeable: true,
+      base: {ref: "main", repo: {full_name: "o/r"}}, head: {ref: "b", sha: .headRefOid, repo: {full_name: "o/r"}}, labels: []}' "$FX/prs.json" ;;
+  *"/check-runs"*) echo '{"total_count":1,"check_runs":[{"name":"build","status":"completed","conclusion":"success","started_at":"2026-09-27T01:00:00Z"}]}' ;;
+  *"/status"*) echo '{"state":"pending","statuses":[]}' ;;
   "issue list"*) cat "$FX/issues.json" ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
@@ -67,6 +78,13 @@ pr_rows 100 >"$FX/prs.json"
 measure pr-ready-100-ready "$here/pr-ready.sh" --repo o/r --base main
 "$here/pr-ready.sh" --repo o/r --base main --delta >/dev/null 2>&1
 measure pr-ready-delta-unchanged "$here/pr-ready.sh" --repo o/r --base main --delta
+# The same PRs where GraphQL is refused (#109): REST costs a constant plus a few calls per ready PR.
+touch "$FX/rest"
+pr_rows 20 >"$FX/prs.json"
+measure pr-ready-rest-20-ready "$here/pr-ready.sh" --repo o/r --base main
+pr_rows 100 >"$FX/prs.json"
+measure pr-ready-rest-100-ready "$here/pr-ready.sh" --repo o/r --base main
+rm -f "$FX/rest"
 
 # codex-lane-wait.sh (#7): an unchanged run.
 run="$work/run/codex.jsonl"

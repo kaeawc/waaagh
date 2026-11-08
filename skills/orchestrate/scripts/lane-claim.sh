@@ -22,6 +22,11 @@
 #          GitHub, however it closed (merged PR, owner, sweep). Send each lane a stop message, then
 #          `set --status closed` once it has stopped.
 # lanes.tsv columns: worktree  branch  issues  files  agent  status
+# GraphQL refused (Claude Code cloud sessions answer `gh pr list` with HTTP 403):
+# ORCHESTRATE_GH_API=auto (default) then reads the open PRs over REST (gh-rest-pr.sh): the list,
+# plus each PR's files only when --files is given. Closing issues come from the PR body there
+# ("Fixes #N"), not from issues linked by hand in the sidebar. =rest skips the GraphQL attempt,
+# =graphql never falls back.
 # Exit: 0 ok | 3 conflict | 4 the open PRs (check, add) or an issue (closed: the others are still
 #       printed) could not be read; no verdict, see gh-read.sh | 2 usage
 set -euo pipefail
@@ -30,7 +35,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-case "${1:-}" in -h | --help) sed -n '2,26p' "$0"; exit 0 ;; -*) echo "lane-claim.sh: unknown argument: $1" >&2; exit 2 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,31p' "$0"; exit 0 ;; -*) echo "lane-claim.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" issues="" files="" worktree="" branch="" agent="-" status=""
@@ -43,18 +48,20 @@ while (($#)); do
     --branch) branch=$2; shift 2 ;;
     --agent) agent=$2; shift 2 ;;
     --status) status=$2; shift 2 ;;
-    -h | --help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,31p' "$0"; exit 0 ;;
     *) echo "lane-claim.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$cmd" in
-  check) [[ -n "$issues$files" ]] || { sed -n '2,26p' "$0" >&2; exit 2; } ;;
-  add) [[ -n "$worktree" && -n "$branch" && -n "$issues$files" ]] || { sed -n '2,26p' "$0" >&2; exit 2; } ;;
-  set) [[ -n "$worktree" && -n "$status" ]] || { sed -n '2,26p' "$0" >&2; exit 2; } ;;
-  on-issue) [[ -n "$issues" ]] || { sed -n '2,26p' "$0" >&2; exit 2; } ;;
+  check) [[ -n "$issues$files" ]] || { sed -n '2,31p' "$0" >&2; exit 2; } ;;
+  add) [[ -n "$worktree" && -n "$branch" && -n "$issues$files" ]] || { sed -n '2,31p' "$0" >&2; exit 2; } ;;
+  set) [[ -n "$worktree" && -n "$status" ]] || { sed -n '2,31p' "$0" >&2; exit 2; } ;;
+  on-issue) [[ -n "$issues" ]] || { sed -n '2,31p' "$0" >&2; exit 2; } ;;
   closed) ;;
-  *) sed -n '2,26p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,31p' "$0" >&2; exit 2 ;;
 esac
+api=${ORCHESTRATE_GH_API:-auto}
+case "$api" in auto | rest | graphql) ;; *) echo "lane-claim.sh: ORCHESTRATE_GH_API must be auto, rest or graphql" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 lanes="$state/lanes.tsv"
@@ -77,9 +84,24 @@ with_lock() { # serialize writers; a lock older than 5 minutes is a leftover
 
 # conflicts: prints one line per overlap with an active lane or an open PR.
 conflicts() {
-  local prs
-  prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limit 200 \
-    --json number,title,body,closingIssuesReferences,files 2>/dev/null) || { echo "unreadable"; return; }
+  local prs rc=0 err n f
+  if [[ "$api" != rest ]]; then
+    err=$(mktemp)
+    prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limit 200 \
+      --json number,title,body,closingIssuesReferences,files 2>"$err") || rc=$?
+    if ((rc == 5)) && [[ "$api" == auto ]] && grep -q GraphQL "$err"; then api=rest
+    elif ((rc != 0)); then rm -f "$err"; echo "unreadable"; return; fi
+    rm -f "$err"
+  fi
+  if [[ "$api" == rest ]]; then
+    prs=$("$here/gh-rest-pr.sh" list --repo "$repo" --limit 200 2>/dev/null) || { echo "unreadable"; return; }
+    if [[ -n "$files" ]]; then
+      for n in $(jq -r '.[].number' <<<"$prs"); do
+        f=$("$here/gh-rest-pr.sh" files --repo "$repo" --pr "$n" 2>/dev/null) || { echo "unreadable"; return; }
+        prs=$(jq -c --argjson n "$n" --argjson f "$f" 'map(if .number == $n then .files = $f else . end)' <<<"$prs")
+      done
+    fi
+  fi
   jq -rn --arg issues "$issues" --arg files "$files" --rawfile lanes "$lanes" --argjson prs "$prs" '
     def list: split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0));
     def overlaps($a; $b): $a == $b or ($a | endswith("/") and ($b | startswith($a))) or ($b | endswith("/") and ($a | startswith($b)));
