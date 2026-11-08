@@ -13,9 +13,13 @@
 #   --resultset  the resultset --check reads (default coverage/.resultset.json)
 # Env: GITHUB_STEP_SUMMARY  when set, the table (or the check's findings) is appended to it as Markdown.
 # Needs: bashcov (gem install bashcov, on PATH; not for --check), jq.
-# Reading the numbers: xtrace reports only the first line of a command, so the continuation lines
-# of a multi-line command (a jq program, a `\`-continued call) count as uncovered even when the
-# command ran. The real figure is a few points above the total printed here.
+# Reading the numbers: xtrace reports one line of a multi-line command (often its last), so bashcov
+# counts the rest (a jq or awk program, a `\`-continued call, a heredoc) as uncovered though it ran.
+# Each script is reported twice: raw (bashcov's numbers) and credited, where the uncovered lines of
+# a multi-line command count as covered when a line of that command ran. Floors check credited.
+# A command continues past a line that ends in \, |, && or || or inside an open quote, and a
+# heredoc runs to its terminator. An unbalanced command stays raw, and so does a script whose source
+# is neither at the resultset's path nor under the repo root.
 # Exit: 0 report printed, or every floor held | 1 a suite failed (report still printed) | 2 usage or
 #       bashcov missing | 3 --check: a script below its floor or with no floor row | 4 --check: the
 #       resultset or floor file is missing or malformed
@@ -31,23 +35,89 @@ while (($#)); do
       floor=$2; shift 2 ;;
     --resultset) [[ -n "${2:-}" ]] || { echo "dev/coverage.sh: --resultset needs a file" >&2; exit 2; }
       resultset=$2; shift 2 ;;
-    -h | --help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "dev/coverage.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 [[ -z "$resultset" || -n "$floor" ]] || { echo "dev/coverage.sh: --resultset needs --check" >&2; exit 2; }
 
-# The measured scripts as [{f, rel, hit}], paths relative to the repo root whatever root the
-# resultset was written under (so a resultset from CI or a fixture checks the same way).
-ROWS='def rows($root):
+# The measured scripts as [{f, rel, hit, raw}], paths relative to the repo root whatever root the
+# resultset was written under (so a resultset from CI or a fixture checks the same way). hit counts
+# credited lines, raw bashcov's; $ext is what credit_extents wrote.
+ROWS='def path($root): ltrimstr($root) | capture("(?:^|/)(?<f>skills/orchestrate/scripts/gh-shim/gh|skills/orchestrate/scripts/.*\\.sh|bin/[^/]*\\.sh)$").f;
+def credit($x): if $x == null then . else
+  reduce $x.ext[] as $e (.; ([.[$e[0] - 1:$e[1]][] | select(. != null)] | max // 0) as $m
+    | if $m > 0 then reduce range($e[0] - 1; $e[1]) as $i (.; if .[$i] == 0 then .[$i] = $m else . end) else . end) end;
+def rows($root; $ext):
   [.[] | .coverage | to_entries[]
-   | {f: (.key | ltrimstr($root) | capture("(?:^|/)(?<f>skills/orchestrate/scripts/gh-shim/gh|skills/orchestrate/scripts/.*\\.sh|bin/[^/]*\\.sh)$").f),
-      l: (.value.lines // .value)}
-   | {f, rel: ([.l[] | select(. != null)] | length), hit: ([.l[] | select(. != null and . > 0)] | length)}];
-def pct: if .rel == 0 then null else (.hit * 1000 / .rel | floor) / 10 end;'
+   | {f: (.key | path($root)), l: (.value.lines // .value)} | $ext[.f] as $x | .c = (.l | credit($x))
+   | {f, rel: ([.l[] | select(. != null)] | length), hit: ([.c[] | select(. != null and . > 0)] | length),
+      raw: ([.l[] | select(. != null and . > 0)] | length)}];
+def pct: if .rel == 0 then null else (.hit * 1000 / .rel | floor) / 10 end;
+def rawpct: if .rel == 0 then null else (.raw * 1000 / .rel | floor) / 10 end;'
+
+# Each multi-line command of a script as "start<TAB>end" (1-based, inclusive).
+# A command still open at the end of the file (an unbalanced quote or heredoc) is not printed.
+EXTENTS='function word_start(i) { return i == 1 || substr(line, i - 1, 1) ~ /[ \t;|&()<>]/ }
+{
+  line = $0
+  if (st == "heredoc") {
+    t = line; if (hd_tabs) sub(/^\t+/, "", t)
+    if (t == hd_term) { st = ""; if (!hd_cont) { if (NR > start) print start "\t" NR; start = 0 } }
+    next
+  }
+  if (start == 0) start = NR
+  n = length(line); i = 1; last = ""; hd_term = ""
+  while (i <= n) {
+    c = substr(line, i, 1)
+    if (st == "sq") { if (c == "\047") st = ""; i++; continue }
+    if (st == "aq") { if (c == "\\") i++; else if (c == "\047") st = ""; i++; continue }
+    if (st == "dq") { if (c == "\\") i++; else if (c == "\"") st = ""; i++; continue }
+    if (c == " " || c == "\t") { i++; continue }
+    if (c == "#" && word_start(i)) break
+    if (c == "\\") { if (i == n) { last = "\\"; break } last = "x"; i += 2; continue }
+    if (c == "\047") { st = "sq"; last = "x"; i++; continue }
+    if (c == "$" && substr(line, i + 1, 1) == "\047") { st = "aq"; last = "x"; i += 2; continue }
+    if (c == "\"") { st = "dq"; last = "x"; i++; continue }
+    if (substr(line, i, 3) == "<<<") { last = "x"; i += 3; continue }
+    if (substr(line, i, 2) == "<<") {
+      j = i + 2; tabs = 0
+      if (substr(line, j, 1) == "-") { tabs = 1; j++ }
+      while (substr(line, j, 1) ~ /[ \t]/) j++
+      w = substr(line, j)
+      if (match(w, /^[\047"\\]?[A-Za-z0-9_]+[\047"]?/)) {
+        t = substr(w, 1, RLENGTH); gsub(/[\047"\\]/, "", t)
+        hd_term = t; hd_tabs = tabs; i = j + RLENGTH; last = "x"; continue
+      }
+    }
+    if (substr(line, i, 2) == "&&" || substr(line, i, 2) == "||") { last = "op"; i += 2; continue }
+    if (c == "|") { last = "op"; i++; continue }
+    last = "x"; i++
+  }
+  cont = (st != "" || last == "\\" || last == "op")
+  if (hd_term != "" && st == "") { st = "heredoc"; hd_cont = cont; next }
+  if (!cont) { if (NR > start) print start "\t" NR; start = 0 }
+}'
+
+# credit_extents RESULTSET OUT: writes {"<repo-relative path>": {ext: [[start, end]]}} to OUT for
+# each measured script whose source it finds, at the resultset's path or under the repo root. The
+# resultset's line count is not checked against the source: xtrace can report lines past the end.
+credit_extents() {
+  local key f src
+  jq -r --arg root "$root/" "$ROWS"'[.[] | .coverage | keys[] | {k: ., f: path($root)} | "\(.k)\t\(.f)"] | unique[]' "$1" |
+    while IFS=$'\t' read -r key f; do
+      src=$key
+      [[ -f "$src" ]] || src=$root/$f
+      [[ -f "$src" ]] || continue
+      awk "$EXTENTS" "$src" | awk -v f="$f" '{ print f "\t" $0 }'
+    done | jq -Rn 'reduce (inputs | split("\t")) as $r ({}; .[$r[0]].ext += [[($r[1] | tonumber), ($r[2] | tonumber)]])' >"$2"
+}
 
 # Reads its input to the end either way: a producer piped into it must never see a closed pipe.
 summary() { if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then cat >>"$GITHUB_STEP_SUMMARY"; else cat >/dev/null; fi; }
+
+ext="" # credit_extents' output, made where it is needed: the bashcov check runs with a minimal PATH
+trap '[[ -z "$ext" ]] || rm -f "$ext"' EXIT
 
 if [[ -n "$floor" ]]; then
   resultset=${resultset:-$root/coverage/.resultset.json}
@@ -57,9 +127,12 @@ if [[ -n "$floor" ]]; then
   bad=$(awk -F'\t' '/^[[:space:]]*(#|$)/ { next }
     NF != 2 || $2 !~ /^[0-9]+(\.[0-9]+)?$/ || $2 > 100 { print FILENAME ":" NR ": " $0 }' "$floor")
   [[ -z "$bad" ]] || { printf 'dev/coverage.sh: malformed floor row (want script<TAB>min%%):\n%s\n' "$bad" >&2; exit 4; }
-  # One finding per line: "below\tpath\tpct\tfloor" | "missing\tpath\tpct" | "stale\tpath".
-  findings=$(jq -r --arg root "$root/" --rawfile floors "$floor" "$ROWS"'
-    (rows($root) | map({key: .f, value: pct}) | from_entries) as $got
+  ext=$(mktemp)
+  credit_extents "$resultset" "$ext" 2>/dev/null \
+    || { echo "dev/coverage.sh: cannot read $resultset as a bashcov resultset" >&2; exit 4; }
+  # One finding per line: "below\tpath\tpct\tfloor" | "missing\tpath\tpct" | "stale\tpath" (credited %).
+  findings=$(jq -r --arg root "$root/" --rawfile floors "$floor" --slurpfile ext "$ext" "$ROWS"'
+    (rows($root; $ext[0]) | map({key: .f, value: pct}) | from_entries) as $got
     | ([$floors | split("\n")[] | select(test("^\\s*(#|$)") | not) | split("\t") | {key: .[0], value: (.[1] | tonumber)}]
        | from_entries) as $min
     | if ($got | length) == 0 then error("no measured scripts in the resultset") else . end
@@ -110,16 +183,20 @@ mkdir -p coverage && mv coverage.log coverage/test.log
 [[ -f coverage/.resultset.json ]] || { echo "dev/coverage.sh: bashcov wrote no results (see coverage/test.log)" >&2; exit 1; }
 ((rc == 0)) || echo "dev/coverage.sh: a suite failed under coverage (see coverage/test.log)" >&2
 
-table=$(jq -r --arg root "$root/" "$ROWS"'
-  rows($root) | (map(.rel) | add) as $r | (map(.hit) | add) as $h
+ext=$(mktemp)
+credit_extents coverage/.resultset.json "$ext"
+# Columns: credited %, credited lines/relevant lines, raw %, script; the total row last.
+table=$(jq -r --arg root "$root/" --slurpfile ext "$ext" "$ROWS"'
+  def p: if . == null then "  n/a" else tostring + "%" end;
+  rows($root; $ext[0]) | (map(.rel) | add) as $r | (map(.hit) | add) as $h | (map(.raw) | add) as $w
   | (sort_by(if .rel == 0 then 1 else .hit / .rel end)[]
-     | "\(if .rel == 0 then "  n/a" else (pct | tostring) + "%" end)\t\(.hit)/\(.rel)\t\(.f)"),
-    "total\t\($h)/\($r)\t\(($h * 1000 / $r | floor) / 10)%"' coverage/.resultset.json)
+     | "\(pct | p)\t\(.hit)/\(.rel)\traw \(rawpct | p)\t\(.f)"),
+    "total\t\($h)/\($r)\t\(($h * 1000 / $r | floor) / 10)%\traw \(($w * 1000 / $r | floor) / 10)%"' coverage/.resultset.json)
 printf '%s\n' "$table"
 {
   echo "### Line coverage (bashcov)"
   echo
-  awk -F'\t' '$1 == "total" { print "**Total: " $3 "** (" $2 " lines)\n\n| Coverage | Lines | Script |\n|---:|---:|---|"; exit }' <<<"$table"
-  awk -F'\t' '$1 != "total" { print "| " $1 " | " $2 " | `" $3 "` |" }' <<<"$table"
+  awk -F'\t' '$1 == "total" { sub(/^raw /, "", $4); print "**Total: " $3 " credited, " $4 " raw** (" $2 " lines)\n\n| Credited | Lines | Raw | Script |\n|---:|---:|---:|---|"; exit }' <<<"$table"
+  awk -F'\t' '$1 != "total" { sub(/^raw /, "", $3); print "| " $1 " | " $2 " | " $3 " | `" $4 "` |" }' <<<"$table"
 } | summary
 exit $((rc == 0 ? 0 : 1))
