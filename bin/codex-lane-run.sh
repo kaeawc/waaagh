@@ -75,18 +75,46 @@ fi
 
 # shellcheck disable=SC2317,SC2329
 child_pid=''; pgid=''; exit_code=0
+# The runner's own process group, which it never signals. Group signals go only to a group confirmed
+# to be codex's own (pgid == child_pid after its setpgrp); until then signals go to codex's pid.
+runner_pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ' || true)
+# Is codex (or anything it left in its group) still running?
+# shellcheck disable=SC2317,SC2329
+child_running() {
+  if [[ -n $pgid ]]; then pgrep -g "$pgid" >/dev/null 2>&1
+  elif [[ -n $child_pid ]]; then process_alive "$child_pid"
+  else return 1; fi
+}
+# shellcheck disable=SC2317,SC2329
+signal_child() {
+  if [[ -n $pgid && $pgid != "$runner_pgid" ]]; then kill "-$1" -- "-$pgid" 2>/dev/null || true
+  elif [[ -n $child_pid ]]; then kill "-$1" "$child_pid" 2>/dev/null || true; fi
+}
+# Confirm codex leads its own process group, polling up to $1 more times 0.1 s apart. Sets pgid
+# only when `ps` reports a group id equal to codex's pid and not the runner's own group.
+confirm_pgid() {
+  local tries=$1 seen
+  [[ -z $pgid && -n $child_pid ]] || return 0
+  while :; do
+    seen=$(ps -o pgid= -p "$child_pid" 2>/dev/null | tr -d ' ' || true)
+    if [[ $seen == "$child_pid" && $seen != "$runner_pgid" ]]; then pgid=$seen; return 0; fi
+    ((tries > 0)) || break
+    tries=$((tries - 1)); sleep 0.1
+  done
+  return 1
+}
 # shellcheck disable=SC2317,SC2329
 cleanup() {
   local status=$? waited=0
-  if [[ -n ${pgid:-} ]] && pgrep -g "$pgid" >/dev/null 2>&1; then
-    kill -INT -- -"$pgid" 2>/dev/null || true
-    while ((waited < 5)) && pgrep -g "$pgid" >/dev/null 2>&1; do sleep 1; waited=$((waited + 1)); done
-    if pgrep -g "$pgid" >/dev/null 2>&1; then
-      kill -TERM -- -"$pgid" 2>/dev/null || true
+  if child_running; then
+    signal_child INT
+    while ((waited < 5)) && child_running; do sleep 1; waited=$((waited + 1)); done
+    if child_running; then
+      signal_child TERM
       waited=0
-      while ((waited < 3)) && pgrep -g "$pgid" >/dev/null 2>&1; do sleep 1; waited=$((waited + 1)); done
+      while ((waited < 3)) && child_running; do sleep 1; waited=$((waited + 1)); done
     fi
-    if pgrep -g "$pgid" >/dev/null 2>&1; then kill -KILL -- -"$pgid" 2>/dev/null || true; fi
+    if child_running; then signal_child KILL; fi
   fi
   if ((exit_code == 0 && status != 0)); then exit_code=$status; fi
   if [[ -n ${LOG:-} ]]; then printf '%s\n' "$exit_code" > "$LOG.exit" 2>/dev/null || true; fi
@@ -130,11 +158,12 @@ cpu_seconds() {
       2) m=${parts[0]} s=${parts[1]%%.*}; total=$((total + 10#$m * 60 + 10#$s)) ;;
       3) h=${parts[0]} m=${parts[1]} s=${parts[2]%%.*}; total=$((total + 10#$h * 3600 + 10#$m * 60 + 10#$s)) ;;
     esac
-  done < <(ps -o time= -g "$pgid" 2>/dev/null || true)
+  done < <(if [[ -n $pgid ]]; then ps -o time= -g "$pgid"; else ps -o time= -p "$child_pid"; fi 2>/dev/null || true)
   printf '%s' "$total"
 }
 group_has_descendants() {
   local pids pid
+  [[ -n $pgid ]] || return 1
   pids=$(pgrep -g "$pgid" 2>/dev/null || true)
   while IFS= read -r pid; do [[ -n $pid && $pid != "$child_pid" ]] && return 0; done <<< "$pids"
   return 1
@@ -190,12 +219,17 @@ codex_args+=(--sandbox workspace-write --skip-git-repo-check --cd "$CD_DIR" --js
 printf "%s\n" "${codex_args[*]}" > "$LOG.args"
 perl -e 'setpgrp(0, 0) or die "setpgrp: $!"; $SIG{INT} = "DEFAULT"; exec @ARGV or die "exec codex: $!"' codex "${codex_args[@]}" < "$LOG.spec" > "$LOG" 2>"$LOG.stderr" &
 child_pid=$!
-pgid=$(ps -o pgid= -p "$child_pid" 2>/dev/null | tr -d ' ' || true)
-[[ -n $pgid ]] || pgid=$child_pid
+# `ps` can run before codex's setpgrp and report the runner's (the caller's) group; signalling that
+# group would hit the orchestrator or test runner. Wait up to 2 s for codex's own group, then keep
+# rechecking every poll; until it is confirmed, signals go to codex's pid alone.
+if ! confirm_pgid 20; then
+  echo "codex-lane-run: codex's own process group is not confirmed; signalling pid $child_pid alone until it is" >&2
+fi
 start=$(date +%s); last_progress=$start
 last_log_size=$(file_size "$LOG"); last_git=$(git_status); last_cpu=$(cpu_seconds)
 last_checkpoint=0 reason=
 while :; do
+  confirm_pgid 0 || true
   now=$(date +%s); elapsed=$((now - start)); size=$(file_size "$LOG")
   current_git=$(git_status); current_cpu=$(cpu_seconds)
   if [[ $size != "$last_log_size" || $current_git != "$last_git" || $current_cpu -gt $last_cpu ]] || group_has_descendants; then
@@ -225,14 +259,15 @@ while :; do
 done
 
 if [[ $reason == stalled || $reason == 'hard cap' ]]; then
-  kill -INT -- -"$pgid" 2>/dev/null || true
+  confirm_pgid 0 || true
+  signal_child INT
   waited=0
-  while ((waited < 60)) && pgrep -g "$pgid" >/dev/null 2>&1; do sleep 1; waited=$((waited + 1)); done
-  if pgrep -g "$pgid" >/dev/null 2>&1; then
-    kill -TERM -- -"$pgid" 2>/dev/null || true; waited=0
-    while ((waited < 10)) && pgrep -g "$pgid" >/dev/null 2>&1; do sleep 1; waited=$((waited + 1)); done
+  while ((waited < 60)) && child_running; do sleep 1; waited=$((waited + 1)); done
+  if child_running; then
+    signal_child TERM; waited=0
+    while ((waited < 10)) && child_running; do sleep 1; waited=$((waited + 1)); done
   fi
-  if pgrep -g "$pgid" >/dev/null 2>&1; then kill -KILL -- -"$pgid" 2>/dev/null || true; fi
+  if child_running; then signal_child KILL; fi
   wait "$child_pid" 2>/dev/null || true; child_pid=
 fi
 if [[ ! -s $FINAL ]]; then
