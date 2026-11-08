@@ -57,7 +57,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `thread-resolve.sh` | Reply once (marker-keyed) on one review thread and resolve it, with readback and typed exits |
 | `thread-sweep.sh` | Find review threads whose last reply links an issue or names a pushed fix (resolve-now vs repair per PR) and resolve them locally; cloud sessions reply but cannot resolve |
 | `issue-route.sh` | Exactly one route label per actionable issue (`cloud-ready` or `needs-local:*`): route counts and unrouted/multi-routed issues, label bootstrap, and `set` with the local-work comment and a REST fallback |
-| `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid` |
+| `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid`; records the holder's serials or UDIDs and `check`s ownership (AVD suffix, simctl) before device commands |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
 | `validate.sh` | Run a validation command into a receipt outside the checkout; `check` says whether an independent, passing receipt for the exact current key can be reused |
 | `regen-merge.sh` | Merge the base into a branch; conflicts only in generated files are resolved by taking the base and regenerating (verified stable); anything else aborts |
