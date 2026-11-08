@@ -72,7 +72,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `usage-report.sh` | Codex usage per model and verified lane status, from per-run receipts (`bin/codex-lane-usage.sh`) |
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
-| `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, and create pacing with 429 backoff |
+| `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, and the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue) |
 | `lane-safety.sh` | PreToolUse hook (wired by `hooks/hooks.json`) enforcing the lane safety contract on Bash calls: denies deleting protected or out-of-lane paths, pattern kills, quitting Simulator.app and shell writes outside the lane worktree; asks about backgrounded or silenced destructive commands (`skills/orchestrate/lane-safety.md`) |
 
 ## Defaults
