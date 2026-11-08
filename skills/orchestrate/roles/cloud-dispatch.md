@@ -41,6 +41,11 @@ issue then gets a local route for that remainder (`issue-route.sh set`), never a
       "GATES"` prints the create object: `run_once_at` staggered 20 s after the last dispatched
       run (and at least 60 s out), `job_config.ccr.environment_id`, `session_context.sources` and
       `model`, and the brief as `events[0].data.message`. Exit 3: already dispatched, skip it.
+      It first runs the **fixtures check** (`../device-cloud-handoff.md`): an issue that mentions
+      captured fixtures must carry them (a `<details>` comment or a linked fixtures PR), and the
+      brief then says "commit the fixtures from <url> verbatim". Exit 5: they are missing — `queue
+      drop N` and route it back to the local lane; never dispatch it to invent them. Exit 7: the
+      issue could not be read; leave it for the next batch.
       Map its fields onto the `RemoteTrigger create` call; if the tool's schema places a field
       elsewhere, follow the tool.
    3. `RemoteTrigger create`. On HTTP 429 ("Try again in Ns"): `cloud-dispatch.sh backoff

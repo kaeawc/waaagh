@@ -72,7 +72,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `usage-report.sh` | Codex usage per model and verified lane status, from per-run receipts (`bin/codex-lane-usage.sh`) |
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
-| `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, and create pacing with 429 backoff |
+| `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, and the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue) |
 | `host-load.sh` | Lane admission with attribution: ADMIT / HOLD / BACKOFF from 1-min load vs CPUs and free memory, a third device slot only at 12 GB free, top processes by CPU and RSS tied to their worktrees, and the cause (indexing, lanes, other) with the owner action (`skills/orchestrate/host-load.md`) |
 
 ## Defaults

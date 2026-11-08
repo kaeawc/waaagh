@@ -36,6 +36,9 @@ verify, and a regression surface to sweep.
 - For each NOT-FIXED or REGRESSED item, and each new defect reproduced twice: search for an
   existing issue first; otherwise `gh issue create` with what is wrong, exact repro (calls, device,
   OS level, tested SHA), expected, evidence, and root cause if found. At most 8 issues.
+- An issue meant for a cloud lane that needs output you captured (dumps, logs, traces) carries
+  every such fixture itself, in `<details>` comments, never a local path or an excerpt:
+  `{{SCRIPTS}}/../device-cloud-handoff.md`.
 - Last: `{{SCRIPTS}}/campaign.sh verified --repo {{REPO}} --sha <tested SHA>`, release the lock.
 - Reply (under 350 words): tested SHA, one line per item, issues filed, blocked items, and
   confirmation that devices were left as found and nothing you did not start was touched.
