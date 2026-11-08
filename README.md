@@ -72,6 +72,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
 | `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, and create pacing with 429 backoff |
+| `failure-triage.sh` | Rerun first, reproduce second: re-run a failing PR check once when the classifier can't place it and its domain (`check-domains`) misses the diff, refuse a second rerun on the same head, and keep a failure-signature store so the next occurrence is classified |
 
 ## Defaults
 

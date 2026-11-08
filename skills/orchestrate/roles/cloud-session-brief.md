@@ -7,3 +7,4 @@ Cloud lane for {{REPO}} issue #{{ISSUE}}. One pass; you cannot message the orche
 6. Get CI green (fix what your change broke). Then one review round: address the review comments once and stop.
 7. Do not merge. No attribution lines (no Co-Authored-By, no "Generated with").
 If blocked, comment once on #{{ISSUE}} saying what blocked you, and stop.
+Never kill by pattern (no `pkill`, `pkill -f`, `killall`, `kill $(pgrep ...)`): it can match your own shell. Kill only PIDs you started. The container is small: if local tests hit their wall timeout, apply the container settings in your gates (longer timeout, fewer workers) before calling it a failure.
