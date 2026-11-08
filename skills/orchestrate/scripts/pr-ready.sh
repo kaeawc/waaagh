@@ -93,7 +93,7 @@ repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 [[ -n "$base" ]] || base=$(orch_default_branch "$repo")
 
-json_list() { if (($#)); then printf '%s\n' "$@" | jq -R . | jq -sc .; else echo '[]'; fi; }
+json_list() { if (($#)); then jq -nc '$ARGS.positional' --args "$@"; else echo '[]'; fi; }
 authors_json=$(json_list "${authors[@]}")
 ignores_json=$(json_list ${ignores[@]+"${ignores[@]}"})
 holds_json=$(json_list ${holds[@]+"${holds[@]}"})
@@ -123,10 +123,11 @@ else
   policy=unknown; note "rulesets read failed for $base: ${out:0:500}"
 fi
 if out=$(ghr api "repos/$repo/branches/$base" 2>>"$diag") &&
-  r=$(jq -ce 'if type == "object" and has("protected") then
-                ((.protection.required_status_checks // {}) | [(.contexts // [])[], ((.checks // [])[] | .context)])
+  r=$(jq -ce --argjson a "$required" 'if type == "object" and has("protected") then
+                $a + ((.protection.required_status_checks // {}) | [(.contexts // [])[], ((.checks // [])[] | .context)])
+                | unique
               else error("no protected field") end' <<<"$out" 2>/dev/null); then
-  required=$(jq -cn --argjson a "$required" --argjson b "$r" '$a + $b | unique')
+  required=$r
 else
   policy=unknown; note "branch protection read failed for $base: ${out:0:500}"
 fi
@@ -174,9 +175,11 @@ if [[ "$truncated" == yes ]]; then
     [[ "$(jq --argjson n "$n" 'any(.[]; .number == $n)' <<<"$prs")" == false ]] || continue
     if if [[ "$api" == rest ]]; then one=$("$rest" view --repo "$repo" --pr "$n" 2>"$diag_dir/.prview-$$")
        else one=$(ghr pr view "$n" --repo "$repo" --json "$fields,state" 2>"$diag_dir/.prview-$$"); fi &&
-      jq -e 'type == "object" and has("number")' >/dev/null 2>&1 <<<"$one"; then
-      prs=$(jq -c --slurpfile one <(printf '%s\n' "$one") '$one[0] as $one
-        | if $one.state == "OPEN" then . + [$one | del(.state)] else . end' <<<"$prs")
+      # One jq both checks the PR object and adds it to the list when it is open.
+      added=$(jq -c --slurpfile one <(printf '%s\n' "$one") '$one[0] as $one
+        | if ($one | type == "object" and has("number")) | not then error("not a PR")
+          elif $one.state == "OPEN" then . + [$one | del(.state)] else . end' <<<"$prs" 2>/dev/null); then
+      prs=$added
     else
       note "PR $n (extra): unreadable: $(cat "$diag_dir/.prview-$$" 2>/dev/null | awk 'NR<=3')"
       extra_bad+="${extra_bad:+,}$n"
