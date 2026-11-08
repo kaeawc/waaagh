@@ -1,7 +1,7 @@
 # Coverage floors for dev/coverage.sh --check: script<TAB>minimum % (bashcov line coverage).
 # The coverage workflow fails when a script drops below its floor or a script has no row here.
 # Seeded at the measured value rounded down, minus 1. Raise a floor in the PR that adds the tests.
-bin/codex-lane-run.sh	80
+bin/codex-lane-run.sh	93
 bin/codex-lane-start.sh	90
 bin/codex-lane-usage.sh	93
 bin/codex-lane-wait.sh	99
@@ -12,12 +12,12 @@ skills/orchestrate/scripts/campaign.sh	93
 skills/orchestrate/scripts/claim-check.sh	94
 skills/orchestrate/scripts/cloud-dispatch.sh	95
 skills/orchestrate/scripts/counters.sh	89
-skills/orchestrate/scripts/decision.sh	87
-skills/orchestrate/scripts/device-lock.sh	91
-skills/orchestrate/scripts/device-recheck.sh	92
+skills/orchestrate/scripts/decision.sh	94
+skills/orchestrate/scripts/device-lock.sh	95
+skills/orchestrate/scripts/device-recheck.sh	95
 skills/orchestrate/scripts/excerpt.sh	99
 skills/orchestrate/scripts/failure-triage.sh	89
-skills/orchestrate/scripts/fingerprint.sh	88
+skills/orchestrate/scripts/fingerprint.sh	95
 skills/orchestrate/scripts/gate-slot.sh	96
 skills/orchestrate/scripts/gh-budget.sh	97
 skills/orchestrate/scripts/gh-issues.sh	95
@@ -27,25 +27,25 @@ skills/orchestrate/scripts/gh-shim/gh	99
 skills/orchestrate/scripts/gh-snapshot.sh	99
 skills/orchestrate/scripts/gh-status.sh	94
 skills/orchestrate/scripts/heavy-build-slot.sh	79
-skills/orchestrate/scripts/host-load.sh	88
-skills/orchestrate/scripts/issue-candidates.sh	91
-skills/orchestrate/scripts/issue-close.sh	94
-skills/orchestrate/scripts/issue-route.sh	80
+skills/orchestrate/scripts/host-load.sh	99
+skills/orchestrate/scripts/issue-candidates.sh	94
+skills/orchestrate/scripts/issue-close.sh	99
+skills/orchestrate/scripts/issue-route.sh	83
 skills/orchestrate/scripts/issues-ranked.sh	75
 skills/orchestrate/scripts/job-log.sh	90
-skills/orchestrate/scripts/lane-claim.sh	91
+skills/orchestrate/scripts/lane-claim.sh	94
 skills/orchestrate/scripts/lane-safety.sh	94
 skills/orchestrate/scripts/learning.sh	96
 skills/orchestrate/scripts/loops.sh	90
 skills/orchestrate/scripts/main-health.sh	55
 skills/orchestrate/scripts/merge-queue.sh	92
-skills/orchestrate/scripts/merge-sensitive.sh	85
+skills/orchestrate/scripts/merge-sensitive.sh	94
 skills/orchestrate/scripts/open-blockers.sh	99
-skills/orchestrate/scripts/pr-claim.sh	85
+skills/orchestrate/scripts/pr-claim.sh	97
 skills/orchestrate/scripts/pr-intake.sh	90
 skills/orchestrate/scripts/pr-merge.sh	95
 skills/orchestrate/scripts/pr-ready.sh	73
-skills/orchestrate/scripts/regen-merge.sh	90
+skills/orchestrate/scripts/regen-merge.sh	94
 skills/orchestrate/scripts/relay.sh	94
 skills/orchestrate/scripts/review-followup.sh	93
 skills/orchestrate/scripts/review-gate.sh	91
