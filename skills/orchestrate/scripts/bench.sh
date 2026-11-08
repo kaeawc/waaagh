@@ -3,19 +3,34 @@
 # on fixed fixtures with a stubbed gh (no network, no model calls). Use it to compare prompt and
 # output changes; budget.bats turns the numbers into ceilings.
 #
-# Usage: bench.sh
+# Usage: bench.sh [--timing]
 # Output (TSV, with a header): case  stdout_bytes  rows  gh_calls
 #   Bytes and rows are of stdout only. No token counts: they depend on a tokenizer, and none is
 #   assumed here.
+#   --timing  adds two columns, seconds (wall time of the case, 2 decimals) and jq_calls (jq
+#             processes the case started, counted by a jq wrapper first on PATH; the stub gh's
+#             own jq calls are not counted). They vary by machine: compare before and after a
+#             change on one machine, never against a ceiling. Without it the output is unchanged.
+# Exit: 0 done, 2 bad usage.
 set -euo pipefail
+timing=0
+for arg in "$@"; do
+  case "$arg" in
+    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
+    --timing) timing=1 ;;
+    *) echo "bench.sh: unknown argument: $arg" >&2; exit 2 ;;
+  esac
+done
 here=$(cd "$(dirname "$0")" && pwd)
 waiter="$here/../../../bin/codex-lane-wait.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 mkdir -p "$work/bin" "$work/fx"
+real_jq=$(command -v jq)
 cat >"$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
+jq() { "$REAL_JQ" "$@"; }   # the fixtures' jq: not the scripts' work, so not counted by --timing
 all="$*"; printf '%s\n' "${all//$'\n'/ }" >>"$FX/calls"   # one line per call
 case "$*" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
@@ -60,20 +75,40 @@ case "$*" in
 esac
 STUB
 chmod +x "$work/bin/gh"
+if [ "$timing" = 1 ]; then # count jq processes: one line per call, then the real jq
+  printf '#!/bin/sh\necho >>"$FX/jq-calls"\nexec "$REAL_JQ" "$@"\n' >"$work/bin/jq"
+  chmod +x "$work/bin/jq"
+fi
 export FX="$work/fx" PATH="$work/bin:$PATH" ORCHESTRATE_STATE_DIR="$work/state" ORCHESTRATE_AUTHOR=me
+export REAL_JQ="$real_jq"
 export ORCHESTRATE_NOW=1790510400
 # triage-tick.sh reads host-load.sh: fixed readings, not this machine's load
 export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
 
-printf 'case\tstdout_bytes\trows\tgh_calls\n'
-measure() { # NAME CMD...: run CMD, report its stdout size, row count and gh calls
-  local name=$1 out
+# Wall clock in seconds: EPOCHREALTIME (bash 5) has microseconds; bash 3.2 falls back to whole seconds.
+clock() { local t=${EPOCHREALTIME:-$(date +%s)}; printf '%s\n' "${t/,/.}"; }
+
+if [ "$timing" = 1 ]; then
+  printf 'case\tstdout_bytes\trows\tgh_calls\tseconds\tjq_calls\n'
+else
+  printf 'case\tstdout_bytes\trows\tgh_calls\n'
+fi
+measure() { # NAME CMD...: run CMD, report its stdout size, row count and gh calls (and with --timing, seconds and jq calls)
+  local name=$1 out start end
   shift
   : >"$FX/calls"
+  : >"$FX/jq-calls"
+  start=$(clock)
   out=$("$@" 2>/dev/null || true)
-  printf '%s\t%s\t%s\t%s\n' "$name" "$(printf '%s' "$out" | wc -c | tr -d ' ')" \
+  end=$(clock)
+  printf '%s\t%s\t%s\t%s' "$name" "$(printf '%s' "$out" | wc -c | tr -d ' ')" \
     "$(if [[ -n $out ]]; then printf '%s\n' "$out" | wc -l | tr -d ' '; else echo 0; fi)" \
     "$(wc -l <"$FX/calls" | tr -d ' ')"
+  if [ "$timing" = 1 ]; then
+    printf '\t%s\t%s' "$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.2f", e - s }')" \
+      "$(wc -l <"$FX/jq-calls" | tr -d ' ')"
+  fi
+  printf '\n'
 }
 
 # excerpt.sh (#2): a large matching log and one megabyte line.
