@@ -58,7 +58,12 @@ snapshot inline). Then record it: `"$SCRIPTS/triage-tick.sh" cron --repo <o/r>`.
 For a campaign that must outlive the session, use a cloud scheduled task instead.
 
 **Merge loop wrapper.** A merge loop with a time bound must not stop silently. Write a heartbeat
-every iteration and say why it stopped:
+every iteration and say why it stopped. Keep the script in the state dir, not a session
+scratchpad, so the next orchestrator finds and restarts it when this session ends:
+`"$SCRIPTS/loops.sh" install merge-loop ./merge-loop.sh`, then run `<state dir>/bin/merge-loop`.
+`triage-tick.sh beat` also beats `<state dir>/loops/merge-loop.heartbeat`, which
+`loops.sh status` reads at startup; any other loop (tick, review snapshot) calls
+`"$SCRIPTS/loops.sh" heartbeat <name> --every <sleep seconds>` once per pass.
 
 ```bash
 deadline=$(( $(date +%s) + 8 * 3600 ))

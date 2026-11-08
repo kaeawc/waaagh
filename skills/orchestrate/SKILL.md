@@ -217,6 +217,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `merge-sensitive` | you | merge-sensitive path globs (optional): PRs touching one merge serially and only up to date |
 | `locks/` | `pr-merge.sh` | one lock per merge-sensitive path while a merge over it is in flight |
 | `reruns.log`, `merge-loop.beat`, `triage-cron` | `triage-tick.sh` | known-flake reruns of default-branch runs (one per run); the merge loop's heartbeat and why it ended; when the session cron was created |
+| `bin/`, `loops/` | `loops.sh` | long-lived loop scripts (merge loop, tick, review snapshot), never in a session scratchpad; one `<name>.heartbeat` per loop, beaten every pass |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
 | `ops/` | `pr-merge.sh`, `issue-close.sh` | journal of each GitHub write (intent, attempt, state) and its raw output, so a lost answer is reconciled, never replayed |
 | `../validate/` | `validate.sh` | validation receipts and logs, keyed by `fingerprint.sh --key` (shared across repos; `ORCHESTRATE_VALIDATE_DIR`) |
@@ -241,8 +242,11 @@ the index plus their role's entries. Rules: `learnings.md`.
 
 ## Campaign loop
 
-Start by reading memory and `"$SCRIPTS/campaign.sh" status`; then repeat this tick whenever an
-agent reports or a PR changes. Do not tick on a timer.
+Start by reading memory and `"$SCRIPTS/campaign.sh" status`, then `"$SCRIPTS/loops.sh" status`:
+how long ago each campaign loop last passed. A loop left by an earlier session that is `stale`,
+`dead` or `ended` (exit 3) is restarted in this session from `<state dir>/bin/`; `script=missing`
+(exit 4) means it ran from a scratchpad, so `loops.sh install` it first. Then repeat this tick
+whenever an agent reports or a PR changes. Do not tick on a timer.
 
 1. **Stop check.** `paused=yes` (an open issue labelled `orchestrate-pause` or `fleet-pause`):
    launch nothing new, let running agents finish, report. **Wrap-up** (`wrap_up=on`, set with

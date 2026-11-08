@@ -106,6 +106,7 @@ case "$cmd" in
       line="beat=$now deadline=$deadline pid=${pid:-$PPID}"
     fi
     orch_journal "$beatf" "$line"
+    "$here/loops.sh" heartbeat merge-loop --repo "$repo" ${end:+--end "$end"} --pid "${pid:-$PPID}" --every 600 >/dev/null || true
     echo "$line"
     exit 0 ;;
   cron)
