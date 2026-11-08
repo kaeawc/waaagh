@@ -4,8 +4,14 @@
 # and threads the orchestrator answered or fixed.
 #
 # Usage: thread-resolve.sh --thread ID [--pr N] [--reply TEXT] [--repo OWNER/REPO] [--dry-run]
-#   --thread  the review thread's GraphQL node id (PRRT_...; `review-followup.sh list` prints it)
-#   --pr      refuse unless the thread belongs to this pull request
+#   --thread  the review thread's GraphQL node id (PRRT_...; `review-followup.sh list` prints it),
+#             or, where GitHub refuses GraphQL (cloud sessions), the numeric REST id of the
+#             thread's first comment (thread-sweep.sh scan prints it there). A numeric id is read
+#             with gh-rest-pr.sh thread-nodes, replied to with POST pulls/<n>/comments/<id>/replies
+#             and resolved with POST pulls/<n>/ccr/comments/<id>/resolve. A PRRT_ id where GraphQL
+#             is refused is exit 4 (rescan for the REST id).
+#   --pr      refuse unless the thread belongs to this pull request (with a numeric id it also
+#             saves the read that finds the PR)
 #   --reply   posted once as a thread reply before resolving; it carries a hidden marker keyed by
 #             its text, so a rerun never posts the same reply twice
 # Prints one line: `resolved <id> pr=<n>`, `unchanged <id> pr=<n>` (already resolved, reply
@@ -27,11 +33,11 @@ while (($#)); do
     --pr) pr=$2; shift 2 ;;
     --reply) reply=$2; shift 2 ;;
     --dry-run) dry=yes; shift ;;
-    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "thread-resolve.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ "$thread" =~ ^[A-Za-z0-9_=-]+$ ]] && [[ -z "$pr" || "$pr" =~ ^[0-9]+$ ]] || { sed -n '2,15p' "$0" >&2; exit 2; }
+[[ "$thread" =~ ^[A-Za-z0-9_=-]+$ ]] && [[ -z "$pr" || "$pr" =~ ^[0-9]+$ ]] || { sed -n '2,21p' "$0" >&2; exit 2; }
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 marker=""
@@ -39,11 +45,38 @@ if [[ -n "$reply" ]]; then
   marker="<!-- waaagh:reply thread=$thread key=$(printf '%s' "$reply" | git hash-object --stdin | cut -c1-12) -->"
 fi
 
+rest=no
+[[ ! "$thread" =~ ^[0-9]+$ ]] || rest=yes
+api=$(orch_gh_api thread-resolve.sh) || exit 2
+err=$(mktemp)
+trap 'rm -f "$err"' EXIT
+no_graphql() {
+  echo "thread-resolve: GitHub refuses GraphQL here, so thread $thread (a GraphQL node id) cannot be read;" \
+    "rescan with thread-sweep.sh scan for the REST id of the thread's first comment" >&2
+  exit 4
+}
+[[ "$rest" == yes || "$api" == graphql ]] || no_graphql
+if [[ "$rest" == yes && -z "$pr" ]]; then
+  rc=0
+  c=$("$here/gh-read.sh" --json --tries 3 -- api "repos/$repo/pulls/comments/$thread" 2>/dev/null) || rc=$?
+  ((rc != 3)) || { echo "refused: $thread is not a pull request review comment"; exit 3; }
+  ((rc == 0)) && pr=$(jq -r '(.pull_request_url // "") | sub(".*/pulls/"; "")' <<<"$c") && [[ "$pr" =~ ^[0-9]+$ ]] ||
+    { echo "thread-resolve: comment $thread could not be read" >&2; exit 4; }
+fi
+
+# view -> the thread as GraphQL's node query answers it (over REST: from gh-rest-pr.sh thread-nodes,
+# node null when no thread on the PR starts with comment $thread).
 # shellcheck disable=SC2016  # GraphQL variables, not shell expansions
 view() {
-  "$here/gh-read.sh" --json --tries 3 -- api graphql -F id="$thread" -f query='
-    query($id:ID!){node(id:$id){__typename ... on PullRequestReviewThread{isResolved
-      pullRequest{number} comments(last:100){nodes{body}}}}}' 2>/dev/null
+  if [[ "$rest" == no ]]; then
+    "$here/gh-read.sh" --json --tries 3 -- api graphql -F id="$thread" -f query='
+      query($id:ID!){node(id:$id){__typename ... on PullRequestReviewThread{isResolved
+        pullRequest{number} comments(last:100){nodes{body}}}}}' 2>"$err"
+    return
+  fi
+  "$here/gh-rest-pr.sh" thread-nodes --repo "$repo" --pr "$pr" 2>/dev/null | jq -ce --arg id "$thread" '.number as $n
+    | {data: {node: ((.reviewThreads.nodes | map(select(.id == $id)) | first)
+        | if . == null then null else {__typename: "PullRequestReviewThread", isResolved, pullRequest: {number: $n}, comments} end)}}'
 }
 # state_of JSON -> "<resolved true|false> <pr> <reply present yes|no>", or "" when not a thread.
 state_of() {
@@ -53,7 +86,11 @@ state_of() {
     | map(tostring) | join(" ")' <<<"$1"
 }
 
-info=$(view) || { echo "thread-resolve: thread $thread could not be read" >&2; exit 4; }
+info=$(view) || {
+  rc=$?
+  [[ "$rest" == yes ]] || ! orch_gh_refused "$rc" "$(cat "$err")" || no_graphql
+  echo "thread-resolve: thread $thread could not be read" >&2; exit 4
+}
 st=$(state_of "$info")
 [[ -n "$st" ]] || { echo "refused: $thread is not a pull request review thread"; exit 3; }
 read -r resolved num has_reply <<<"$st"
@@ -63,19 +100,32 @@ if [[ "$dry" == yes ]]; then
   echo "would resolve $thread pr=$num${marker:+$([[ "$has_reply" == no ]] && echo " reply")}"; exit 0
 fi
 
+# shellcheck disable=SC2016  # GraphQL variables, not shell expansions
+add_reply() {
+  if [[ "$rest" == yes ]]; then
+    gh api -X POST "repos/$repo/pulls/$num/comments/$thread/replies" -f body="$1" >/dev/null 2>&1
+  else
+    gh api graphql -F t="$thread" -f b="$1" -f query='mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(
+      input:{pullRequestReviewThreadId:$t,body:$b}){comment{id}}}' >/dev/null 2>&1
+  fi
+}
+# shellcheck disable=SC2016
+resolve() {
+  if [[ "$rest" == yes ]]; then
+    gh api -X POST "repos/$repo/pulls/$num/ccr/comments/$thread/resolve" >/dev/null 2>&1
+  else
+    gh api graphql -F t="$thread" -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){
+      thread{isResolved}}}' >/dev/null 2>&1
+  fi
+}
+
 rc=0
 if [[ "$has_reply" == no ]]; then
-  # shellcheck disable=SC2016
-  gh api graphql -F t="$thread" -f b="$reply
+  add_reply "$reply
 
-$marker" -f query='mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(
-    input:{pullRequestReviewThreadId:$t,body:$b}){comment{id}}}' >/dev/null 2>&1 || rc=5
+$marker" || rc=5
 fi
-if [[ "$resolved" != true ]] && ((rc == 0)); then
-  # shellcheck disable=SC2016
-  gh api graphql -F t="$thread" -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){
-    thread{isResolved}}}' >/dev/null 2>&1 || rc=5
-fi
+if [[ "$resolved" != true ]] && ((rc == 0)); then resolve || rc=5; fi
 
 after=$(view) || { echo "unverified: thread $thread written but not read back; rerun to reconcile"; exit 9; }
 read -r resolved num has_reply <<<"$(state_of "$after")"
