@@ -209,6 +209,22 @@ case "$*" in "pr list"*) echo "HTTP 403: Resource not accessible by integration"
   [ "$(grep -c '/check-runs' "$FX/rest-calls")" -eq 1 ]
 }
 
+@test "rest: no candidate PR (none open, or only drafts, forks and other authors) is an empty pass, not a failure" {
+  echo '[]' >"$FX/prs.json"
+  both --repo o/r
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"open=0 ready=0"*"api=rest"* ]]
+  {
+    pr_row 1 me true false MERGEABLE "$OKC"
+    pr_row 2 me false true MERGEABLE "$OKC"
+    pr_row 3 other false false MERGEABLE "$OKC"
+  } | jq -s . >"$FX/prs.json"
+  both --repo o/r
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'1\tSKIP'*"draft"* ]]
+  [[ "$output" == *"open=2 ready=0"*"api=rest"* ]]
+}
+
 @test "rest: an unreadable REST list exits 3 with no verdicts" {
   echo 'not json' >"$FX/prs.json"
   touch "$FX/rest-mode"
