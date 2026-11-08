@@ -850,6 +850,17 @@ ready_prs() { # n: n mergeable, green PRs by me
   [ "$(printf '%s\n' "$output" | grep -c READY)" -eq 18 ]
 }
 
+@test "large outputs stay intact where SIGPIPE is ignored, as on CI runners" {
+  stub_gh_router
+  ready_prs 300
+  # GitHub Actions starts steps with SIGPIPE ignored: an early-closed pipe then makes writers
+  # print "Broken pipe" instead of dying, which once corrupted the JSON pr-ready parses.
+  run bash -c "trap '' PIPE; exec '$SCRIPTS/pr-ready.sh' --repo o/r --no-threads"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"open=300 ready=300"* ]]
+  [[ "$output" != *"Broken pipe"* ]]
+}
+
 @test "pr-ready reports a PR list that hit its limit" {
   stub_gh_router
   ready_prs 300

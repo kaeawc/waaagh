@@ -57,7 +57,7 @@ while :; do
   fi
   elapsed=$(($(date +%s) - start))
   if ((elapsed >= timeout)); then
-    alive=$(sed -n 's/^Codex alive: //p' "$log.progress.state" 2>/dev/null | head -1)
+    alive=$(sed -n 's/^Codex alive: //p' "$log.progress.state" 2>/dev/null | awk 'NR == 1')
     echo "no-change rev=$rev alive=${alive:-unknown} elapsed=${elapsed}s"
     exit 11
   fi

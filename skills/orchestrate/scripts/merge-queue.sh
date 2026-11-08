@@ -216,7 +216,7 @@ case "$cmd" in
       fi
       margs=(--repo "$repo" --pr "$pr" --head "$head")
       if [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
-        row=$("$here/pr-ready.sh" --repo "$repo" --base "$base" --pr "$pr" 2>>"$log" | head -1) || row=""
+        row=$("$here/pr-ready.sh" --repo "$repo" --base "$base" --pr "$pr" 2>>"$log" | awk 'NR == 1') || row=""
         IFS=$'\t' read -r _ verdict rhead _ _ detail <<<"$row"
         if [[ -z "$row" ]]; then set_outcome "$qid" error "no readiness row for PR $pr"; continue; fi
         if [[ "$head" != "$rhead"* ]]; then set_outcome "$qid" waiting "readiness row is for $rhead"; continue; fi

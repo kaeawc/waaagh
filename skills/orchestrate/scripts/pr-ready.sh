@@ -88,14 +88,14 @@ note() { # record a read problem in a diagnostics file; the verdicts carry only 
 # returns something malformed is "unknown", never "none": the PR cannot be judged READY.
 policy=known required='[]'
 ghr() { "$here/gh-read.sh" --json -- "$@"; }   # bounded, typed, read-only
-if out=$(ghr api "repos/$repo/rules/branches/$base" 2>&1) &&
+if out=$(ghr api "repos/$repo/rules/branches/$base" 2>>"$diag") &&
   r=$(jq -ce 'if type == "array" then [.[] | select(.type == "required_status_checks")
               | .parameters.required_status_checks[].context] else error("not an array") end' <<<"$out" 2>/dev/null); then
   required=$r
 else
   policy=unknown; note "rulesets read failed for $base: ${out:0:500}"
 fi
-if out=$(ghr api "repos/$repo/branches/$base" 2>&1) &&
+if out=$(ghr api "repos/$repo/branches/$base" 2>>"$diag") &&
   r=$(jq -ce 'if type == "object" and has("protected") then
                 ((.protection.required_status_checks // {}) | [(.contexts // [])[], ((.checks // [])[] | .context)])
               else error("no protected field") end' <<<"$out" 2>/dev/null); then

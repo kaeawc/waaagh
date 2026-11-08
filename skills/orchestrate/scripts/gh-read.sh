@@ -129,7 +129,9 @@ while :; do
     cp "$work/out" "$work/body"
   fi
   [[ -n "$status" ]] || status=$({ grep -oE 'HTTP [0-9]{3}' "$work/err" || true; } | tail -1 | cut -c6-)
-  msg=$(cat "$work/err" "$work/body" 2>/dev/null | grep -v '^$' | head -3 || true)
+  # awk reads to the end, so nothing upstream is cut off: where SIGPIPE is ignored (some CI
+  # runners), an early-closed pipe makes cat print "Broken pipe" to stderr instead of dying quietly.
+  msg=$(cat "$work/err" "$work/body" 2>/dev/null | awk 'NF && n < 3 { print; n++ }' || true)
 
   if ((rc == 0)); then
     if [[ "$want_json" == yes ]] && ! jq -e . "$work/body" >/dev/null 2>&1; then
