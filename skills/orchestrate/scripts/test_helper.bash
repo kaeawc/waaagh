@@ -5,6 +5,10 @@
 # (1Password, gpg, ssh signers) or hooks can never run during fixtures. The user's real
 # configuration files are not read or changed. Loaded in setup_file too, the config lives in the
 # file's tmpdir until setup loads it again per test.
+# Tests must also pass under dev/coverage.sh: bashcov exports SHELLOPTS with nounset and pipefail,
+# so every bash a test starts (stubs included) runs with them. A stub that reads an unset variable
+# (`$1` with no argument, an env var a test did not set) must use "${VAR:-}", and a test must not
+# pipe into an early-exit reader such as `grep -q` or `head` (#140, linted by early-exit-pipes.bats).
 hermetic_git() {
   local cfg="${BATS_TEST_TMPDIR:-$BATS_FILE_TMPDIR}/.gitconfig-hermetic"
   cat >"$cfg" <<'CFG'

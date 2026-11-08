@@ -81,7 +81,7 @@ prs_graphql() {
     [[ -z "$cursor" ]] || args+=(-f cursor="$cursor")
     page=$("$here/gh-read.sh" --json --tries 3 -- api graphql "${args[@]}" 2>"$work/err") || return
     jq -e '.data.repository.pullRequests.nodes | type == "array"' >/dev/null 2>&1 <<<"$page" || return 1
-    all=$(jq -c --argjson p "$page" '. + $p.data.repository.pullRequests.nodes' <<<"$all")
+    all=$(jq -c --slurpfile p <(printf '%s\n' "$page") '. + $p[0].data.repository.pullRequests.nodes' <<<"$all")
     cursor=$(jq -r '.data.repository.pullRequests.pageInfo | if .hasNextPage then (.endCursor // "") else "" end' <<<"$page")
   done
   echo "$all"

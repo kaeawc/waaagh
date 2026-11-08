@@ -60,10 +60,12 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
 @test "check: no regression issue and no label is clear; an unreadable PR or issue is unverified" {
   pr_body "Closes #12"
   run dr check
-  [ "$status" -eq 0 ] && [ "$output" = "clear: PR 7 fixes no device-found regression and has no device hold" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "clear: PR 7 fixes no device-found regression and has no device hold" ]
   pr_body "Closes #99"
   run dr check
-  [ "$status" -eq 4 ] && [ "$output" = "unverified: issue 99 could not be read" ]
+  [ "$status" -eq 4 ]
+  [ "$output" = "unverified: issue 99 could not be read" ]
   touch "$FX/pr-fail"
   run dr check
   [ "$status" -eq 4 ] && [ "$output" = "unverified: PR 7 could not be read" ]
@@ -72,10 +74,12 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
 @test "check: the hold label alone holds, and the regression labels are configurable" {
   pr_body "Closes #12" "$HEAD" '[{"name":"needs-device-recheck"}]'
   run dr check
-  [ "$status" -eq 3 ] && [ "$output" = "held: PR 7 carries needs-device-recheck" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "held: PR 7 carries needs-device-recheck" ]
   pr_body "Closes #12"
   run dr check --regression-label bug
-  [ "$status" -eq 3 ] && [[ "$output" == *"regression(s) #12 "* ]]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"regression(s) #12 "* ]]
   ORCHESTRATE_DEVICE_REGRESSION_LABELS=bug,other run dr check
   [ "$status" -eq 3 ]
 }
@@ -96,11 +100,14 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
 
 @test "scan --dry-run writes nothing; a clear PR is left alone" {
   run dr scan --dry-run
-  [ "$status" -eq 3 ] && [[ "$output" == *"(dry run)" ]]
-  [ ! -f "$STATE/device-recheck/pr7.json" ] && [ -z "$(labels)" ]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"(dry run)" ]]
+  [ ! -f "$STATE/device-recheck/pr7.json" ]
+  [ -z "$(labels)" ]
   pr_body "Closes #12"
   run dr scan
-  [ "$status" -eq 0 ] && [[ "$output" == clear:* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == clear:* ]]
   ! grep -q "pr edit" "$FX/calls"
 }
 
@@ -133,7 +140,8 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
   grep -q "waaagh:device-recheck verdict=pass head=$HEAD" "$FX/posted"
   [ -z "$(labels)" ]
   run dr check
-  [ "$status" -eq 0 ] && [ "$output" = "clear: device recheck of PR 7 passed on abcdef123 (Duo emulator-5554)" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "clear: device recheck of PR 7 passed on abcdef123 (Duo emulator-5554)" ]
   run "$SCRIPTS/device-recheck.sh" list --repo o/r
   [ -z "$output" ]
 }
@@ -155,7 +163,8 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
   dr scan || true
   touch "$FX/post-fail-11"
   run dr pass --head "$HEAD" --device d --evidence e
-  [ "$status" -eq 5 ] && [ "$output" = "error: could not post the result on #11; rerun" ]
+  [ "$status" -eq 5 ]
+  [ "$output" = "error: could not post the result on #11; rerun" ]
   [ "$(labels)" = needs-device-recheck ]
   rm "$FX/post-fail-11"
   run dr pass --head "$HEAD" --device d --evidence e
@@ -177,9 +186,11 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
 
 @test "claim-check merged: confirmed for a merged PR, refuted for an open one" {
   run "$SCRIPTS/claim-check.sh" merged --repo o/r --pr 8
-  [ "$status" -eq 0 ] && [ "$output" = "confirmed: PR 8 merged 2026-11-07T10:00:00Z as feedface1" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "confirmed: PR 8 merged 2026-11-07T10:00:00Z as feedface1" ]
   run "$SCRIPTS/claim-check.sh" merged --repo o/r --pr 9
-  [ "$status" -eq 3 ] && [ "$output" = "refuted: PR 9 is OPEN, not merged" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "refuted: PR 9 is OPEN, not merged" ]
   touch "$FX/pr-fail"
   run "$SCRIPTS/claim-check.sh" merged --repo o/r --pr 7
   [ "$status" -eq 4 ] && [[ "$output" == unverified:* ]]
@@ -188,11 +199,14 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
 @test "claim-check closed and open: state and state reason from the issue" {
   jq -n '{state: "closed", state_reason: "completed", closed_at: "2026-11-07T11:00:00Z"}' >"$FX/issue-20.json"
   run "$SCRIPTS/claim-check.sh" closed --repo o/r --issue 20
-  [ "$status" -eq 0 ] && [ "$output" = "confirmed: issue 20 is closed (completed) at 2026-11-07T11:00:00Z" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "confirmed: issue 20 is closed (completed) at 2026-11-07T11:00:00Z" ]
   run "$SCRIPTS/claim-check.sh" closed --repo o/r --issue 20 --reason not_planned
-  [ "$status" -eq 3 ] && [ "$output" = "refuted: issue 20 is closed as completed, not not_planned" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "refuted: issue 20 is closed as completed, not not_planned" ]
   run "$SCRIPTS/claim-check.sh" closed --repo o/r --issue 12
-  [ "$status" -eq 3 ] && [ "$output" = "refuted: issue 12 is open" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "refuted: issue 12 is open" ]
   run "$SCRIPTS/claim-check.sh" open --repo o/r --issue 20
   [ "$status" -eq 3 ]
   run "$SCRIPTS/claim-check.sh" closed --repo o/r --pr 20
@@ -202,14 +216,16 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
 @test "claim-check evidence: finds the newest matching comment, honouring --since" {
   printf '[{"body":"verified on Duo: pass","html_url":"u1","created_at":"2026-11-06T00:00:00Z"},{"body":"no","html_url":"u2","created_at":"2026-11-07T00:00:00Z"}]\n[{"body":"verified on Duo: pass again","html_url":"u3","created_at":"2026-11-07T05:00:00Z"}]\n' >"$FX/comments.json"
   run "$SCRIPTS/claim-check.sh" evidence --repo o/r --pr 7 --match "verified on Duo"
-  [ "$status" -eq 0 ] && [ "$output" = "confirmed: PR 7 has the evidence comment u3 (2026-11-07T05:00:00Z)" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "confirmed: PR 7 has the evidence comment u3 (2026-11-07T05:00:00Z)" ]
   run "$SCRIPTS/claim-check.sh" evidence --repo o/r --issue 7 --match "verified on Duo" --since 2026-11-08T00:00:00Z
   [ "$status" -eq 3 ] && [ "$output" = 'refuted: no comment on issue 7 contains "verified on Duo" since 2026-11-08T00:00:00Z' ]
 }
 
 @test "claim-check device-clear: 'no device check needed' is refuted for a device-regression fix" {
   run "$SCRIPTS/claim-check.sh" device-clear --repo o/r --pr 7
-  [ "$status" -eq 3 ] && [ "$output" = "refuted: PR 7 fixes device-found regression(s) #11 and no device recheck is recorded" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "refuted: PR 7 fixes device-found regression(s) #11 and no device recheck is recorded" ]
   pr_body "Closes #12"
   run "$SCRIPTS/claim-check.sh" device-clear --repo o/r --pr 7
   [ "$status" -eq 0 ] && [[ "$output" == "confirmed: PR 7 fixes no device-found regression"* ]]
@@ -219,7 +235,7 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
   for s in device-recheck claim-check; do
     run "$SCRIPTS/$s.sh" -h
     [ "$status" -eq 0 ]
-    printf '%s\n' "$output" | grep -q "^# Exit:"
+    [[ $'\n'"$output" == *$'\n# Exit:'* ]]
     [[ "$output" != *"set -euo"* ]]
   done
 }
@@ -227,7 +243,8 @@ labels() { jq -r '[.labels[].name] | join(",")' "$FX/pr.json"; }
 @test "doctrine: regression gates are documented and pointed at (#75)" {
   f="$ROOT/regression-gates.md"
   grep -q "regression of existing behaviour" "$f"
-  grep -q "device-recheck.sh" "$f" && grep -q "needs-device-recheck" "$f"
+  grep -q "device-recheck.sh" "$f"
+  grep -q "needs-device-recheck" "$f"
   grep -q "claim-check.sh" "$f"
   grep -q "regression-gates.md" "$ROOT/SKILL.md"
   grep -q "regression" "$ROOT/roles/review.md"

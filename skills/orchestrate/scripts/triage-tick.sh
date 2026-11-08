@@ -222,10 +222,10 @@ if ((pr_rc == 0)); then
   open=$(jq -r 'if length >= 300 then "300+" else length end' <<<"$prs")
   ((${#exclude[@]})) || exclude=(blocked)
   if issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 300 --fields number,labels 2>/dev/null); then
-    q=$(jq -r --argjson prs "$prs" --arg lanes "$lanes_tsv" \
+    q=$(jq -r --slurpfile prs <(printf '%s\n' "$prs") --rawfile lanes <(printf '%s' "$lanes_tsv") \
       --argjson ready "$(json_list ${ready[@]+"${ready[@]}"})" --argjson exclude "$(json_list "${exclude[@]}")" '
       def has_any($set): any(.[]; . as $l | $set | index($l));
-      ([$prs[] | (.closingIssuesReferences // [])[] | .number]) as $in_pr
+      ([$prs[0][] | (.closingIssuesReferences // [])[] | .number]) as $in_pr
       | ([$lanes | split("\n")[] | select(length > 0 and (startswith("#") | not)) | split("\t")
           | select(length >= 6 and (.[5] | IN("done", "merged", "closed", "abandoned") | not))
           | .[2] | split(",")[] | gsub("[^0-9]"; "") | select(length > 0) | tonumber]) as $laned

@@ -68,7 +68,7 @@ case "$cmd" in
       page=$(ghr api graphql "${args[@]}") &&
         jq -e '.data.repository.pullRequest.reviewThreads.nodes | type == "array"' >/dev/null 2>&1 <<<"$page" ||
         { echo "review-followup: review threads of PR $pr could not be read" >&2; exit 4; }
-      pages=$(jq -c --argjson p "$page" '. + [$p.data.repository.pullRequest]' <<<"$pages")
+      pages=$(jq -c --slurpfile p <(printf '%s\n' "$page") '. + [$p[0].data.repository.pullRequest]' <<<"$pages")
       cursor=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo
         | if .hasNextPage then (.endCursor // "") else "" end' <<<"$page")
     done

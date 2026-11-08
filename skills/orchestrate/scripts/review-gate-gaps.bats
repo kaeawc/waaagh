@@ -65,9 +65,11 @@ CASES
   echo review-at-head >"$STATE/review-policy"
   review coderabbitai "$HEAD"
   ORCHESTRATE_REVIEW_BOTS="mystery" run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 3 ] && [ "$output" = "wait never-reviewed" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "wait never-reviewed" ]
   ORCHESTRATE_REVIEW_BOTS="mystery coderabbit" run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 0 ] && [ "$output" = "ok reviewed at-head" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok reviewed at-head" ]
   ORCHESTRATE_REVIEW_BOTS="mystery" run rg notice --author mystery <<<"usage limits reached"
   [ "$output" = other ]
 }
@@ -87,7 +89,8 @@ CASES
 
 @test "outage with no flags says so; unknown outage and ledger subcommands and commands are usage errors" {
   run rg outage
-  [ "$status" -eq 0 ] && [ "$output" = "no reviewer out of quota" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "no reviewer out of quota" ]
   for args in "outage sometimes" "ledger sometimes" "frobnicate"; do
     # shellcheck disable=SC2086
     run rg $args

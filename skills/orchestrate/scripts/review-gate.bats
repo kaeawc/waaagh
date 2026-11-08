@@ -51,9 +51,11 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
 
 @test "policy: off by default; a change is logged in decisions.log; unknown modes refused" {
   run rg policy
-  [ "$status" -eq 0 ] && [ "$output" = off ]
+  [ "$status" -eq 0 ]
+  [ "$output" = off ]
   run rg policy reviewed-once --note "owner, outage"
-  [ "$status" -eq 0 ] && [ "$output" = "review policy: reviewed-once (was off)" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "review policy: reviewed-once (was off)" ]
   run rg policy
   [ "$output" = reviewed-once ]
   grep -q $'review-policy\toff -> reviewed-once\towner, outage' "$STATE/decisions.log"
@@ -63,23 +65,27 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
 
 @test "check: policy off allows without reading GitHub" {
   run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 0 ] && [ "$output" = "ok unreviewed policy=off" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok unreviewed policy=off" ]
   [ ! -f "$FX/calls" ]
 }
 
 @test "check review-at-head: head review passes, earlier review and none wait, quota notices never count" {
   rg policy review-at-head >/dev/null
   run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 3 ] && [ "$output" = "wait never-reviewed" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "wait never-reviewed" ]
   review coderabbitai '' "You have hit the free review limit" COMMENTED
   review "chatgpt-codex-connector[bot]" "$HEAD" "You have reached your Codex usage limits" COMMENTED
   review someone "$HEAD"
   review coderabbitai "$HEAD" "draft" PENDING
   run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 3 ] && [ "$output" = "wait never-reviewed" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "wait never-reviewed" ]
   review "coderabbitai[bot]" "$OLD"
   run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 3 ] && [ "$output" = "wait no-review-at-head" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "wait no-review-at-head" ]
   review "chatgpt-codex-connector[bot]" "$HEAD"
   run rg check --pr 5 --head "$HEAD"
   [ "$status" -eq 0 ] && [ "$output" = "ok reviewed at-head" ]
@@ -89,29 +95,35 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
   rg policy review-at-head >/dev/null
   comment "chatgpt-codex-connector[bot]" "Codex Review: Didn't find any major issues. Reviewed commit: \`${OLD:0:10}\`"
   run rg check --pr 5
-  [ "$status" -eq 3 ] && [ "$output" = "wait no-review-at-head" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "wait no-review-at-head" ]
   comment "chatgpt-codex-connector[bot]" "Codex Review: no issues. Reviewed commit: \`${HEAD:0:10}\`"
   run rg check --pr 5
-  [ "$status" -eq 0 ] && [ "$output" = "ok reviewed at-head" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok reviewed at-head" ]
   grep -q 'pr view 5 --repo o/r --json headRefOid' "$FX/calls"
 }
 
 @test "check reviewed-once and green-only; an exemption allows one PR unreviewed" {
   rg policy reviewed-once >/dev/null
   run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 3 ] && [ "$output" = "wait never-reviewed" ]
+  [ "$status" -eq 3 ]
+  [ "$output" = "wait never-reviewed" ]
   review coderabbitai "$OLD"
   run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 0 ] && [ "$output" = "ok reviewed earlier-head (reviewed-once)" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok reviewed earlier-head (reviewed-once)" ]
   echo '[]' >"$FX/reviews.json"
   rg policy green-only >/dev/null
   run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 0 ] && [ "$output" = "ok unreviewed green-only (never)" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok unreviewed green-only (never)" ]
   rg policy review-at-head >/dev/null
   run rg exempt --pr 5 --reason "gates the manual-test round"
   [ "$status" -eq 0 ]
   run rg check --pr 5 --head "$HEAD"
-  [ "$status" -eq 0 ] && [ "$output" = "ok unreviewed exempt" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok unreviewed exempt" ]
   run rg check --pr 6 --head "$HEAD"
   [ "$status" -eq 3 ]
   grep -q $'review-exempt\tpr=5\tgates the manual-test round' "$STATE/decisions.log"
@@ -126,7 +138,8 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
 
 @test "notice: quota notices are classified per bot, flagged once, and other comments pass" {
   run rg notice --author "chatgpt-codex-connector[bot]" --pr 5 <<<"You have reached your Codex usage limits. Try again later."
-  [ "$status" -eq 0 ] && [ "$output" = "quota codex new pr=5" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "quota codex new pr=5" ]
   ORCHESTRATE_NOW=1793883600 run rg notice --author chatgpt-codex-connector --pr 6 <<<"usage limits reached"
   [ "$output" = "quota codex known pr=6" ]
   run rg notice --author coderabbitai --pr 5 <<<"Rate limit exceeded: please wait 23 minutes before requesting another review."
@@ -161,7 +174,8 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
   comment coderabbitai "Rate limit exceeded" 2026-11-05T09:00:00Z
   comment someone "rate limit?" 2026-11-05T09:10:00Z
   run rg scan --pr 5
-  [ "$status" -eq 0 ] && [ "$output" = "quota coderabbit new pr=5" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "quota coderabbit new pr=5" ]
   review "coderabbitai[bot]" "$HEAD" "Actionable comments posted: 1" COMMENTED 2026-11-05T10:00:00Z
   run rg scan --pr 5
   [ "$output" = "recovered coderabbit pr=5" ]
@@ -172,7 +186,8 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
 @test "ledger: pr-merge.sh ledgers a green-only merge; clear names pending retro reviews" {
   rg policy green-only >/dev/null
   run merge
-  [ "$status" -eq 0 ] && [[ "$output" == "merged 5 feedface" ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == "merged 5 feedface" ]]
   run rg ledger pending
   [ "$output" = "$(printf '2026-11-05T12:00:00Z\t5\t%s\tgreen-only (never)\tpending' "$HEAD")" ]
   grep -q 'review=ok unreviewed green-only' "$STATE/merges.log"
@@ -188,7 +203,8 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
 @test "pr-merge: a policy not met refuses with exit 13 and merges nothing; reviewed merges are not ledgered" {
   rg policy review-at-head >/dev/null
   run merge
-  [ "$status" -eq 13 ] && [ "$output" = "needs review: wait never-reviewed (review-gate.sh policy)" ]
+  [ "$status" -eq 13 ]
+  [ "$output" = "needs review: wait never-reviewed (review-gate.sh policy)" ]
   ! grep -q 'pr merge' "$FX/calls"
   grep -q 'refused review: wait never-reviewed' "$STATE/merges.log"
   review coderabbitai "$HEAD"
@@ -212,7 +228,8 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
 
 @test "request: one request per bot per window across PRs, gating PRs first, probes while out of quota" {
   run rg request --bot coderabbit --pr 7
-  [ "$status" -eq 0 ] && [ "$output" = "requested coderabbit pr=7 queued=0" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "requested coderabbit pr=7 queued=0" ]
   grep -q 'pr comment 7 --repo o/r --body @coderabbitai review' "$FX/writes"
   run rg request --bot coderabbit --pr 8
   [ "$output" = "throttled coderabbit next=2026-11-05T12:20:00Z queued=1" ]
@@ -258,10 +275,12 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
   [ "$status" -eq 2 ]
   rg notice --author chatgpt-codex-connector <<<"You have reached your Codex usage limits" >/dev/null
   run rg request --pr 7
-  [ "$status" -eq 0 ] && [ "$output" = "requested coderabbit pr=7 queued=0" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "requested coderabbit pr=7 queued=0" ]
   [ "$(grep -c '@codex' "$FX/writes" || true)" -eq 0 ]
   ORCHESTRATE_REVIEW_BOTS=codex run rg request --pr 8
-  [ "$status" -eq 0 ] && [ "$output" = "out-of-quota all pr=8" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "out-of-quota all pr=8" ]
   [ "$(wc -l <"$FX/writes" | tr -d ' ')" -eq 1 ]
   run test -e "$STATE/review-queue/codex.tsv"
   [ "$status" -ne 0 ]

@@ -43,7 +43,8 @@ SH
     --cd "$CD" --poll 1 --soft 1 3>&-
   [ "$status" -eq 0 ]
   logs=("$HOME/.claude/codex-lanes/my_lane/"luna-*-*.jsonl)
-  [ "${#logs[@]}" -eq 1 ] && [ -f "${logs[0]}" ]
+  [ "${#logs[@]}" -eq 1 ]
+  [ -f "${logs[0]}" ]
   L=${logs[0]}
   [[ "$output" == *"log=$L "* ]]
   [ "$(cat "$L.exit")" = 0 ]
@@ -61,12 +62,10 @@ trap 'echo interrupted >"$MARK"; exit 0' INT
 cat >/dev/null; echo $$ >>"$BATS_TEST_TMPDIR/leftover.pids"; echo started >"$MARK"
 while :; do sleep 0.1; done
 SH
-  # The runner reads codex's process group with `ps -o pgid=` right after the fork; delay that read
-  # so codex's setpgrp has run (read too early, it names the runner's own group). The runner also
-  # gets a process group of its own, so a signal to the wrong group never reaches bats.
-  real=$(command -v ps)
-  printf '#!/usr/bin/env bash\ncase "$*" in *pgid=*) sleep 0.5 ;; esac\nexec %s "$@"\n' "$real" >"$FAKEBIN/ps"
-  chmod +x "$FAKEBIN/codex" "$FAKEBIN/ps"
+  # The runner signals codex's process group only once it has confirmed the group is codex's own,
+  # and codex's pid until then (#145; the races are codex-lane-run-pgid.bats's). The runner still
+  # gets a process group of its own here, so no signal can ever reach bats.
+  chmod +x "$FAKEBIN/codex"
   L="$BATS_TEST_TMPDIR/run/codex.jsonl"
   PATH="$FAKEBIN:$PATH" perl -e 'setpgrp(0, 0); exec @ARGV or die' "$RUNNER" --model gpt-6-luna --spec "$SPEC" \
     --final "$BATS_TEST_TMPDIR/final.md" --log "$L" --cd "$CD" --poll 1 >/dev/null 2>&1 3>&- &

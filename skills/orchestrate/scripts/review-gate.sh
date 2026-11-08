@@ -207,11 +207,13 @@ cmd_check() {
     reviews=$(fetch_reviews) || { echo "unverified: reviews of PR $pr could not be read"; exit 4; }
   fi
   comments=$(fetch_comments) || { echo "unverified: comments of PR $pr could not be read"; exit 4; }
-  verdict=$(jq -rn --argjson r "$reviews" --argjson c "$comments" --argjson bots "$(logins_json)" \
-    --arg head "$head" --arg re "$quota_re" '
+  # Reviews and comments travel as files, not arguments: one argument is capped at 128 KiB (#121).
+  verdict=$(jq -rn --slurpfile r <(printf '%s\n' "$reviews") --slurpfile c <(printf '%s\n' "$comments") \
+    --argjson bots "$(logins_json)" --arg head "$head" --arg re "$quota_re" '
     def bot: (.user.login // "" | sub("\\[bot\\]$"; "")) as $l | $bots | index($l) != null;
     def quota: (.body // "") | test($re; "i");
     def sha_ok($s): ($s | length) >= 7 and ($head | startswith($s));
+    $r[0] as $r | $c[0] as $c |
     ([$r[] | select(bot and .state != "PENDING" and (quota | not))]) as $rev
     | ([$c[] | select(bot and (quota | not)) | (.body // "")
         | capture("[Rr]eviewed commit:?[ `]*(?<s>[0-9a-f]{7,40})") | .s]) as $csha
@@ -246,7 +248,8 @@ cmd_scan() {
   reviews=$(fetch_reviews) || { echo "unverified: reviews of PR $pr could not be read"; exit 4; }
   comments=$(fetch_comments) || { echo "unverified: comments of PR $pr could not be read"; exit 4; }
   # One row per bot item, oldest first: login  kind(quota|review)  time.
-  events=$(jq -rn --argjson r "$reviews" --argjson c "$comments" --arg re "$quota_re" '
+  events=$(jq -rn --slurpfile r <(printf '%s\n' "$reviews") --slurpfile c <(printf '%s\n' "$comments") --arg re "$quota_re" '
+    $r[0] as $r | $c[0] as $c |
     ([$r[] | select(.state != "PENDING") | {l: .user.login, t: .submitted_at, b: .body}]
      + [$c[] | {l: .user.login, t: .created_at, b: .body}])
     | map(select(.l != null and .t != null)) | sort_by(.t)[]

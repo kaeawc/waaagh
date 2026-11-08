@@ -237,7 +237,7 @@ JSON
   [ "$status" -eq 0 ]
   [ "${#output}" -lt 2000 ]
   [ "$(printf '%s\n' "$output" | grep -vc '^# ')" = 3 ]
-  first=$(printf '%s\n' "$output" | head -1)
+  first=${output%%$'\n'*}
   [[ "$first" == $'1\t1\t2,3,4,5,6,7,8,9,10,11,+89\tFix shared device session recovery failure\t(same title words)' ]]
   [[ "$output" == *$'\t901\t902\t'* ]]
   [[ "$output" == *$'\t903\t904\t'* ]]
@@ -366,7 +366,7 @@ JSON
   lock() { "$SCRIPTS/device-lock.sh" "$@" --path "$L"; }
   # claim from a subshell: its PID is gone by the time release runs
   out=$( (lock claim --name lane1 --pid "$BASHPID") )
-  [ "$(echo "$out" | head -1)" = claimed ]
+  [ "${out%%$'\n'*}" = claimed ]
   tok=$(echo "$out" | sed -n 's/^token //p')
   [ -n "$tok" ]
   run lock release --name other --token wrong
