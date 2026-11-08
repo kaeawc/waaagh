@@ -398,7 +398,7 @@ SH
   while [ "$status" -eq 10 ]; do run "$SCRIPTS/../../../bin/codex-lane-wait.sh" --log "$log" --since "${lines[0]#progress rev=}" --timeout 30 --interval 1; done
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" == "done exit=0" ]]
-  ! grep -q model_reasoning_effort "$log.args"
+  [ "$(grep -c model_reasoning_effort "$log.args" || true)" -eq 0 ]
   out=$(PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$START" --model gpt-6-luna --effort high <<<"task two")
   log=$(printf '%s\n' "$out" | sed -n 's/^LOG=//p')
   grep -q 'model_reasoning_effort=high' "$log.args"
@@ -425,7 +425,7 @@ SH
       [ "$must" = -- ] && continue
       grep -qF -- "$must" "$f" || { echo "missing in $f: $must"; false; }
     done
-    ! grep -qiE 'progress\.latest|run_in_background|verbatim|include its actual output' "$f"
+    [ "$(grep -ciE 'progress\.latest|run_in_background|verbatim|include its actual output' "$f" || true)" -eq 0 ]
   done
   # The two variants differ only in model-specific lines.
   diff <(sed -E 's/codex-implementer|sol-implementer/LANE/g; s/gpt-6-luna|gpt-6-sol/SLUG/g' "$A/codex-implementer.md" | grep -v -E '^(description|# )|GPT-6|is fixed|architect.s call') \
@@ -437,7 +437,7 @@ SH
   R="$SCRIPTS/../roles"
   grep -q 'codex-lane-wait.sh' "$R/_common.md"
   grep -q 'codex-lane-wait.sh' "$R/implementation-lane.md"
-  ! grep -q 'polling of the run' "$R/implementation-lane.md"
+  [ "$(grep -c 'polling of the run' "$R/implementation-lane.md" || true)" -eq 0 ]
   ! grep -q "worktree's \`scratch/\`" "$R/_common.md"
 }
 

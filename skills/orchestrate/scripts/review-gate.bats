@@ -205,7 +205,7 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
   run merge
   [ "$status" -eq 13 ]
   [ "$output" = "needs review: wait never-reviewed (review-gate.sh policy)" ]
-  ! grep -q 'pr merge' "$FX/calls"
+  [ "$(grep -c 'pr merge' "$FX/calls" || true)" -eq 0 ]
   grep -q 'refused review: wait never-reviewed' "$STATE/merges.log"
   review coderabbitai "$HEAD"
   run merge
@@ -216,7 +216,7 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
 @test "pr-merge: an exempt PR merges once and the exemption is consumed; no policy file reads nothing" {
   run merge
   [ "$status" -eq 0 ]
-  ! grep -q reviews "$FX/calls"
+  [ "$(grep -c reviews "$FX/calls" || true)" -eq 0 ]
   rm -f "$FX/merged" "$STATE/ops/merge-pr5.json"
   rg policy review-at-head >/dev/null
   rg exempt --pr 5 --reason urgent >/dev/null

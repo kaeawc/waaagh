@@ -24,9 +24,9 @@ lint_negations() {
     /^\}/ { inbody = 0; pend = ""; next }
     {
       line = $0
-      if (match(line, /<<-?[ \t]*["\047]?[A-Za-z_]+["\047]?/)) {
+      if (match(line, /(^|[^<])<<-?[ \t]*["\047]?[A-Za-z_]+["\047]?/)) {
         tag = substr(line, RSTART, RLENGTH)
-        sub(/<<-?[ \t]*["\047]?/, "", tag); sub(/["\047]$/, "", tag); hd = tag
+        sub(/^[^<]*<<-?[ \t]*["\047]?/, "", tag); sub(/["\047]$/, "", tag); hd = tag
       }
       if (line ~ /^[ \t]*(#|$)/) next
       if (!cont) flush()
@@ -100,7 +100,7 @@ lint_chains() {
   [ -z "$output" ] || { echo "put each assertion on its own line, or end the list with '|| { echo ...; false; }':"; echo "$output"; false; }
 }
 
-@test "the lint flags a mid-test '! cmd' and '&& ! cmd', and spares the last command and heredocs" {
+@test "the lint flags a mid-test '! cmd' and '&& ! cmd', and spares the last command and heredocs, not here-strings" {
   f="$BATS_TEST_TMPDIR/sample.bats"
   cat >"$f.in" <<'SAMPLE'
 %test "mid" {
@@ -135,14 +135,23 @@ helper() {
   ! false
   true
 }
+%test "a here-string is not a heredoc (#149)" {
+  grep -q a <<<word
+  ! grep -q b /dev/null
+  grep -q a <<<"word"
+  ! false
+  true
+}
 SAMPLE
   sed 's/^%test /@test /' "$f.in" >"$f"  # bats rewrites @test lines even inside a heredoc
   run lint_negations "$f"
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 3 ]
+  [ "${#lines[@]}" -eq 5 ]
   [[ "${lines[0]}" == "$f:2: "* ]]
   [[ "${lines[1]}" == "$f:6: "* ]]
   [[ "${lines[2]}" == "$f:30: "* ]]
+  [[ "${lines[3]}" == "$f:35: "* ]]
+  [[ "${lines[4]}" == "$f:37: "* ]]
 }
 
 @test "the lint flags a mid-test assertion list 'a && b', and spares the last command, || and actions" {
