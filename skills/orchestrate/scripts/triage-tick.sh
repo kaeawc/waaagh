@@ -11,7 +11,11 @@
 #       verdict ok | verdict act <reason>,...
 #       main green ... | main red <sha> runs=<id>:<class>,... action=<rerun|fix-lane>
 #            | main held rerun-pending runs=<id>,... | main unknown <reason>
-#       prs open=<n|300+|unknown>
+#       prs open=<n|300+|unknown> [reviews=head:<n>,stale:<n>,none:<n> [changes-requested=#a,...]
+#            | reviews=unknown]   last review per open PR from one gh-snapshot.sh call (which also
+#            refreshes the per-head cache review-gate.sh check reads); omitted with no open PR.
+#            The count comes from the `gh pr list` read that dispatch needs, or from the snapshot
+#            (REST) when GraphQL is refused (dispatch is then unknown).
 #       merge_loop <absent|alive|stale|dead|expired|ended:REASON> [beat_age=<s>] [deadline=<iso>]
 #                  last_merge=<iso|-> pr=<n|-> merges_24h=<n>
 #       dispatch <n|unknown> next=#a,#b,#c     open issues (any --ready-label; none of
@@ -51,7 +55,7 @@ orch_gh_priority normal
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 
-usage() { sed -n '2,45p' "$0"; }
+usage() { sed -n '2,49p' "$0"; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 case "$cmd" in -h | --help) usage; exit 0 ;; esac
@@ -193,11 +197,26 @@ case "$mh_state" in
     fi ;;
 esac
 
-# Open PRs and the dispatch queue (one PR read, one issue read).
-open=unknown dispatch=unknown next="-"
+# Open PRs: their last reviews from one gh-snapshot.sh call (it also refreshes the per-head cache
+# review-gate.sh check reads), and the dispatch queue (one PR read for closing references, one
+# issue read). Where GraphQL is refused the PR read cannot be made; the count is the snapshot's.
+open=unknown dispatch=unknown next="-" reviews=""
 lanes_tsv=""
 [[ ! -f "$state/lanes.tsv" ]] || lanes_tsv=$(cat "$state/lanes.tsv")
-if prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limit 300 --json number,closingIssuesReferences 2>/dev/null); then
+snap_rc=0
+snap=$("$here/gh-snapshot.sh" --repo "$repo" --limit 300 --json 2>/dev/null) || snap_rc=$?
+((snap_rc <= 1)) && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$snap" || snap=""
+pr_rc=0 pr_err=$(mktemp)
+if [[ "${ORCHESTRATE_GH_API:-auto}" == rest ]]; then
+  pr_rc=5; echo "GraphQL skipped (ORCHESTRATE_GH_API=rest)" >"$pr_err"
+else
+  prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limit 300 --json number,closingIssuesReferences 2>"$pr_err") || pr_rc=$?
+fi
+if ((pr_rc == 5)) && grep -q GraphQL "$pr_err" && [[ -n "$snap" ]]; then
+  open=$(jq -r --argjson t "$snap_rc" 'if $t == 1 or length >= 300 then "300+" else length end' <<<"$snap")
+fi
+rm -f "$pr_err"
+if ((pr_rc == 0)); then
   open=$(jq -r 'if length >= 300 then "300+" else length end' <<<"$prs")
   ((${#exclude[@]})) || exclude=(blocked)
   if issues=$("$here/gh-read.sh" --json -- issue list --repo "$repo" --state open --limit 300 --json number,labels 2>/dev/null); then
@@ -215,6 +234,14 @@ if prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limi
       | sort | "\(length) \(if length == 0 then "-" else (.[0:3] | map("#\(.)") | join(",")) end)"' <<<"$issues")
     dispatch=${q%% *} next=${q#* }
   fi
+fi
+if [[ "$open" != unknown && "$open" != 0 ]]; then
+  reviews="reviews=unknown"
+  [[ -z "$snap" ]] || reviews=$(jq -r 'if length == 0 then "" else
+      "reviews=head:\(map(select(.reviewed == "head")) | length),stale:\(map(select(.reviewed == "stale")) | length)"
+      + ",none:\(map(select(.reviewed == "none")) | length)"
+      + ([.[] | select(.review == "CHANGES_REQUESTED") | "#\(.number)"] | if length > 0 then " changes-requested=" + join(",") else "" end)
+    end' <<<"$snap")
 fi
 
 # Merge-loop liveness and the last merges.
@@ -277,7 +304,7 @@ if [[ -n "$rn" && "$rn" != - ]]; then reasons+=("resolve-now=$(tr ',' '\n' <<<"$
 
 if ((${#reasons[@]})); then echo "verdict act $(IFS=,; echo "${reasons[*]}")"; else echo "verdict ok"; fi
 echo "$main_line"
-echo "prs open=$open"
+echo "prs open=$open${reviews:+ $reviews}"
 echo "merge_loop $loop$loop_extra $last"
 echo "dispatch $dispatch next=$next"
 echo "slots $slots"
