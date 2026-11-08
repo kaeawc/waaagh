@@ -68,6 +68,44 @@ condition, and the issue stays open.
 - [ ] #N question — option / option — recommend: X — what it blocks
 ```
 
+## Stated defaults, not blocking questions
+
+A blocking question (`AskUserQuestion`, or any ask that holds the turn open) stops everything the
+session drives until the owner answers: the session cron fires only while the REPL is idle, so
+triage ticks, lane result handling, lane refills and cloud dispatch all wait with it. Only a
+background loop keeps going. An owner who answers in the morning has paid a night of idle lanes,
+and the answer is often "carry on", the same as doing nothing.
+
+- **A safe default exists → state it, take it, record the question.** A decision whose safe
+  default is "carry on" (keep merging while hosted runners are slow, keep the current route, keep
+  the plan) is never asked as a blocking question. Take the default, say which in one line, and
+  queue the question:
+
+  ```bash
+  "$SCRIPTS/decision.sh" default --issue N --question "pause merging while runners stall?" \
+    --default "keep merging"            # --issue is optional for a campaign-level question
+  ```
+
+  It appends `- [ ] #N question — default taken (DATE): D — recommend: D — overridable` to
+  `decisions.md` (no GitHub call), so `decision.sh batch` offers it with the default as the
+  recommendation and the owner can override it later. Then end the turn, or ask without blocking
+  (a question at the end of a turn that otherwise finished its work), so ticks keep firing.
+- **The next report lists every default taken.** `decision.sh defaults` prints one
+  `- #N question → default (taken DATE)` line per open one; they go in the tick report's owner part
+  (`reporting.md`) until the owner answers. `decision.sh record` ticks the line; tick an issue-less
+  line by hand.
+- **No safe default → one blocking question, at most one at a time.** Only when every option could
+  do harm the owner must weigh (delete data, spend money, publish, force-push a shared branch) is a
+  blocking question right, and never several open at once: queue the rest with `default`, or in
+  `decisions.md`.
+- **Before a blocking question, make the wait survivable.** The answer may come eight hours later.
+  First check `"$SCRIPTS/loops.sh" status` reads `loops ok`, and that each background loop (merge
+  loop, review snapshot) has a time bound and pass count long enough to run overnight, at least
+  12 hours, and beats its heartbeat every pass (`loops.sh heartbeat`, `triage-tick.sh beat --end
+  bound`, `roles/triage-tick.md`) so the next session can tell a dead loop from an idle one.
+  Restart or extend any loop that would end first. Say in the question that local lanes and cloud
+  dispatch pause until it is answered.
+
 ## Batched decisions
 
 Never ask pending decisions one by one in chat. When several are open, ask once:

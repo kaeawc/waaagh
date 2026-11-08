@@ -484,6 +484,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   it blocks most of the ranked plan, as one batched question (`decision.sh batch`). Record each
   answer on its issue and collect the owner-only steps; the campaign's close policy decides what
   may then close (`owner-decisions.md`).
+- **Never block on a question with a safe default.** A blocking question stops every
+  session-driven tick until it is answered. When "carry on" is safe, state the default, take it and
+  queue the question (`decision.sh default`); block only when no safe default exists, one question
+  at a time, after checking the background loops will last overnight (`owner-decisions.md`).
 - **Implementer unavailable.** Codex is missing, unauthenticated or out of quota. The lane stops
   and reports `implementer-unavailable`; there is no Claude implementer fallback unless the user
   opted in. Report "usage limit" and "401 / sign in again" separately, with the exact text: one
