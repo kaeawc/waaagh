@@ -115,7 +115,7 @@ if [[ "$show_env" == yes ]]; then
   for d in ${decl[@]+"${decl[@]}"}; do
     case "$d" in
       "env "*) name=${d#env }; printf 'env %s %s\n' "$name" "$([[ -n "${!name+set}" ]] && echo set || echo unset)" ;;
-      "tool "*) printf 'tool %s: %s\n' "${d#tool }" "$(bash -c "${d#tool }" 2>&1 </dev/null | head -1 || true)" ;;
+      "tool "*) printf 'tool %s: %s\n' "${d#tool }" "$(bash -c "${d#tool }" 2>&1 </dev/null | awk 'NR == 1' || true)" ;;
       "input "*) printf 'input %s %s\n' "${d#input }" "$([[ -f "${d#input }" ]] && echo present || echo missing)" ;;
     esac
   done

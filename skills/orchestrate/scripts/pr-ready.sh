@@ -81,14 +81,14 @@ note() { # record a read problem in a diagnostics file; the verdicts carry only 
 # returns something malformed is "unknown", never "none": the PR cannot be judged READY.
 policy=known required='[]'
 ghr() { "$here/gh-read.sh" --json -- "$@"; }   # bounded, typed, read-only
-if out=$(ghr api "repos/$repo/rules/branches/$base" 2>&1) &&
+if out=$(ghr api "repos/$repo/rules/branches/$base" 2>>"$diag") &&
   r=$(jq -ce 'if type == "array" then [.[] | select(.type == "required_status_checks")
               | .parameters.required_status_checks[].context] else error("not an array") end' <<<"$out" 2>/dev/null); then
   required=$r
 else
   policy=unknown; note "rulesets read failed for $base: ${out:0:500}"
 fi
-if out=$(ghr api "repos/$repo/branches/$base" 2>&1) &&
+if out=$(ghr api "repos/$repo/branches/$base" 2>>"$diag") &&
   r=$(jq -ce 'if type == "object" and has("protected") then
                 ((.protection.required_status_checks // {}) | [(.contexts // [])[], ((.checks // [])[] | .context)])
               else error("no protected field") end' <<<"$out" 2>/dev/null); then
@@ -99,7 +99,7 @@ fi
 
 list_limit=300
 if ! prs=$(ghr pr list --repo "$repo" --state open --limit "$list_limit" \
-  --json number,author,isDraft,isCrossRepository,baseRefName,headRefOid,mergeable,labels,statusCheckRollup 2>&1); then
+  --json number,author,isDraft,isCrossRepository,baseRefName,headRefOid,mergeable,labels,statusCheckRollup 2>>"$diag"); then
   note "PR list unreadable: ${prs:0:500}"
   echo "pr-ready: the open PR list could not be read; no verdicts (diagnostics: $diag)" >&2
   exit 3

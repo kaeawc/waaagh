@@ -110,7 +110,7 @@ done < <(g diff --name-only; g ls-files --others --exclude-standard)
 # Stable: a second run must change nothing.
 run_regen || abort_regen "unstable: a regenerate command failed on the second run"
 if [[ -n "$(g diff --name-only)$(g ls-files --others --exclude-standard)" ]]; then
-  abort_regen "unstable: regenerating twice gives different output ($(g diff --name-only | head -3 | tr '\n' ' '))"
+  abort_regen "unstable: regenerating twice gives different output ($(g diff --name-only | awk 'NR <= 3' | tr '\n' ' '))"
 fi
 if [[ "$commit" == yes ]]; then g commit -q --no-edit; fi
 echo "merged, regenerated: $(for i in $uniq_idx; do printf '%s ' "${globs[$i]}"; done | sed 's/ $//')"
