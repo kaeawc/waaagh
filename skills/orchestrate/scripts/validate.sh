@@ -27,7 +27,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 
-usage() { sed -n '2,26p' "$0" >&2; exit 2; }
+usage() { sed -n '2,24p' "$0" >&2; exit 2; }
+case "${1:-}" in -h | --help) sed -n '2,24p' "$0"; exit 0 ;; -*) echo "validate.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 dir="" vcmd="" runner="" independent=no max_age=86400
@@ -42,7 +43,7 @@ while (($#)); do
     --env | --tool | --input | --env-manifest) envargs+=("$1" "$2"); shift 2 ;;
     --store) store=$2; shift 2 ;;
     --max-age) max_age=$2; shift 2 ;;
-    -h | --help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "validate.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

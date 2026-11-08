@@ -14,6 +14,7 @@
 #        can be read next to delivery. A retried run is a separate run with its own receipt.
 set -euo pipefail
 
+case "${1:-}" in -h | --help) sed -n '2,14p' "$0"; exit 0 ;; esac
 sub=${1:-}
 if [[ -n $sub ]]; then shift; fi
 log='' model='' effort='' tier='' code='' outcome='' started='' finished='' status=''
@@ -28,11 +29,11 @@ while (($#)); do
     --started) started=${2:-}; shift 2 ;;
     --finished) finished=${2:-}; shift 2 ;;
     --status) status=${2:-}; shift 2 ;;
-    -h | --help) sed -n '2,17p' "$0"; exit 0 ;;
-    *) sed -n '2,17p' "$0" >&2; exit 2 ;;
+    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
+    *) sed -n '2,14p' "$0" >&2; exit 2 ;;
   esac
 done
-[[ -n $log ]] || { sed -n '2,17p' "$0" >&2; exit 2; }
+[[ -n $log ]] || { sed -n '2,14p' "$0" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "codex-lane-usage: jq not found; no receipt" >&2; exit 0; }
 receipt="$log.usage.json"
 
@@ -73,5 +74,5 @@ case "$sub" in
     jq --arg s "$status" '.lane_status = $s' "$receipt" >"$receipt.tmp" && mv "$receipt.tmp" "$receipt"
     echo "marked $status $receipt"
     ;;
-  *) sed -n '2,17p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,14p' "$0" >&2; exit 2 ;;
 esac

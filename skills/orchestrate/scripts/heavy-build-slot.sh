@@ -23,11 +23,11 @@ while (($#)); do
     --label) label=$2; shift 2 ;;
     --env-file) env_file=$2; shift 2 ;;
     --) shift; break ;;
-    -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,11p' "$0"; exit 0 ;;
     *) echo "heavy-build-slot.sh: unknown argument: $1 (put the command after --)" >&2; exit 2 ;;
   esac
 done
-(($#)) || { sed -n '2,12p' "$0" >&2; exit 2; }
+(($#)) || { sed -n '2,11p' "$0" >&2; exit 2; }
 [[ "$wait_s" =~ ^[0-9]+$ && "$workers" =~ ^[1-9][0-9]*$ ]] || { echo "heavy-build-slot.sh: bad --wait or --workers" >&2; exit 2; }
 
 deadline=$(($(date +%s) + wait_s)) slot=""

@@ -19,7 +19,7 @@ while (($#)); do
   case "$1" in
     --dir) dirs+=("$2"); shift 2 ;;
     --since) since=$2; shift 2 ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "usage-report.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

@@ -43,7 +43,7 @@ while (($#)); do
       done <"$2"
       shift 2 ;;
     --show-env) show_env=yes; shift ;;
-    -h | --help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "fingerprint.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

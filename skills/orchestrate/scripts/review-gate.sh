@@ -46,7 +46,10 @@ if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 
 usage() { sed -n '2,40p' "$0" >&2; exit 2; }
 cmd=${1:-}
-case "$cmd" in -h | --help) sed -n '2,40p' "$0"; exit 0 ;; esac
+case "$cmd" in
+  -h | --help) sed -n '2,40p' "$0"; exit 0 ;;
+  -*) echo "review-gate.sh: unknown argument: $cmd" >&2; exit 2 ;;
+esac
 if [[ -n "$cmd" ]]; then shift; fi
 sub="" repo="" pr="" head="" note="" reason="" author="" bot="" priority=normal waiting="" force=no dry=no list=no
 while (($#)); do

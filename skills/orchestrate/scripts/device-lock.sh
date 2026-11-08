@@ -41,6 +41,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
+case "${1:-}" in -h | --help) sed -n '2,37p' "$0"; exit 0 ;; -*) echo "device-lock.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 name="" pid=$PPID path="" repo="" stale=9 token="" sdir="" devs="" avd="" sim=0
