@@ -19,6 +19,7 @@ case "$*" in
   "run view "*) a="$*"; id=${a#run view }; id=${id%% *}; cat "$FX/run-$id.json" ;;
   "pr list"*) [ -f "$FX/prs-fail" ] && { echo "HTTP 404: Not Found" >&2; exit 1; }; cat "$FX/prs.json" ;;
   "issue list"*) cat "$FX/issues.json" ;;
+  "api graphql"*) echo '{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' ;;
   "run rerun"*) [ -f "$FX/rerun-fails" ] && { echo "HTTP 403: cannot rerun" >&2; exit 1; }; echo ok ;;
   "issue comment"*) [ -f "$FX/comment-fails" ] && { echo "HTTP 403" >&2; exit 1; }; echo url ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
@@ -58,7 +59,8 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   [ "${lines[4]}" = "dispatch 0 next=-" ]
   [ "${lines[5]}" = "slots android=1/1,ios=1/2" ]
   [ "${lines[6]}" = "cron none" ]
-  [ "${#lines[@]}" -eq 7 ]
+  [ "${#lines[@]}" -eq 8 ]
+  [ "${lines[7]}" = "threads unresolved=0 answered=0 resolve-now=- repair=-" ]
 }
 
 @test "the dispatch queue skips issues in an open PR, in an active lane, or excluded" {

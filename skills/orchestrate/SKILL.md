@@ -28,7 +28,7 @@ Scripts are in `${CLAUDE_SKILL_DIR}/scripts/` (`SCRIPTS` below; self-test:
 
 | Role | Agent (`subagent_type`) | Model / effort | Writes? |
 |---|---|---|---|
-| Lane driver — scopes the issue, writes the spec, supervises the implementer, checks the result | `general-purpose` | `model: "sonnet"`; `"haiku"` for very simple, mechanical lanes | no |
+| Lane driver — scopes the issue, writes the spec, supervises the implementer, checks the result | `general-purpose` | `model: "haiku"` for a single-issue lane or premise check; `"sonnet"` for multi-issue, conflict or static-analysis (Detekt, lint) fixes (`subagent-hygiene.md`) | no |
 | Implement — routine, fully specified work | `waaagh:codex-implementer` | GPT-6 Luna, `REASONING: medium` | yes (via codex) |
 | Implement — judgment work (PR doctor, conflict lane, anything the spec cannot fully settle) | `waaagh:sol-implementer` | GPT-6.1 Sol, `REASONING: medium` or `high`, fast tier | yes (via codex) |
 | Scouting / exploration / log grep | `Explore` | `model: "haiku"` | no |
@@ -129,6 +129,10 @@ review on every poll or push.
   final notification of the same task, which follows when that work ends. Only if the background
   work has ended and no final report came, resume that agent once to finish inline. Briefs say
   "run gates inline, never in the background", so interim stops should be rare.
+- **Stop what is done or only noisy** (`subagent-hygiene.md`). Every brief says: check the premise
+  first, stop all monitors before finishing, report in N lines. A lane whose issue closed elsewhere
+  gets a stop message; one that holds nothing but noise (no answer, or its only notifications come
+  from stale monitors it armed) gets `TaskStop`, never a resume.
 - With many lanes the host saturates and whole-suite gates hit their wall caps. Lanes run targeted
   suites; CI's clean runners carry the full suite. Say so in the PR.
 
@@ -520,6 +524,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
    the first review round become follow-up issues, are answered `follow-up #N` and resolved, so
    they never block the merge line (`scripts/review-followup.sh`; the PR doctor's later-round
    step). `scripts/thread-resolve.sh` replies on and resolves any one thread.
+   **Only the local orchestrator resolves threads** (`thread-resolution.md`): cloud sessions
+   cannot, so cloud briefs say reply on each thread and do not resolve; after each repair,
+   `scripts/thread-sweep.sh resolve` settles threads whose last reply links an issue or names a
+   pushed fix.
 6. **Merge** per the policy table, through `pr-merge.sh`.
 
 ## PR watch and takeover (the user's own PRs only)
