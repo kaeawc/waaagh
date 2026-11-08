@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Host-wide counting semaphores for gate-slot.sh and heavy-build-slot.sh. Source, do not execute.
+# Host-wide counting semaphores for gate-slot.sh and heavy-build-slot.sh, and the process-cwd
+# listing host-load.sh and wt-cleanup.sh share. Source, do not execute.
 # A slot is a directory (mkdir is atomic) holding "holder": three lines, PID, process start time, label.
 # A holder whose PID is gone, or whose PID now belongs to a different process (start time differs),
 # is stale: its slot is renamed away atomically (mv) and taken, so two reclaimers cannot both win.
@@ -57,6 +58,27 @@ slot_release() {
   [[ -n "${1:-}" && -f "$1/holder" ]] || return 0
   pid=$(sed -n 1p "$1/holder")
   [[ "$pid" == "$2" ]] && rm -rf "$1"
+  return 0
+}
+
+# proc_cwds: one "PID<TAB>cwd" line per process this user can see (resolved paths). lsof first; a
+# listing that lacks this shell's own cwd is not trusted (lsof can fail or time out silently), and
+# /proc (ORCHESTRATE_PROC_DIR) is read instead. Returns 1 when neither gives an answer.
+proc_cwds() {
+  local out="" self proc=${ORCHESTRATE_PROC_DIR:-/proc} p d
+  self=$(pwd -P)
+  if command -v lsof >/dev/null 2>&1; then
+    out=$(lsof -a -d cwd -Fpn 2>/dev/null | awk '/^p/ { p = substr($0, 2) } /^n/ { print p "\t" substr($0, 2) }' || true)
+    if printf '%s\n' "$out" | awk -F'\t' -v s="$self" '$2 == s { f = 1 } END { exit !f }'; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+  fi
+  [[ -d "$proc/self" ]] || return 1
+  for p in "$proc"/[0-9]*; do
+    d=$(readlink "$p/cwd" 2>/dev/null) || continue
+    printf '%s\t%s\n' "${p##*/}" "$d"
+  done
   return 0
 }
 

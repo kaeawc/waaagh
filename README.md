@@ -29,6 +29,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `skills/orchestrate/SKILL.md` | The doctrine: roles and routing, isolation, briefs, evidence, the campaign loop, lane cap, merge policy, interrupts, PR lifecycle and takeover |
 | `skills/orchestrate/subagent-hygiene.md` | Background subagent hygiene: premise-first, monitor-free, line-budgeted briefs; stop message vs `TaskStop` for closed or noisy lanes; model choice by role |
 | `skills/orchestrate/roles/` | Brief templates for the standing roles: merge bot, rebase bot, hygiene bot, local sweep, verify batch, verification, implementation lane, PR doctor, conflict lane, reviewer |
+| `skills/orchestrate/host-load.md` | Host load: lane admission thresholds, acting on the load's cause (Spotlight/`fseventsd`, lanes, other), the worktree budget, never removing a worktree that is a live process's cwd |
 | `skills/orchestrate/scripts/` | The scripts below, with stubbed-`gh` self-tests |
 | `agents/codex-implementer.md` | Routine implementation lane (GPT-6 Luna, `medium`): wraps one supervised `codex exec` run and verifies it |
 | `agents/sol-implementer.md` | Judgment implementation lane (GPT-6.1 Sol, `medium` or `high`): same runner and checks |
@@ -67,7 +68,8 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `lane-claim.sh` | Duplicate-work guard: refuses a lane whose issue or files an active lane or open PR already covers; keeps `lanes.tsv`; `on-issue` / `closed` name the active lanes to stop when their issue closes |
 | `decision.sh` | Owner decisions: `record` the "Owner decision (YYYY-MM-DD): ..." comment and clear `needs-decision`, `batch` the open ones into one question with every recommendation listed, `steps` lists owner-only steps; with `campaign.sh close-policy` and `issue-close.sh --as completed` (`skills/orchestrate/owner-decisions.md`) |
 | `gate-slot.sh`, `heavy-build-slot.sh` | Host-wide gate semaphore (default 3) with a per-repo gate environment; Gradle/Xcode builds run alone with capped workers; bounded waits, stale-holder reclaim |
-| `wt-cleanup.sh` | Conservative worktree cleanup: only clean, idle, pushed, unprotected worktrees no process is in; dry run by default |
+| `wt-cleanup.sh` | Conservative worktree cleanup: only clean, idle, pushed, unprotected worktrees no process is in (cwds read again before each removal); `--pr-closed`, and a worktree budget (`--max-count`, `--max-gb`, exit 3 over); dry run by default |
+| `host-load.sh` | Lane admission with attribution: ADMIT / HOLD / BACKOFF from 1-min load vs CPUs and free memory, a third device slot only at 12 GB free, top processes by CPU and RSS tied to their worktrees, and the cause (indexing, lanes, other) with the owner action (`skills/orchestrate/host-load.md`) |
 | `gh-read.sh` | Bounded, typed GitHub reads: per-call timeout, backoff inside a time budget, Retry-After and rate-limit reset handling with a cooldown shared by local lanes; refuses writes |
 | `gh-budget.sh`, `gh-shim/gh` | One API pacer for every local caller: per-priority floors (high 150, normal 1000, low 2500), calls spaced until the reset from a shared `/rate_limit` cache, exit 75 to skip a pass, endpoint-scoped backoff for a 403 with headroom; the shim budgets any `gh` call (`ORCHESTRATE_GH_BUDGET=1`) |
 | `gh-snapshot.sh` | One GraphQL snapshot per pass of every open PR (head, check roll-up, last review state and commit), cached per head SHA |
