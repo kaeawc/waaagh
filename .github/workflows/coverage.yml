@@ -1,17 +1,26 @@
 name: Coverage
 
-# Line coverage of the scripts (dev/coverage.sh, bashcov). A run takes about 5 minutes, so it runs on
-# pushes to main and by hand, never on pull requests: the PR check stays fast. It fails when a
-# script drops below its floor in dev/coverage-floor.tsv or a script has no row there.
+# Line coverage of the scripts (dev/coverage.sh, bashcov). It fails when a script drops below its
+# floor in dev/coverage-floor.tsv or a script has no row there. It runs on pushes to main, by hand,
+# and on pull requests that change a script, a suite, dev/ or this workflow (#157): the floors sit 1
+# point under each script's credited coverage, so a PR that adds an untested branch would otherwise
+# pass PR CI and turn this job red on main for every later commit. A run takes about 9 minutes; it is
+# its own workflow, so the fast `scripts` check in test.yml does not wait for it.
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - 'skills/orchestrate/scripts/**'
+      - 'bin/**'
+      - 'dev/**'
+      - '.github/workflows/coverage.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to main supersedes a coverage run still in flight.
+# A newer push supersedes a coverage run still in flight on the same ref: main, or one PR's merge ref.
 concurrency:
   group: coverage-${{ github.ref }}
   cancel-in-progress: true

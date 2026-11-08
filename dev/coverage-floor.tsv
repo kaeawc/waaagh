@@ -1,5 +1,6 @@
 # Coverage floors for dev/coverage.sh --check: script<TAB>minimum % (credited line coverage).
-# The coverage workflow fails when a script drops below its floor or a script has no row here.
+# The coverage workflow fails when a script drops below its floor or a script has no row here. It runs
+# on PRs that change scripts (#157): a PR that adds branches to a script must cover them, or it goes red.
 # Set at the credited % (dev/coverage.sh, #147) rounded down, minus 1. Raise a floor in the PR that adds the tests.
 bin/codex-lane-run.sh	94
 bin/codex-lane-start.sh	90

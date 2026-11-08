@@ -128,7 +128,7 @@ shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scri
 dev/test.sh                 # every suite, in parallel (-j N); or dev/test.sh path/to/one.bats
 dev/test.sh --ignore-sigpipe   # the same with SIGPIPE ignored, as on GitHub's runners
 dev/coverage.sh             # line coverage per script (needs: gem install bashcov)
-dev/coverage.sh --check dev/coverage-floor.tsv   # floors vs the last run; CI runs both on main (coverage.yml)
+dev/coverage.sh --check dev/coverage-floor.tsv   # floors vs the last run; CI runs both on main and on PRs that change scripts (coverage.yml)
 claude --plugin-dir .
 ```
 
