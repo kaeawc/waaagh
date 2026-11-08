@@ -67,7 +67,7 @@ seed_origin_copy() {
 # through gh-read.sh (most helpers' GitHub reads) gets `--include` appended to each `gh api` call
 # without --paginate, for the status line and rate-limit headers: a stub that matches an exact
 # `api <route>` argument list misses the call, and gh-read reports the miss as "transient" and
-# retries it. Strip it (a="$*"; a=${a% --include}) or match with a trailing *. A stub need not
+# retries it. Call gh_stub_args (below) or match with a trailing *. A stub need not
 # print headers: output whose first line is not "HTTP/<v> <status>" is taken as the body.
 #
 # stub_gh_routes: the shared route stub. It writes that gh, exports FX=$BATS_TEST_TMPDIR/fx and
@@ -80,16 +80,33 @@ seed_origin_copy() {
 #                           for answers a file cannot give (computed, an error, an exit status);
 #                           an arm must exit, or the call falls through
 # and anything unmatched prints "unexpected gh call: <a>" on stderr and exits 9.
+#
+# gh_stub_args ARGS...: the argument handling every gh stub here shares (stub_gh_routes,
+# selftest_helper.bash's stub_gh_router, rest_stub.bash's rest_wrap, #166), so one gh-read.sh call
+# matches the same route through each: sets a to ARGS joined by spaces, with `--include` and `-i`
+# dropped when ARGS is a `gh api` call (other subcommands keep -i). A stub gets it from
+# gh_stub_header, which prints the shebang and this function's definition: write a stub as
+# `{ gh_stub_header; cat <<'STUB' ... STUB; } >"$BATS_TEST_TMPDIR/bin/gh"` and call
+# `gh_stub_args "$@"` first.
+gh_stub_args() {
+  a=""
+  local x
+  for x in "$@"; do
+    if [[ "${1:-}" == api && ("$x" == --include || "$x" == -i) ]]; then continue; fi
+    a="${a:+$a }$x"
+  done
+}
+gh_stub_header() {
+  echo '#!/usr/bin/env bash'
+  declare -f gh_stub_args
+}
 stub_gh_routes() {
   FX="$BATS_TEST_TMPDIR/fx"
   mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
-  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
-#!/usr/bin/env bash
-a=""
-for x in "$@"; do
-  if [[ "$1" == api && ("$x" == --include || "$x" == -i) ]]; then continue; fi
-  a="${a:+$a }$x"
-done
+  {
+    gh_stub_header
+    cat <<'STUB'
+gh_stub_args "$@"
 echo "$a" >>"$FX/calls"
 if [[ -f "$FX/routes.tsv" ]]; then
   while IFS=$'\t' read -r pat file; do
@@ -108,6 +125,7 @@ fi
 echo "unexpected gh call: $a" >&2
 exit 9
 STUB
+  } >"$BATS_TEST_TMPDIR/bin/gh"
   chmod +x "$BATS_TEST_TMPDIR/bin/gh"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
 }

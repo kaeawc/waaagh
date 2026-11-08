@@ -53,16 +53,19 @@ WAITER() { "$SCRIPTS/../../../bin/codex-lane-wait.sh" "$@"; }
 
 # --- campaign scripts: readiness, merge, main health, issues, lanes, device lock ---------------
 
-# gh stub that answers by subcommand from fixture files and records every call. Its `api` routes
-# match exact argument lists, so they serve scripts that call gh directly: a read through
-# gh-read.sh arrives with `--include` appended (see "Stubbing gh" in test_helper.bash). A new suite
-# should start from test_helper.bash's stub_gh_routes instead of another case statement.
+# gh stub that answers by subcommand from fixture files and records every call. It reads its
+# arguments with test_helper.bash's gh_stub_args, as stub_gh_routes does: `--include` and `-i` are
+# dropped from `gh api` calls, so a read through gh-read.sh matches the same routes as a direct gh
+# call, and $FX/calls logs the call without them (#166). A new suite should start from
+# test_helper.bash's stub_gh_routes instead of another case statement.
 stub_gh_router() {
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
-  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
-#!/usr/bin/env bash
-echo "$*" >>"$FX/calls"
-case "$*" in
+  {
+    gh_stub_header
+    cat <<'STUB'
+gh_stub_args "$@"
+echo "$a" >>"$FX/calls"
+case "$a" in
   "api user") echo '{"login":"me"}' ;;
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   *rules/branches*) [ -f "$FX/rules-fails" ] && { echo "HTTP 403: Resource not accessible" >&2; exit 1; }; cat "$FX/rules.json" ;;
@@ -128,9 +131,10 @@ case "$*" in
       no-readback) touch "$FX/closed-$n"; echo 3 >"$FX/view-fails" ;;
       *) touch "$FX/closed-$n" ;;
     esac ;;
-  *) echo "unexpected gh call: $*" >&2; exit 9 ;;
+  *) echo "unexpected gh call: $a" >&2; exit 9 ;;
 esac
 STUB
+  } >"$BATS_TEST_TMPDIR/bin/gh"
   chmod +x "$BATS_TEST_TMPDIR/bin/gh"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_NOW=1790510400
   echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"build"}]}}]' >"$FX/rules.json"

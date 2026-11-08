@@ -6,7 +6,8 @@
 # the real gh prints it: `issue list --label` without the "HTTP 403:" prefix), and the REST routes
 # are served from the fixtures the GraphQL stub serves. Without $FX/rest-mode every call goes
 # straight to the GraphQL stub. Calls in REST mode are logged to $REST_CALLS (default
-# $FX/rest-calls).
+# $FX/rest-calls), as gh was called; routes match the arguments as test_helper.bash's
+# gh_stub_args leaves them (no `--include` or `-i` on `gh api`), the same as stub_gh_routes.
 # PR side: $FX/prs.json (the `gh pr list --json` rows, plus optional `files` and `reviews`),
 # $FX/view-<n>.json, and review threads read through the GraphQL stub itself (one PR per query,
 # then its cursors). $FX/thread-shape: graphql (default: isResolved/isOutdated) | snake
@@ -24,12 +25,13 @@
 
 rest_wrap() {
   mkdir -p "$BATS_TEST_TMPDIR/restbin"
-  cat >"$BATS_TEST_TMPDIR/restbin/gh" <<'STUB'
-#!/usr/bin/env bash
+  {
+    gh_stub_header
+    cat <<'STUB'
 real="$BATS_TEST_TMPDIR/bin/gh"
 [ -f "$FX/rest-mode" ] || exec "$real" "$@"
 echo "$*" >>"${REST_CALLS:-$FX/rest-calls}"
-a="$*"; a=${a% --include}; a=${a/api --paginate /api }
+gh_stub_args "$@"; a=${a/api --paginate /api }
 nf() { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
 param() { printf '%s\n' "$a" | sed -nE "s/.*[?&]$1=([^&]*).*/\1/p"; }
 decode() { printf '%b' "${1//%/\\x}"; }
@@ -171,6 +173,7 @@ case "$a" in
   *) exec "$real" "$@" ;;
 esac
 STUB
+  } >"$BATS_TEST_TMPDIR/restbin/gh"
   chmod +x "$BATS_TEST_TMPDIR/restbin/gh"
   export PATH="$BATS_TEST_TMPDIR/restbin:$PATH"
 }
