@@ -37,7 +37,12 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    excerpt and the saved path, or why the log is not available yet). Classify each with {{CI_CLASSIFIER}}: caused by the diff → fix; known flake or
    infrastructure → rerun the failed jobs ONCE and record it (an unnamed or anonymous failure on a
    slow platform is usually setup or hook timeout headroom, not a regression; a run cancelled by a
-   concurrency group is a cancellation); stale base → step 3. Never fix a
+   concurrency group is a cancellation); stale base → step 3. Unknown to the classifier: ask
+   `{{SCRIPTS}}/failure-triage.sh decide --repo {{REPO}} --pr <n> --head <sha> --check <check>
+   --verdict <v> --log <saved log>` first. `rerun` (the check's domain misses the diff, or a recorded
+   signature): `failure-triage.sh rerun ... --run <id>` once and wait; spend no reproduction until
+   it says `reproduce` (the same check failed again on the same head); then record the signature
+   with `failure-triage.sh record` (`{{SCRIPTS}}/../failure-triage.md`). Never fix a
    failure by weakening or skipping a test, raising a budget or growing a baseline.
 5. **Fix pass — at most ONE consolidated codex pass per PR**, combining every class-(a) item (when
    the policy is `fix-pass`) and every diff-caused CI failure. With the `follow-ups` policy, do not

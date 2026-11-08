@@ -486,7 +486,11 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   saves the log per run/attempt/job and prints an excerpt, or an explicit `running`,
   `not-yet-available`, `forbidden`, `expired` or `transient`. Live output of a running job is only
   in the browser. Use the repository's CI classifier and
-  known-flakes list before retrying or changing code.
+  known-flakes list before retrying or changing code. **Rerun first, reproduce second**: a red check the
+  classifier cannot place, in a domain the PR's diff does not touch, is re-run once before any
+  lane reproduces it; a reproduction is spent only when it fails again on the same head, and the
+  signature is then recorded (`"$SCRIPTS/failure-triage.sh"`, `failure-triage.md`, which also
+  covers what to put in cloud briefs: container knobs and never killing by pattern).
 - GitHub reads in the scripts go through `"$SCRIPTS/gh-read.sh"`: bounded retries for network and
   5xx failures, typed outcomes (`not-found`, `auth`, `forbidden`, `rate-limited` with `retry-at`,
   `transient`, `malformed`), and one rate-limit cooldown shared by every lane on the host. A
