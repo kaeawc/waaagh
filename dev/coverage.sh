@@ -16,7 +16,8 @@
 #                beside it is judged the same way, and the check says plainly the numbers are partial.
 #   --resultset  the resultset --check reads (default coverage/.resultset.json)
 # Env: GITHUB_STEP_SUMMARY  when set, the table (or the check's findings) is appended to it as Markdown.
-# Needs: bashcov (gem install bashcov, on PATH; not for --check), jq.
+# Needs: bashcov (gem install bashcov; not for --check), jq. Off PATH, it is looked for in gem's
+# EXECUTABLE DIRECTORY, then in `gem environment gemdir`/bin, and the one used is named on stderr.
 # Reading the numbers: xtrace reports one line of a multi-line command (often its last), so bashcov
 # counts the rest (a jq or awk program, a `\`-continued call, a heredoc) as uncovered though it ran.
 # Each script is reported twice: raw (bashcov's numbers) and credited, where the uncovered lines of
@@ -39,7 +40,7 @@ while (($#)); do
       floor=$2; shift 2 ;;
     --resultset) [[ -n "${2:-}" ]] || { echo "dev/coverage.sh: --resultset needs a file" >&2; exit 2; }
       resultset=$2; shift 2 ;;
-    -h | --help) sed -n '2,29p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,30p' "$0"; exit 0 ;;
     -*) echo "dev/coverage.sh: unknown argument: $1" >&2; exit 2 ;;
     *) [[ -f "$1" ]] || { echo "dev/coverage.sh: no such suite: $1" >&2; exit 2; }
       # Absolute, since the run starts from the repo root.
@@ -172,27 +173,33 @@ if [[ -n "$floor" ]]; then
   exit 0
 fi
 
+bashcov=bashcov
 if ! command -v bashcov >/dev/null; then
   # gem installs executables into its EXECUTABLE DIRECTORY, which is often not on PATH (rbenv,
-  # --user-install): name it, and say whether bashcov is already there.
-  gembin=""
+  # --user-install): look there, then in the gem directory's bin, and say which bashcov ran (#171).
+  gembin="" gemdir=""
   if command -v gem >/dev/null; then
     gembin=$(gem environment 2>/dev/null | sed -n 's/^[[:space:]]*- EXECUTABLE DIRECTORY: //p') || gembin=""
+    gemdir=$(gem environment gemdir 2>/dev/null) || gemdir=""
   fi
-  if [[ -n "$gembin" && -x "$gembin/bashcov" ]]; then
-    echo "dev/coverage.sh: bashcov not on PATH, but it is in gem's executable directory: PATH=\"$gembin:\$PATH\" dev/coverage.sh" >&2
-  elif [[ -n "$gembin" ]]; then
-    echo "dev/coverage.sh: bashcov not found (gem install bashcov, then put gem's executable directory $gembin on PATH)" >&2
-  else
-    echo "dev/coverage.sh: bashcov not found (gem install bashcov, then put the EXECUTABLE DIRECTORY from 'gem environment' on PATH)" >&2
+  for d in "$gembin" "${gemdir:+$gemdir/bin}"; do
+    if [[ -n "$d" && -x "$d/bashcov" ]]; then bashcov=$d/bashcov; break; fi
+  done
+  if [[ "$bashcov" == bashcov ]]; then
+    if [[ -n "$gembin" ]]; then
+      echo "dev/coverage.sh: bashcov not found (gem install bashcov, then put gem's executable directory $gembin on PATH)" >&2
+    else
+      echo "dev/coverage.sh: bashcov not found (gem install bashcov, then put the EXECUTABLE DIRECTORY from 'gem environment' on PATH)" >&2
+    fi
+    exit 2
   fi
-  exit 2
+  echo "dev/coverage.sh: bashcov not on PATH; using $bashcov" >&2
 fi
 
 cd "$root"
 rm -rf coverage
 rc=0
-bashcov --root "$root" -- dev/test.sh ${jobs[@]+"${jobs[@]}"} ${suites[@]+"${suites[@]}"} >coverage.log 2>&1 || rc=$?
+"$bashcov" --root "$root" -- dev/test.sh ${jobs[@]+"${jobs[@]}"} ${suites[@]+"${suites[@]}"} >coverage.log 2>&1 || rc=$?
 mkdir -p coverage && mv coverage.log coverage/test.log
 [[ -f coverage/.resultset.json ]] || { echo "dev/coverage.sh: bashcov wrote no results (see coverage/test.log)" >&2; exit 1; }
 subset=""

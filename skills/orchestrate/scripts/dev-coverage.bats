@@ -129,11 +129,11 @@ STUB
   PATH="$b" run "$COV"
   [ "$status" -eq 2 ]
   [[ "$output" == *"bashcov not found"*"put gem's executable directory $gb on PATH"* ]]
+  # A bashcov there that is not executable is not used (#171 runs one that is).
   printf '#!/bin/sh\n' >"$gb/bashcov"
-  chmod +x "$gb/bashcov"
   PATH="$b" run "$COV"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"bashcov not on PATH, but it is in gem's executable directory: PATH=\"$gb:"* ]]
+  [[ "$output" == *"bashcov not found"*"put gem's executable directory $gb on PATH"* ]]
   rm "$b/gem"
   PATH="$b" run "$COV"
   [ "$status" -eq 2 ]
@@ -216,4 +216,54 @@ STUB
   run "$COV" --check floor.tsv --resultset rs.json s.bats
   [ "$status" -eq 2 ]
   [[ "$output" == *"--check runs no suites"* ]]
+}
+
+# gem_root: fake_root, with its bashcov stub moved off PATH into $1 and a gem stub that reports
+# EXECUTABLE DIRECTORY $2 and gemdir $3. PATH holds only links to the tools the script runs, so a
+# bashcov installed on the machine (CI's) is not found instead.
+gem_root() {
+  fake_root
+  mkdir -p "$1"
+  mv "$BATS_TEST_TMPDIR/bin/bashcov" "$1/bashcov"
+  b="$BATS_TEST_TMPDIR/minbin"
+  mkdir -p "$b"
+  for t in bash env dirname basename sed awk jq grep cat mkdir mv cp rm mktemp printf; do
+    ln -s "$(command -v "$t")" "$b/$t"
+  done
+  cat >"$b/gem" <<STUB
+#!/bin/sh
+if [ "\$2" = gemdir ]; then echo "$3"; exit 0; fi
+echo "RubyGems Environment:"
+echo "  - EXECUTABLE DIRECTORY: $2"
+STUB
+  chmod +x "$b/gem"
+}
+
+@test "bashcov off PATH is run from gem's executable directory, and the line says so (#171)" {
+  gb="$BATS_TEST_TMPDIR/gembin"
+  gem_root "$gb" "$gb" "$BATS_TEST_TMPDIR/nogemdir"
+  PATH="$b" run "$R/dev/coverage.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bashcov not on PATH; using $gb/bashcov"* ]]
+  [ "$(cat "$BATS_TEST_TMPDIR/argv")" = "$(printf '%s\n' --root "$R" -- dev/test.sh -j 1)" ]
+  [[ "$output" == *"90%"*"skills/orchestrate/scripts/a.sh"* ]]
+}
+
+@test "bashcov off PATH falls back to gem's gemdir/bin when the executable directory lacks it (#171)" {
+  gd="$BATS_TEST_TMPDIR/gems"
+  gem_root "$gd/bin" "$BATS_TEST_TMPDIR/emptybin" "$gd"
+  PATH="$b" run "$R/dev/coverage.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bashcov not on PATH; using $gd/bin/bashcov"* ]]
+  [ -f "$R/coverage/.resultset.json" ]
+}
+
+@test "bashcov on PATH is used as it is, with no line about which one (#171)" {
+  gb="$BATS_TEST_TMPDIR/gembin"
+  gem_root "$gb" "$gb" "$BATS_TEST_TMPDIR/nogemdir"
+  ln -s "$gb/bashcov" "$b/bashcov"
+  PATH="$b" run "$R/dev/coverage.sh"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'using' <<<"$output" || true)" -eq 0 ]
+  [ -f "$BATS_TEST_TMPDIR/argv" ]
 }
