@@ -26,6 +26,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
+orch_gh_priority normal
 
 repo="" job="" run="" attempt="" name="" pr="" check="" out="" context=3 max=120 fresh=10
 while (($#)); do

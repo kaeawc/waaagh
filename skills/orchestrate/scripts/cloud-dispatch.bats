@@ -70,7 +70,7 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
 }
 
 @test "payload builds the RemoteTrigger create object with a staggered run_once_at" {
-  run cd_ payload --issue 5 --env env_1 --source https://github.com/o/r --model claude-x --base main
+  run cd_ payload --issue 5 --env env_1 --source https://github.com/o/r --model claude-x --base main --fixtures none
   [ "$status" -eq 0 ]
   jq -e '.run_once_at == "2026-09-27T12:01:00Z"
     and .job_config.ccr.environment_id == "env_1"
@@ -79,16 +79,16 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
     and (.job_config.ccr.events[0].data.message | contains("issue #5"))' <<<"$output"
   cd_ record --issue 5 --trigger trig_a --run-at 2026-09-27T12:01:00Z
   # The next run is staggered 20 s after the latest recorded run, not at now+60 again.
-  run cd_ payload --issue 6 --env env_1 --source '{"repo":"o/r"}' --base main
+  run cd_ payload --issue 6 --env env_1 --source '{"repo":"o/r"}' --base main --fixtures none
   jq -e '.run_once_at == "2026-09-27T12:01:20Z"
     and .job_config.ccr.session_context == {sources: [{repo: "o/r"}]}' <<<"$output"
-  run cd_ payload --issue 6 --env env_1 --source u --base main --at 1790510700
+  run cd_ payload --issue 6 --env env_1 --source u --base main --at 1790510700 --fixtures none
   jq -e '.run_once_at == "2026-09-27T12:05:00Z"' <<<"$output"
 }
 
 @test "payload refuses an issue already dispatched and requires env and source" {
   cd_ record --issue 5 --trigger trig_a --run-at 2026-09-27T12:01:00Z
-  run cd_ payload --issue 5 --env e --source u --base main
+  run cd_ payload --issue 5 --env e --source u --base main --fixtures none
   [ "$status" -eq 3 ]
   [[ "$output" == *"trig_a"* ]]
   run cd_ payload --issue 6 --base main

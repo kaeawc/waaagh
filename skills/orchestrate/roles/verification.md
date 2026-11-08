@@ -12,6 +12,8 @@ verify, and a regression surface to sweep.
    path: `{{SCRIPTS}}/device-lock.sh claim --name verify-<batch> --pid <your long-lived shell PID>
    <lock path flags from your prompt>` (or `--no-pid` from a short-lived shell). Keep the printed
    token and release with `release --token <T>`. Exit 3 means another agent holds it: stop and report.
+   Name each device in the claim (`--device <serial or UDID>`) and run `device-lock.sh check --name
+   verify-<batch> --device <id>` before any `adb` or `simctl` command; exit 4: not yours, stop.
 2. Build and run from a fresh detached checkout of `origin/{{BASE}}` in your own worktree. Never
    use, restart or signal a daemon, server or app instance you did not start; isolate your own
    (own sockets, ports, data directory) as `lane-rules.md` describes.
@@ -36,6 +38,9 @@ verify, and a regression surface to sweep.
 - For each NOT-FIXED or REGRESSED item, and each new defect reproduced twice: search for an
   existing issue first; otherwise `gh issue create` with what is wrong, exact repro (calls, device,
   OS level, tested SHA), expected, evidence, and root cause if found. At most 8 issues.
+- An issue meant for a cloud lane that needs output you captured (dumps, logs, traces) carries
+  every such fixture itself, in `<details>` comments, never a local path or an excerpt:
+  `{{SCRIPTS}}/../device-cloud-handoff.md`.
 - Last: `{{SCRIPTS}}/campaign.sh verified --repo {{REPO}} --sha <tested SHA>`, release the lock.
 - Reply (under 350 words): tested SHA, one line per item, issues filed, blocked items, and
   confirmation that devices were left as found and nothing you did not start was touched.

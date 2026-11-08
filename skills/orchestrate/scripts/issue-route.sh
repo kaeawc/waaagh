@@ -30,6 +30,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
+orch_gh_priority normal
 
 usage() { sed -n '2,28p' "$0" >&2; exit 2; }
 cmd=${1:-}

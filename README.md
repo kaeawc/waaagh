@@ -57,7 +57,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `thread-resolve.sh` | Reply once (marker-keyed) on one review thread and resolve it, with readback and typed exits |
 | `thread-sweep.sh` | Find review threads whose last reply links an issue or names a pushed fix (resolve-now vs repair per PR) and resolve them locally; cloud sessions reply but cannot resolve |
 | `issue-route.sh` | Exactly one route label per actionable issue (`cloud-ready` or `needs-local:*`): route counts and unrouted/multi-routed issues, label bootstrap, and `set` with the local-work comment and a REST fallback |
-| `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid` |
+| `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid`; records the holder's serials or UDIDs and `check`s ownership (AVD suffix, simctl) before device commands |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
 | `validate.sh` | Run a validation command into a receipt outside the checkout; `check` says whether an independent, passing receipt for the exact current key can be reused |
 | `regen-merge.sh` | Merge the base into a branch; conflicts only in generated files are resolved by taking the base and regenerating (verified stable); anything else aborts |
@@ -66,12 +66,14 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `gate-slot.sh`, `heavy-build-slot.sh` | Host-wide gate semaphore (default 3) with a per-repo gate environment; Gradle/Xcode builds run alone with capped workers; bounded waits, stale-holder reclaim |
 | `wt-cleanup.sh` | Conservative worktree cleanup: only clean, idle, pushed, unprotected worktrees no process is in; dry run by default |
 | `gh-read.sh` | Bounded, typed GitHub reads: per-call timeout, backoff inside a time budget, Retry-After and rate-limit reset handling with a cooldown shared by local lanes; refuses writes |
+| `gh-budget.sh`, `gh-shim/gh` | One API pacer for every local caller: per-priority floors (high 150, normal 1000, low 2500), calls spaced until the reset from a shared `/rate_limit` cache, exit 75 to skip a pass, endpoint-scoped backoff for a 403 with headroom; the shim budgets any `gh` call (`ORCHESTRATE_GH_BUDGET=1`) |
+| `gh-snapshot.sh` | One GraphQL snapshot per pass of every open PR (head, check roll-up, last review state and commit), cached per head SHA |
 | `gh-status.sh` | Read githubstatus.com and name non-operational components; exit 4 while Pull Requests (or a named component) is down, so merges pause instead of failing |
 | `job-log.sh` | One Actions job's log via the job-scoped endpoint (works while the workflow still runs), saved per run/attempt/job and excerpted, with explicit not-available outcomes |
 | `usage-report.sh` | Codex usage per model and verified lane status, from per-run receipts (`bin/codex-lane-usage.sh`) |
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
-| `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, and create pacing with 429 backoff |
+| `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, and the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue) |
 | `review-gate.sh` | The owner's bot-review policy (off, review-at-head, reviewed-once, green-only) enforced by `pr-merge.sh`; review-bot quota outages detected and asked once; unreviewed-merges ledger; one review request per bot per window across all PRs, gating PRs first |
 
 ## Defaults

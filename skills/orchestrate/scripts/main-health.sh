@@ -7,7 +7,7 @@
 #   --workflow         judge only these workflows, and require completed evidence for EVERY one
 #                      (default: every workflow with a push run in the window)
 #   --ignore-workflow  advisory workflows that never turn the branch red
-#   --limit            how many recent push runs to read (default 60)
+#   --limit            how many recent push runs to read (default 60, at most 100: one page)
 # Policy: each workflow is judged by its newest COMPLETED run (cancelled and skipped runs aside),
 # not by a run on the current head; the output names the SHA each verdict comes from.
 # Output: "green <newest sha> <workflow>@<sha>,... [mixed-heads]"
@@ -19,6 +19,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
+orch_gh_priority high
 
 repo="" branch="" limit=60
 only=() ignore=()
@@ -38,10 +39,14 @@ repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 json_list() { if (($#)); then printf '%s\n' "$@" | jq -R . | jq -sc .; else echo '[]'; fi; }
 
-if ! runs=$("$here/gh-read.sh" --json -- run list --repo "$repo" --branch "$branch" --event push --limit "$limit" \
-  --json workflowName,status,conclusion,headSha,databaseId,createdAt 2>&1) ||
-  ! jq -e 'type == "array"' <<<"$runs" >/dev/null 2>&1; then
-  echo "unknown run list unreadable: ${runs:0:200}"
+# actions/runs directly, one page: `gh run list` also calls actions/workflows to resolve names,
+# and that endpoint can be rate limited on its own while runs still read (#71).
+((limit <= 100)) || limit=100
+if ! raw=$("$here/gh-read.sh" --json -- api "repos/$repo/actions/runs?branch=$(jq -rn --arg b "$branch" '$b | @uri')&event=push&per_page=$limit" 2>&1) ||
+  ! runs=$(jq -ce '.workflow_runs | select(type == "array")
+      | map({workflowName: .name, status, conclusion, headSha: .head_sha, databaseId: .id, createdAt: .created_at})' \
+      <<<"$raw" 2>/dev/null); then
+  echo "unknown run list unreadable: ${raw:0:200}"
   exit 2
 fi
 
