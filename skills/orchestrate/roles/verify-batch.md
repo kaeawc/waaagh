@@ -48,5 +48,6 @@ change code, commit, push, comment on PRs, relabel, or reopen.
 - `{{STATE}}/verify/<name>/REPORT.md`: tested SHA, device, then
   `issue | fix | PASS / FAIL / BLOCKED | decisive evidence | file | closed?`.
 - Last: release the device lock and stop your daemon.
-- Reply (under 300 words): tested SHA, one line per issue, closes, issues filed, blocked items, and
+- Reply (under 300 words): tested SHA, one line per issue, closes (with every `stop: lane ...`
+  line `issue-close.sh` printed), issues filed, blocked items, and
   confirmation that the device was left as found and nothing you did not start was touched.
