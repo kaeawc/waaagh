@@ -110,14 +110,21 @@ case "$cmd" in
     echo "verified at $(jq -r .last_verification_at "$ledger")"
     ;;
   status)
+    # gh-issues.sh: GraphQL, or REST where GitHub refuses GraphQL (Claude Code cloud sessions).
+    count() { # what gh-issues.sh-args... -> how many items, or exit 1
+      local got
+      got=$("$here/gh-issues.sh" "${@:2}" --repo "$repo" --fields number) ||
+        { echo "campaign.sh: $1 could not be read" >&2; exit 1; }
+      jq length <<<"$got"
+    }
     paused=no
     for label in "${pause_labels[@]}"; do
-      n=$(gh issue list --repo "$repo" --state open --label "$label" --limit 1 --json number | jq length)
+      n=$(count "issues labelled $label" issues --label "$label" --limit 1)
       [[ "$n" == 0 ]] || paused="yes($label)"
     done
-    open=$(gh pr list --repo "$repo" --state open --limit 300 --json number | jq length)
+    open=$(count "open pull requests" prs-open --limit 300)
     since=$(jq -r .last_verification_at "$ledger")
-    merged=$(gh pr list --repo "$repo" --state merged --limit 300 --search "merged:>$since" --json number | jq length)
+    merged=$(count "merged pull requests" prs-merged --limit 300 --merged ">$since")
     main=ok
     [[ -f "$state/MAIN_RED" ]] && main=red
     echo "paused=$paused"

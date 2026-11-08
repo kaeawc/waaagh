@@ -17,7 +17,10 @@
 # blocks, unless it is blocked itself. Rows that could not be checked stay. A last "# " line then
 # names the dropped rows and their blockers, the promoted blockers, the blockers outside this list
 # (route them first, or wait) and the unchecked rows. Costs two or three reads per row checked.
-# Exit: 0 ok | 2 usage | 4 --drop-blocked: open-blockers.sh failed outright.
+# Reads go through gh-issues.sh: GraphQL, or REST where GitHub refuses GraphQL (cloud sessions);
+# over REST, "in an open PR" comes from closing keywords in the PR body, not sidebar links.
+# Exit: 0 ok | 2 usage | 4 --drop-blocked: open-blockers.sh failed outright | 5 issues or open
+#   PRs could not be read.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
@@ -52,10 +55,14 @@ since=$(jq -rn --argjson now "$(orch_now)" --argjson d "$days" '$now - $d * 8640
 jq_limit=$limit
 [[ "$drop_blocked" == no ]] || jq_limit=1000000
 
-prs=$(gh pr list --repo "$repo" --state open --limit 300 --json number,closingIssuesReferences)
-rows=$(gh issue list --repo "$repo" --state open --limit 500 --search "updated:>=$since sort:updated-desc" \
-  --json number,title,labels,updatedAt |
-  jq -r --argjson prs "$prs" --argjson priority "$(json_list ${priority[@]+"${priority[@]}"})" \
+# gh-issues.sh: GraphQL, or REST where GitHub refuses GraphQL (an open PR's closing references
+# then come from its body's closing keywords).
+read_fail() { echo "issues-ranked.sh: $1 could not be read" >&2; exit 5; }
+prs=$("$here/gh-issues.sh" prs-open --repo "$repo" --limit 300 --fields number,closingIssuesReferences) ||
+  read_fail "open pull requests"
+issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 500 --since "$since" \
+  --fields number,title,labels,updatedAt) || read_fail "open issues"
+rows=$(jq -r --argjson prs "$prs" --argjson priority "$(json_list ${priority[@]+"${priority[@]}"})" \
     --argjson bug "$(json_list "${bug[@]}")" --argjson exclude "$(json_list "${exclude[@]}")" \
     --argjson limit "$jq_limit" --arg skip "$skip_in_pr" --arg route "$route" '
     def has_any($set): any(.[]; . as $l | $set | index($l));
@@ -71,7 +78,7 @@ rows=$(gh issue list --repo "$repo" --state open --limit 500 --search "updated:>
     | sort_by(.tier, (.updated | fromdateiso8601 | -.)) | .[0:$limit] | to_entries[]
     | [.key + 1, .value.number, (["P-bug", "P", "bug", "other"][.value.tier]),
        (.value.in_pr // "-"), .value.updated, (.value.labels | join(",") | if . == "" then "-" else . end),
-       .value.title] | @tsv')
+       .value.title] | @tsv' <<<"$issues")
 if [[ "$drop_blocked" == no ]]; then
   [[ -z "$rows" ]] || printf '%s\n' "$rows"
   exit 0

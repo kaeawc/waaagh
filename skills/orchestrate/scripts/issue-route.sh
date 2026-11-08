@@ -23,7 +23,7 @@
 # A route label is `cloud-ready` or any label starting `needs-local:`. Issues carrying a skip label
 # are not actionable: not counted as unrouted, and `set` refuses them. Default skip labels:
 # physical-device, needs-human, blocked, desktop, epic, needs-decision (--skip-label replaces them).
-# Reads at most 1000 open issues. Writes append to <state dir>/route-actions.log.
+# Reads at most 1000 open issues (over REST where GraphQL is refused). Writes append to <state dir>/route-actions.log.
 # Exit: 0 ok (or would change) | 2 usage | 3 refused | 4 issues or labels could not be read |
 #       5 write failed (rerun finishes it) | 9 outcome unknown (the issue could not be read back).
 set -euo pipefail
@@ -75,8 +75,9 @@ schema() { # label<TAB>color<TAB>description
 
 case "$cmd" in
   status)
-    issues=$(orch_read_retry 3 gh issue list --repo "$repo" --state open --limit 1000 \
-      --json number,title,labels) && jq -e 'type == "array"' <<<"$issues" >/dev/null ||
+    # GraphQL, or REST where GitHub refuses GraphQL (gh-issues.sh); bounded like orch_read_retry.
+    issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 1000 --fields number,title,labels \
+      --tries 3 --budget "${ORCHESTRATE_READ_BUDGET:-60}" 2>/dev/null) && jq -e 'type == "array"' <<<"$issues" >/dev/null ||
       { echo "issue-route.sh: open issues could not be read" >&2; exit 4; }
     known=$(schema | cut -f1 | jq -R . | jq -sc .)
     jq -r --argjson skip "$skip_json" --argjson known "$known" --argjson limit "$limit" "$is_route"'

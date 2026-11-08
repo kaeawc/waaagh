@@ -114,7 +114,7 @@ JSON
   [[ "$output" != *"set -euo pipefail"* ]]
   run "$SCRIPTS/issue-candidates.sh" -h
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Exit: 0 ok | 2 usage | 4 sweep only"* ]]
+  [[ "$output" == *"Exit: 0 ok | 2 usage | 4 issues or merged PRs could not be read"* ]]
 }
 
 @test "local-sweep and verify-batch roles are indexed and wired into the doctrine" {
