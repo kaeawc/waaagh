@@ -41,10 +41,14 @@ rate limit.
 ## Dispatch
 
 - **Cloud dispatch takes only `cloud-ready`:**
-  `"$SCRIPTS/issues-ranked.sh" --route cloud-ready --skip-in-pr`.
+  `"$SCRIPTS/issues-ranked.sh" --route cloud-ready --skip-in-pr --drop-blocked`.
 - **Local lanes take only `needs-local:*`:**
-  `"$SCRIPTS/issues-ranked.sh" --route 'needs-local:*' --skip-in-pr`, and only types this host can
-  serve (`--route needs-local:android-emulator`).
+  `"$SCRIPTS/issues-ranked.sh" --route 'needs-local:*' --skip-in-pr --drop-blocked`, and only
+  types this host can serve (`--route needs-local:android-emulator`).
+- **Blocked issues are dropped before ranking.** `--drop-blocked` runs `open-blockers.sh` (native
+  `blocked by` links plus "Blocked by #N" body lines, each blocker's state looked up) and ranks a
+  routable blocker in the place of the issues it gates; a planner never ranks around it by reading
+  comments, where blockers rarely appear.
 - **Sweep before local lanes.** Device time is scarce, and many `needs-local:*` issues are already
   fixed on the default branch. Before the first local lane, and again about every 16 merges, run
   the local sweep (`roles/local-sweep.md`), built on `"$SCRIPTS/issue-candidates.sh" sweep`. It

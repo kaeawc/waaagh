@@ -56,6 +56,8 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `review-followup.sh` | One review round per PR: classify unresolved review threads as first-round, later-round or the author's; file a later-round thread as a follow-up issue (or append it to one with the same root cause), reply `follow-up #N`, resolve it and route the issue `cloud-ready` |
 | `thread-resolve.sh` | Reply once (marker-keyed) on one review thread and resolve it, with readback and typed exits |
 | `thread-sweep.sh` | Find review threads whose last reply links an issue or names a pushed fix (resolve-now vs repair per PR) and resolve them locally; cloud sessions reply but cannot resolve |
+| `device-recheck.sh` | Device-recheck hold: a PR that fixes a device-found regression (linked issue labelled `manual-test-regression`) carries `needs-device-recheck` until a device run on its current head passes; posts the result on the PR and each issue |
+| `claim-check.sh` | Confirm a delegated claim (merged, open, closed, evidence comment, no device check needed) with one read of the source of truth before relaying it |
 | `issue-route.sh` | Exactly one route label per actionable issue (`cloud-ready` or `needs-local:*`): route counts and unrouted/multi-routed issues, label bootstrap, and `set` with the local-work comment and a REST fallback |
 | `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid`; records the holder's serials or UDIDs and `check`s ownership (AVD suffix, simctl) before device commands |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
@@ -74,8 +76,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
 | `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue), the standard implement/repair briefs kept in the target repo (`briefs install`/`check`, templates in `skills/orchestrate/briefs/`), one-line `--brief-ref` prompts, and `created` to keep only the trigger id from a create response |
-| `device-recheck.sh` | Device-recheck hold: a PR that fixes a device-found regression (linked issue labelled `manual-test-regression`) carries `needs-device-recheck` until a device run on its current head passes; posts the result on the PR and each issue |
-| `claim-check.sh` | Confirm a delegated claim (merged, open, closed, evidence comment, no device check needed) with one read of the source of truth before relaying it |
+| `open-blockers.sh` | One blocker check before any lane or cloud dispatch: native `blocked by` links plus "Blocked by #N" body lines, each blocker's state looked up; `<n> BLOCKED by #a #b` or `<n> clear` (exit 3 blocked, 4 unreadable); `issues-ranked.sh --drop-blocked` drops blocked candidates and ranks routable blockers in their place |
 
 ## Defaults
 
