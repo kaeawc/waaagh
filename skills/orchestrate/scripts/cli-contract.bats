@@ -13,14 +13,14 @@ setup() {
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me
 }
 
-# Every executable script with a usage header. Sourced libraries, the benchmark (no arguments) and
+# Every executable script with a usage header. Sourced libraries and
 # the hook (reads a payload on stdin, no arguments) are not command-line tools in this sense.
 # The dev/ tools are held to the same contract (#159); they make no GitHub calls, so that part of
 # the checks holds for them trivially.
 scripts() {
   local f
   for f in "$SCRIPTS"/*.sh "$ROOT"/bin/*.sh "$ROOT"/dev/*.sh; do
-    case "${f##*/}" in _*.sh | bench.sh | lane-safety.sh) continue ;; esac
+    case "${f##*/}" in _*.sh | lane-safety.sh) continue ;; esac
     echo "$f"
   done
 }
