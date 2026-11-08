@@ -103,29 +103,37 @@ shape='def pr_shape($repo):
        | {number: (.[1] | tonumber)}] | unique_by(.number))};'
 
 list_prs() {
-  local rows='[]' page=1 out n order=""
+  local rows='[]' page=1 out n m order=""
   [[ "$asc" == no ]] || order="&sort=created&direction=asc"
   while :; do
     out=$(ghr api "repos/$repo/pulls?state=open&per_page=100&page=$page$order") || exit 3
-    jq -e 'type == "array"' >/dev/null <<<"$out" || unreadable "pulls page $page is not a list"
-    n=$(jq length <<<"$out")
-    rows=$(jq -c --slurpfile rows <(printf '%s\n' "$rows") --argjson lim "$limit" --arg repo "$repo" "$shape"'
-      ($rows[0] + map(pr_shape($repo)))[:$lim]' <<<"$out")
-    ((n == 100 && $(jq length <<<"$rows") < limit)) || break
+    # One jq per page (#174): the page's length, then the rows so far and their count, tab-separated.
+    out=$(jq -r --slurpfile rows <(printf '%s\n' "$rows") --argjson lim "$limit" --arg repo "$repo" "$shape"'
+      if type != "array" then "-" else length as $n
+      | ($rows[0] + map(pr_shape($repo)))[:$lim] | "\($n)\t\(length)\t\(tojson)" end' <<<"$out")
+    [[ "$out" != "-" ]] || unreadable "pulls page $page is not a list"
+    IFS=$'\t' read -r n m rows <<<"$out"
+    ((n == 100 && m < limit)) || break
     page=$((page + 1))
   done
   printf '%s\n' "$rows"
 }
 
-rollup() { # SHA -> statusCheckRollup items
-  local s=$1 cr st runs='{}'
+# rollup SHA [PR]: SHA's statusCheckRollup items, or, given a PR row, that row with them as its
+# statusCheckRollup. Two jq (#174): one reads the check runs and says whether any names an Actions
+# run (actions/runs is read only then), one builds the answer.
+rollup() {
+  local s=$1 row=${2:-null} cr st runs='{}'
   cr=$(ghr api --paginate "repos/$repo/commits/$s/check-runs?per_page=100") || exit 3
-  cr=$(jq -sc '[.[] | (.check_runs // [])[]]' <<<"$cr") || unreadable "check runs of $s are malformed"
+  cr=$(jq -sc '[.[] | (.check_runs // [])[]]
+    | (try any(.[]; (.details_url // "") | test("/actions/runs/[0-9]+")) catch false), .' <<<"$cr") ||
+    unreadable "check runs of $s are malformed"
   st=$(ghr api "repos/$repo/commits/$s/status?per_page=100") || exit 3
-  if jq -e 'any(.[]; (.details_url // "") | test("/actions/runs/[0-9]+"))' >/dev/null <<<"$cr"; then
+  if [[ "${cr%%$'\n'*}" == true ]]; then
     runs=$(ghr api "repos/$repo/actions/runs?head_sha=$s&per_page=100") || exit 3
   fi
-  jq -nc --slurpfile cr <(printf '%s\n' "$cr") --slurpfile st <(printf '%s\n' "$st") --slurpfile runs <(printf '%s\n' "$runs") '
+  jq -nc --slurpfile cr <(printf '%s\n' "${cr#*$'\n'}") --slurpfile st <(printf '%s\n' "$st") \
+    --slurpfile runs <(printf '%s\n' "$runs") --slurpfile row <(printf '%s\n' "$row") '
     $cr[0] as $cr | $st[0] as $st | $runs[0] as $runs |
     (($runs.workflow_runs // []) | map({key: (.id | tostring), value: (.name // "")}) | from_entries) as $wf
     | [$cr[] | ((.details_url // "") | (capture("/actions/runs/(?<r>[0-9]+)") // {}) | .r) as $r
@@ -134,19 +142,23 @@ rollup() { # SHA -> statusCheckRollup items
           detailsUrl: (.details_url // .html_url // ""),
           workflowName: (if $r == null then "" else ($wf[$r] // "") end)}]
     + [($st.statuses // [])[] | {__typename: "StatusContext", context, state: ((.state // "") | ascii_upcase),
-         targetUrl: (.target_url // ""), createdAt: (.created_at // .updated_at // "")}]'
+         targetUrl: (.target_url // ""), createdAt: (.created_at // .updated_at // "")}]
+    | . as $c | if $row[0] == null then $c else $row[0] | .statusCheckRollup = $c end'
 }
 
 view_pr() {
-  local out one c
+  local out one
   out=$(ghr api "repos/$repo/pulls/$pr") || exit 3
-  one=$(jq -c --arg repo "$repo" "$shape"' if type == "object" and has("number") then pr_shape($repo)
-    else error("not a pull request") end' <<<"$out" 2>/dev/null) || unreadable "PR $pr: not a pull request object"
-  if [[ "$checks" == yes ]]; then
-    c=$(rollup "$(jq -r .headRefOid <<<"$one")")
-    one=$(jq -c --slurpfile c <(printf '%s\n' "$c") '.statusCheckRollup = $c[0]' <<<"$one")
+  if [[ "$checks" == no ]]; then
+    jq -c --arg repo "$repo" "$shape"' if type == "object" and has("number") then pr_shape($repo)
+      else error("not a pull request") end' <<<"$out" 2>/dev/null || unreadable "PR $pr: not a pull request object"
+    return
   fi
-  printf '%s\n' "$one"
+  # The row and its head in one jq; rollup sets the row's statusCheckRollup in its own.
+  one=$(jq -r --arg repo "$repo" "$shape"' if type == "object" and has("number") then pr_shape($repo)
+    | tojson, (.headRefOid | tostring) else error("not a pull request") end' <<<"$out" 2>/dev/null) ||
+    unreadable "PR $pr: not a pull request object"
+  rollup "${one#*$'\n'}" "${one%%$'\n'*}"
 }
 
 # The ccr/review_threads parsing threads and thread-nodes share: every thread of every page, each
@@ -178,6 +190,10 @@ thread_nodes() {
   if [[ "$out" != "[]" ]]; then
     cm=$(ghr api --paginate "repos/$repo/pulls/$pr/comments?per_page=100") || exit 3
     co=$(ghr api --paginate "repos/$repo/pulls/$pr/commits?per_page=100") || exit 3
+  elif [[ "$pr" =~ ^(0|[1-9][0-9]{0,14})$ ]]; then
+    # No thread: the node below with nothing in it, without a jq (#174).
+    printf '{"number":%s,"commits":{"nodes":[]},"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]}}\n' "$pr"
+    return
   fi
   jq -nc --argjson n "$pr" --slurpfile t <(printf '%s\n' "$out") --slurpfile cm <(printf '%s\n' "$cm") --slurpfile co <(printf '%s\n' "$co") '
     def num: if type == "number" then . elif type == "string" and test("^[0-9]+$") then tonumber else null end;
