@@ -116,7 +116,7 @@ both() {
   [ "$status" -eq 0 ]
   [ "$(cut -f2-4 <<<"$output")" = "$(printf '1\tP-bug\t12\n4\tother\t-\n2\tother\t10\n5\tother\t-')" ]
   # The PR item in /issues is dropped; the REST run read /issues and /pulls, never GraphQL twice.
-  ! grep -q '^10	' <<<"$output"
+  run ! grep -q '^10	' <<<"$output"
   grep -q '^api repos/o/r/pulls?state=open&per_page=100&page=1' "$FX/calls"
   [ "$(grep -c '^pr list\|^issue list' "$FX/calls")" -eq 1 ]
   both "$SCRIPTS/issues-ranked.sh" --repo o/r --priority-label P1 --skip-in-pr
@@ -169,14 +169,14 @@ both() {
   rm "$FX/calls"
   run "$SCRIPTS/gh-issues.sh" prs-open --repo o/r --fields number,closingIssuesReferences
   [ "$(jq -c 'map([.number, [.closingIssuesReferences[].number]])' <<<"$output")" = "[[10,[2]],[11,[]],[12,[1]]]" ]
-  ! grep -q '^pr list' "$FX/calls"
+  run ! grep -q '^pr list' "$FX/calls"
   # The memo expires after 12 hours: GraphQL is tried again.
   ORCHESTRATE_NOW=$((ORCHESTRATE_NOW + 43200)) run "$SCRIPTS/gh-issues.sh" prs-open --repo o/r
   grep -q '^pr list' "$FX/calls"
   rm -f "$ORCHESTRATE_STATE_DIR/gh-no-graphql" "$FX/calls"
   ORCHESTRATE_GH_API=rest run "$SCRIPTS/gh-issues.sh" issues --repo o/r
   [ "$status" -eq 0 ]
-  ! grep -q '^issue list' "$FX/calls"
+  run ! grep -q '^issue list' "$FX/calls"
   [ ! -f "$ORCHESTRATE_STATE_DIR/gh-no-graphql" ]
 }
 
@@ -186,11 +186,11 @@ both() {
   GH_FORBID=1 run "$SCRIPTS/gh-issues.sh" issues --repo o/r
   [ "$status" -eq 5 ]
   [[ "$output" == *"gh-read: forbidden status=403"* ]]
-  ! grep -q '^api ' "$FX/calls"
+  run ! grep -q '^api ' "$FX/calls"
   # gh ends a GraphQL error with the endpoint URL; that lower-case "graphql" is not the refusal.
   GH_FORBID=url run "$SCRIPTS/gh-issues.sh" issues --repo o/r
   [ "$status" -eq 5 ]
-  ! grep -q '^api ' "$FX/calls"
+  run ! grep -q '^api ' "$FX/calls"
   [ ! -f "$ORCHESTRATE_STATE_DIR/gh-no-graphql" ]
   touch "$FX/rest-mode"
   ORCHESTRATE_GH_API=graphql run "$SCRIPTS/gh-issues.sh" issues --repo o/r

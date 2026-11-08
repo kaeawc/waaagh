@@ -103,7 +103,7 @@ FREEZE=2026-11-08-merge-freeze-messages-can-expire-undelivered
   grep -q "absorbed $dup (merge freeze messages, can EXPIRE undelivered): same delivery gap" "$STATE/learnings/$FREEZE.md"
   grep -q "superseded $dup" "$STATE/learnings/history.log"
   [ "$(jq -r .learnings.active "$STATE/campaign.json")" = 2 ]
-  ! grep -q "$dup" "$STATE/learnings/INDEX.md"
+  run ! grep -q "$dup" "$STATE/learnings/INDEX.md"
   run L consolidate --done
   [[ "$output" == *"consolidated at 2026-11-08T00:00:00Z"* ]]
   run L status

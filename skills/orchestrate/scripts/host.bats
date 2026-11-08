@@ -139,6 +139,6 @@ verdict() { printf '%s\n' "$output" | awk -F'\t' -v p="$BATS_TEST_TMPDIR/$1" '$2
 }
 
 @test "no script here kills by name or pattern" {
-  ! grep -nE '\b(pkill|killall)\b|kill +-[0-9A-Z]+ +-?\$\(pgrep' "$SCRIPTS"/gate-slot.sh "$SCRIPTS"/heavy-build-slot.sh "$SCRIPTS"/wt-cleanup.sh "$SCRIPTS"/_slots.sh
+  run ! grep -nE '\b(pkill|killall)\b|kill +-[0-9A-Z]+ +-?\$\(pgrep' "$SCRIPTS"/gate-slot.sh "$SCRIPTS"/heavy-build-slot.sh "$SCRIPTS"/wt-cleanup.sh "$SCRIPTS"/_slots.sh
   ! grep -n '\bkill\b' "$SCRIPTS"/gate-slot.sh "$SCRIPTS"/heavy-build-slot.sh "$SCRIPTS"/wt-cleanup.sh "$SCRIPTS"/_slots.sh | grep -v 'kill -0'
 }

@@ -150,7 +150,7 @@ DUPCHECK='! sed -n "s/ =.*//p" libs.toml | sort | uniq -d | grep .'
   run merge
   [ "$status" -eq 11 ]
   [[ "$output" == stale:* ]]
-  ! grep -q "pr merge" "$FX/calls"
+  run ! grep -q "pr merge" "$FX/calls"
   [ -z "$(ls "$STATE/locks")" ]
   grep -q "refused stale: PR 5 touches merge-sensitive src/" "$STATE/merges.log"
 }
@@ -171,7 +171,7 @@ DUPCHECK='! sed -n "s/ =.*//p" libs.toml | sort | uniq -d | grep .'
   run merge
   [ "$status" -eq 12 ]
   [[ "$output" == "busy: PR 7 is merging over merge-sensitive path src/"* ]]
-  ! grep -q "pr merge" "$FX/calls"
+  run ! grep -q "pr merge" "$FX/calls"
   [ "$(cat "$d/pr")" = 7 ]
   echo $((ORCHESTRATE_NOW - 901)) >"$d/at"
   run merge

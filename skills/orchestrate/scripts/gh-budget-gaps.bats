@@ -92,7 +92,7 @@ repos/o/r/actions/runs|api --hostname github.com --cache 1h -p v3 --preview x --
 api|api --method GET --paginate
 CASES
   [ -z "$fails" ] || { echo "$fails"; return 1; }
-  [ ! -f "$FX/calls" ] || ! grep -q '^api -' "$FX/calls"   # gh never ran
+  run ! grep -q '^api -' "$FX/calls"   # gh never ran
   # Flags with no path: endpoint "api", paced on core.
   rm -f "$B"/endpoint-*
   run budget run normal -- api --method GET --paginate
