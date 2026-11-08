@@ -24,6 +24,9 @@ End with the cumulative line from the ledger, never from recall:
 52 dispatched, 18 closed". After a compaction the counters are still right; your memory of the
 morning is not.
 
+Before a merge, close or verification goes in the report on a lane's or bot's word, confirm it
+with `"$SCRIPTS/claim-check.sh"` (`regression-gates.md`); report the source's state, not the claim.
+
 Keep it short: a status is counts and exceptions, not a log. After the five parts, a wrap-up recap
 of two or three sentences says what this turn changed and what happens next.
 

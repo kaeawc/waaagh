@@ -19,6 +19,10 @@ red `{{BASE}}`.
    If its summary shows `page=<n>` (a smaller page after a timeout) or `truncated=yes`, older PRs
    may be missing: re-run with `PR_READY_EXTRA="<n> ..."` naming the PRs your prompt says must
    go first, and report the page size.
+   Pass `--exclude-label needs-device-recheck`, and before each `pr-merge.sh` run
+   `{{SCRIPTS}}/device-recheck.sh check --repo {{REPO}} --pr <n>`: exit 3 (held: it fixes a
+   device-found regression with no passing device recheck on this head) or 4: do not merge it;
+   report it as held with the line (`{{SCRIPTS}}/../regression-gates.md`).
 3. For each `READY` row, oldest first, one at a time:
    `{{SCRIPTS}}/pr-merge.sh --repo {{REPO}} {{AUTHORS}} --pr <n> --head <head>`.
    Exit 3 (head moved or ineligible), 4 (red hold), 5 (GitHub refused) or 7 (no longer READY on a

@@ -12,7 +12,10 @@ try/finally, in a catch body, in what is awaited, or in a default; concurrency a
 mistakes; tests that cannot fail or were weakened; merge-resolution mistakes.
 
 Report only findings you verified by reading the exact code path: severity (blocker / should-fix /
-minor), `file:line`, the concrete failure scenario, the evidence, a one-sentence fix. Drop hunches;
+minor), `file:line`, the concrete failure scenario, the evidence, a one-sentence fix, and
+`regression: yes|no` — yes when the change breaks behaviour that works on the base branch (read
+the base's code path to say so). A regression finding is always a blocker
+(`{{SCRIPTS}}/../regression-gates.md`). Drop hunches;
 style and naming are out of scope; "No findings" is a valid result; at most 10.
 
 Write them to the findings path in your prompt, then reply in under 250 words with a verdict
