@@ -28,8 +28,9 @@ from memory (advisory workflows, ready label, device slot types).
    - `main-unknown`: change nothing; an existing hold stays.
    - `merge-loop-<state>` (`absent`, `stale`, `dead`, `expired`, `ended`) while PRs are open: the
      merge loop is not running. Report it first; do not restart it yourself (see below).
-   - `dispatch=<n>`: report the `next=` issues and the free `slots` by type. Route new issues as
-     `routing.md` says, if the repository has it.
+   - `dispatch=<n>`: report the `next=` issues and the free `slots` by type. New issues without a
+     route label go to the router first (`{{SCRIPTS}}/../routing.md`, `roles/router.md`); pass
+     `--ready-label cloud-ready` so the queue holds only issues a cloud lane can take.
    - `cron-expiring`: the session cron dies within a day; report it so it is re-created.
 3. Re-run the snapshot only if you wrote something in step 2, and report its verdict line.
 
