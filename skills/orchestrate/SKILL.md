@@ -197,12 +197,14 @@ Everything a campaign must remember lives in one directory per repository:
 |---|---|---|
 | `campaign.json` | `campaign.sh` | start time, last verification time and SHA |
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
+| `GITHUB_OUTAGE` | `pr-merge.sh` | present while githubstatus.com reports Pull Requests down; pauses merges |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
 | `reruns.log`, `merge-loop.beat`, `triage-cron` | `triage-tick.sh` | known-flake reruns of default-branch runs (one per run); the merge loop's heartbeat and why it ended; when the session cron was created |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
 | `ops/` | `pr-merge.sh`, `issue-close.sh` | journal of each GitHub write (intent, attempt, state) and its raw output, so a lost answer is reconciled, never replayed |
 | `../validate/` | `validate.sh` | validation receipts and logs, keyed by `fingerprint.sh --key` (shared across repos; `ORCHESTRATE_VALIDATE_DIR`) |
 | `hygiene-actions.log`, `hygiene/` | hygiene bot | closes made; plans and ranked lanes |
+| `routes.tsv`, `route-actions.log` | you; `issue-route.sh` | the repo's route-label schema (optional); every route change and label created |
 | `briefs/`, `lane-rules.md` | you | filled role briefs; repository rules for every lane |
 | `lanes.tsv` | you | lanes: worktree, branch, issues, files, agent, status (last column; `done`, `merged`, `closed`, `abandoned` end a lane) |
 | `decisions.md` | you | owner-decision queue, one `- [ ] question — options — what it blocks` line each, `- [x]` once answered |
@@ -236,6 +238,11 @@ agent reports or a PR changes. Do not tick on a timer.
 4. **Plan.** When the lane plan is stale (no plan, most of its lanes consumed, or a burst of new
    issues), launch the hygiene bot. Between plans, `"$SCRIPTS/issues-ranked.sh" --skip-in-pr` is
    the cheap view of what is next.
+   **Routing** (campaigns with both local and cloud lanes; `routing.md`): every actionable issue
+   carries exactly one route label, `cloud-ready` or `needs-local:<type>`.
+   `"$SCRIPTS/issue-route.sh" status` shows the counts; any `unrouted` or `multi` issue → launch
+   the router (`roles/router.md`). Cloud dispatch takes only `cloud-ready` and local lanes only
+   `needs-local:*` (`issues-ranked.sh --route …`).
 5. **Verify.** `verification_due=yes` and the repository has a verification skill → launch one
    verification batch over everything merged since the last one. Sooner when a risky change lands.
    No verification skill: skip this phase and say so once.
@@ -282,6 +289,7 @@ the cap; say so in the status.
 | Merge bot | a PR is ready, or blocked only by failures in fast mode | `pr-ready.sh`, `pr-merge.sh`, `main-health.sh` |
 | Rebase bot | a PR conflicts, or is stale against files main changed | `pr-ready.sh --no-threads` |
 | Hygiene bot | the plan is stale | `issues-ranked.sh`, `issue-candidates.sh`, `issue-close.sh` |
+| Router | `issue-route.sh status` shows unrouted or multi-routed issues | `issue-route.sh` (`routing.md`) |
 | Verification | about every 16 merged PRs | the repo's verification skill, `device-lock.sh`, `campaign.sh verified` |
 
 One instance of each at a time. The hygiene bot may label, link, and close an issue as a duplicate
@@ -329,6 +337,11 @@ against its PR's own changes.
   next `run-once` resumes it without redoing the base merge, check or push), and `blocked`,
   `conflict`, `checkfail`, `error`, which park the item until `retry <id>`. Ids are never reused (`add`
   refuses). Stacked `name-N` branches: the parent of `-2` is the bare name (`parent <branch>`).
+- **GitHub outages: a 5xx or "merge already in progress" is pending, never done.** `pr-merge.sh`
+  verifies by reading the PR state, logs githubstatus.com's non-operational components
+  (`"$SCRIPTS/gh-status.sh"`), re-reads after waits of 60 s or more, and exits 10 if still OPEN.
+  While Pull Requests is in an outage it writes `GITHUB_OUTAGE` and every merge pauses (the queue
+  stops its pass) until the status is operational, instead of logging a failure each pass.
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
   every stacked merge: take the default branch's copy and regenerate it, never hand-merge.
   `"$SCRIPTS/regen-merge.sh"` does this from `<state dir>/generated-files.tsv` and refuses an

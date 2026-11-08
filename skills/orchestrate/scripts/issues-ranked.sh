@@ -4,7 +4,9 @@
 #
 # Usage: issues-ranked.sh [--repo OWNER/REPO] [--since-days N] [--limit N]
 #                         [--priority-label L]... [--bug-label L]... [--exclude-label L]...
-#                         [--skip-in-pr]
+#                         [--skip-in-pr] [--route R]
+# --route keeps only issues carrying route label R (`cloud-ready`, or a prefix ending in `*` such
+# as `needs-local:*`): cloud dispatch takes only cloud-ready, local lanes only needs-local:*.
 # Order: priority-labelled bugs, priority-labelled others, bugs, everything else; newest update
 # first within a tier. Defaults: --since-days 7, --limit 60, bug label "bug", exclude "blocked".
 # Output (TSV): rank  number  tier  in_pr  updated  labels  title
@@ -14,7 +16,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 
-repo="" days=7 limit=60 skip_in_pr=no
+repo="" days=7 limit=60 skip_in_pr=no route=""
 priority=() bug=() exclude=()
 while (($#)); do
   case "$1" in
@@ -25,7 +27,8 @@ while (($#)); do
     --bug-label) bug+=("$2"); shift 2 ;;
     --exclude-label) exclude+=("$2"); shift 2 ;;
     --skip-in-pr) skip_in_pr=yes; shift ;;
-    -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
+    --route) route=$2; shift 2 ;;
+    -h | --help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "issues-ranked.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -40,11 +43,13 @@ gh issue list --repo "$repo" --state open --limit 500 --search "updated:>=$since
   --json number,title,labels,updatedAt |
   jq -r --argjson prs "$prs" --argjson priority "$(json_list ${priority[@]+"${priority[@]}"})" \
     --argjson bug "$(json_list "${bug[@]}")" --argjson exclude "$(json_list "${exclude[@]}")" \
-    --argjson limit "$limit" --arg skip "$skip_in_pr" '
+    --argjson limit "$limit" --arg skip "$skip_in_pr" --arg route "$route" '
     def has_any($set): any(.[]; . as $l | $set | index($l));
+    def routed: $route == "" or any(.[];
+      if ($route | endswith("*")) then startswith($route | rtrimstr("*")) else . == $route end);
     ([$prs[] | .number as $p | (.closingIssuesReferences // [])[] | {key: (.number | tostring), value: $p}]
       | from_entries) as $closing
-    | [.[] | ([.labels[].name]) as $l | select($l | has_any($exclude) | not)
+    | [.[] | ([.labels[].name]) as $l | select(($l | has_any($exclude) | not) and ($l | routed))
        | {number, title, updated: .updatedAt, labels: $l, in_pr: ($closing[.number | tostring] // null),
           p: ($l | has_any($priority)), b: ($l | has_any($bug))}
        | select($skip == "no" or .in_pr == null)
