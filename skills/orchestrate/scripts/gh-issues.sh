@@ -25,8 +25,8 @@
 # the body of merged PRs). REST pages hold 100 items; reads stop at --limit (default 300) or a
 # page cap (limit/100 x2, at least 2, at most 20), noting a truncation on stderr.
 # Env: ORCHESTRATE_GH_API=auto (default) | rest (skip the GraphQL attempt) | graphql (no
-# fallback). After a GraphQL refusal, <state root>/gh-no-graphql makes later reads on this host
-# go straight to REST for 12 hours.
+# fallback). After a GraphQL refusal, <state root>/gh-no-graphql makes later reads on this state
+# root (PR side included) go straight to REST for 12 hours (orch_gh_api in _lib.sh).
 # Exit: 0 ok | 2 usage | 3-9 gh-read.sh's typed failure (see gh-read.sh -h).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -60,22 +60,15 @@ while (($#)); do
   esac
 done
 [[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "gh-issues.sh: --limit must be a positive number" >&2; exit 2; }
-mode=${ORCHESTRATE_GH_API:-auto}
-case "$mode" in auto | rest | graphql) ;; *) echo "gh-issues.sh: ORCHESTRATE_GH_API is auto, rest or graphql" >&2; exit 2 ;; esac
+api=$(orch_gh_api gh-issues.sh) || exit 2
 repo=$(orch_repo "$repo")
-state_root=${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}
-memo="$state_root/gh-no-graphql"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 ghr() { "$here/gh-read.sh" ${ghr_opts[@]+"${ghr_opts[@]}"} --json -- "$@"; }
 
 # --- GraphQL first (gh issue list / gh pr list) ---------------------------------------------------
-if [[ "$mode" == auto && -f "$memo" ]]; then
-  at=$(cat "$memo" 2>/dev/null || echo 0)
-  [[ "$at" =~ ^[0-9]+$ ]] && (($(orch_now) - at < 43200)) && mode=rest
-fi
-if [[ "$mode" != rest ]]; then
+if [[ "$api" == graphql ]]; then
   case "$cmd" in
     issues)
       args=(issue list --repo "$repo" --state open --limit "$limit" --json "$fields")
@@ -89,12 +82,10 @@ if [[ "$mode" != rest ]]; then
   rc=0
   ghr "${args[@]}" 2>"$work/err" || rc=$?
   if ((rc == 0)); then exit 0; fi
-  if [[ "$mode" == graphql || "$rc" != 5 ]] || ! grep -qi graphql "$work/err"; then
+  if ! orch_gh_refused "$rc" "$(cat "$work/err")"; then
     cat "$work/err" >&2
     exit "$rc"
   fi
-  mkdir -p "$state_root"
-  orch_now >"$memo.tmp.$$" && mv "$memo.tmp.$$" "$memo"
 fi
 
 # --- REST ---------------------------------------------------------------------------------------

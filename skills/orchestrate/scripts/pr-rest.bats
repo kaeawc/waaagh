@@ -13,6 +13,26 @@ setup() {
   rest_wrap
 }
 
+# both ARGS...: pr-ready.sh over GraphQL, then over REST (refused GraphQL, own state dir). The exit
+# code, every row and the summary must match; only draft and fork rows may differ in their
+# mergeable and passed columns (REST does not read them), and REST adds " api=rest". Leaves the
+# REST run in $output and $status.
+both() {
+  local gq rs gs rss
+  rm -f "$FX/rest-mode"
+  gq=$(ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state-gq" "$SCRIPTS/pr-ready.sh" "$@" 2>"$FX/gq.err") && gs=0 || gs=$?
+  touch "$FX/rest-mode"
+  rs=$(ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state-rest" "$SCRIPTS/pr-ready.sh" "$@" 2>"$FX/rs.err") && rss=0 || rss=$?
+  norm() { awk -F'\t' -v OFS='\t' '$2 == "SKIP" && ($6 == "draft" || $6 == "fork") { $4 = "-"; $5 = "-" } { print }'; }
+  sum() { tail -1 "$1" | sed -E 's/ diagnostics=[^ ]*//; s/ api=rest//'; }
+  [ "$gs" = "$rss" ] || { echo "exit: graphql=$gs rest=$rss"; cat "$FX/rs.err"; return 1; }
+  [ "$(norm <<<"$gq")" = "$(norm <<<"$rs")" ] || { echo "rows differ:"; diff <(norm <<<"$gq") <(norm <<<"$rs") || true; cat "$FX/rs.err"; return 1; }
+  [ "$(sum "$FX/gq.err")" = "$(sum "$FX/rs.err")" ] || { echo "summary: $(tail -1 "$FX/gq.err") | $(tail -1 "$FX/rs.err")"; return 1; }
+  if [ "$gs" = 0 ]; then grep -q 'api=rest' "$FX/rs.err" || { echo "no api=rest"; return 1; }; fi
+  output="$rs"$'\n'"$(cat "$FX/rs.err")"
+  status=$rss
+}
+
 verdict_both() { # checks... -> both paths agree; prints the REST verdict and detail
   printf '%s\n' "$@" | jq -s . >"$FX/checks.json"
   pr_row 1 me false false MERGEABLE "$(cat "$FX/checks.json")" | jq -s . >"$FX/prs.json"
@@ -157,7 +177,7 @@ verdict_both() { # checks... -> both paths agree; prints the REST verdict and de
 
 # --- REST-only behaviour ---------------------------------------------------------------------
 
-@test "rest: the 403 is followed once per pass; rest skips GraphQL; graphql and other 403s do not fall back" {
+@test "rest: the 403 is followed once and remembered; rest skips GraphQL; graphql and other 403s do not fall back" {
   ready_prs 2
   touch "$FX/rest-mode"
   run "$SCRIPTS/pr-ready.sh" --repo o/r
@@ -165,6 +185,7 @@ verdict_both() { # checks... -> both paths agree; prints the REST verdict and de
   [ "$(grep -c '^pr list' "$FX/rest-calls")" -eq 1 ]
   [ "$(grep -c graphql "$FX/rest-calls")" -eq 0 ]
   [[ "$output" != *diagnostics=* ]]   # a refused GraphQL is expected here, not a read problem
+  [ -f "$ORCHESTRATE_STATE_DIR/gh-no-graphql" ]   # the next pass starts over REST (gh-api.bats)
   : >"$FX/rest-calls"
   ORCHESTRATE_GH_API=rest run "$SCRIPTS/pr-ready.sh" --repo o/r
   [[ "$output" == *"open=2 ready=2 api=rest"* ]]
@@ -174,7 +195,7 @@ verdict_both() { # checks... -> both paths agree; prints the REST verdict and de
   ORCHESTRATE_GH_API=sometimes run "$SCRIPTS/pr-ready.sh" --repo o/r
   [ "$status" -eq 2 ]
   # A 403 that is not the GraphQL refusal is final, as before.
-  rm "$FX/rest-mode"
+  rm "$FX/rest-mode" "$ORCHESTRATE_STATE_DIR/gh-no-graphql"
   echo '#!/bin/sh
 case "$*" in "pr list"*) echo "HTTP 403: Resource not accessible by integration" >&2; exit 1 ;; *) exec "$BATS_TEST_TMPDIR/bin/gh" "$@" ;; esac' >"$BATS_TEST_TMPDIR/restbin/gh"
   run "$SCRIPTS/pr-ready.sh" --repo o/r

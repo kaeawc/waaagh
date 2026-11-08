@@ -18,7 +18,7 @@ setup() {
 scripts() {
   local f
   for f in "$SCRIPTS"/*.sh "$ROOT"/bin/*.sh; do
-    case "${f##*/}" in _lib.sh | _slots.sh | bench.sh | lane-safety.sh) continue ;; esac
+    case "${f##*/}" in _*.sh | bench.sh | lane-safety.sh) continue ;; esac
     echo "$f"
   done
 }

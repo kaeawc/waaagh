@@ -55,7 +55,8 @@
 # GraphQL refused (Claude Code cloud sessions answer it with HTTP 403): ORCHESTRATE_GH_API=auto
 # (default) reads the PR list over GraphQL and, on a 403 that names GraphQL, does the whole pass
 # over REST through gh-rest-pr.sh (summary " api=rest"); =rest skips the GraphQL attempt, =graphql
-# never falls back. REST reads: the open list in pages of 100, then only for candidates (author
+# never falls back. The refusal is remembered 12 hours for every script on this state root
+# (<state root>/gh-no-graphql, orch_gh_api in _lib.sh): later passes start over REST. REST reads: the open list in pages of 100, then only for candidates (author
 # and base match, not draft or fork, hold/label skips included) pulls/<n> for mergeable, the head's
 # check-runs and status, actions/runs for workflow names when a check names an Actions run, and
 # ccr/review_threads for each READY or BLOCK PR, PR_READY_REST_JOBS (default 4) PRs at a time. Draft and fork rows are not read: they show
@@ -83,12 +84,11 @@ while (($#)); do
     --no-threads) threads=no; shift ;;
     --delta) delta=yes; shift ;;
     --pr) only_pr=$2; shift 2 ;;
-    -h | --help) sed -n '2,62p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,63p' "$0"; exit 0 ;;
     *) echo "pr-ready.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-api=${ORCHESTRATE_GH_API:-auto}
-case "$api" in auto | rest | graphql) ;; *) echo "pr-ready.sh: ORCHESTRATE_GH_API must be auto, rest or graphql" >&2; exit 2 ;; esac
+api=$(orch_gh_api pr-ready.sh) || exit 2
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 [[ -n "$base" ]] || base=$(orch_default_branch "$repo")
@@ -145,7 +145,7 @@ for ((li = 0; li < ${#limits[@]}; li++)); do
     --json "$fields" 2>"$diag_dir/.prlist-$$") || rc=$?
   err=$(cat "$diag_dir/.prlist-$$" 2>/dev/null || true); rm -f "$diag_dir/.prlist-$$"
   if ((rc == 0)); then list_limit=$lim; break; fi
-  if ((rc == 5)) && [[ "$api" == auto && "$err" == *GraphQL* ]]; then api=rest; break; fi
+  if orch_gh_refused "$rc" "$err"; then api=rest; break; fi
   note "PR list at limit $lim unreadable (exit $rc): ${err:0:500}"
   if ((rc != 7 && rc != 8)) || ((li == ${#limits[@]} - 1)); then
     echo "pr-ready: the open PR list could not be read; no verdicts (diagnostics: $diag)" >&2

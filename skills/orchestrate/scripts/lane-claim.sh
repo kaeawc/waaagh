@@ -26,7 +26,7 @@
 # ORCHESTRATE_GH_API=auto (default) then reads the open PRs over REST (gh-rest-pr.sh): the list,
 # plus each PR's files only when --files is given. Closing issues come from the PR body there
 # ("Fixes #N"), not from issues linked by hand in the sidebar. =rest skips the GraphQL attempt,
-# =graphql never falls back.
+# =graphql never falls back. A refusal is remembered 12 hours (<state root>/gh-no-graphql).
 # Exit: 0 ok | 3 conflict | 4 the open PRs (check, add) or an issue (closed: the others are still
 #       printed) could not be read; no verdict, see gh-read.sh | 2 usage
 set -euo pipefail
@@ -60,8 +60,7 @@ case "$cmd" in
   closed) ;;
   *) sed -n '2,31p' "$0" >&2; exit 2 ;;
 esac
-api=${ORCHESTRATE_GH_API:-auto}
-case "$api" in auto | rest | graphql) ;; *) echo "lane-claim.sh: ORCHESTRATE_GH_API must be auto, rest or graphql" >&2; exit 2 ;; esac
+api=$(orch_gh_api lane-claim.sh) || exit 2
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 lanes="$state/lanes.tsv"
@@ -89,7 +88,7 @@ conflicts() {
     err=$(mktemp)
     prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limit 200 \
       --json number,title,body,closingIssuesReferences,files 2>"$err") || rc=$?
-    if ((rc == 5)) && [[ "$api" == auto ]] && grep -q GraphQL "$err"; then api=rest
+    if orch_gh_refused "$rc" "$(cat "$err")"; then api=rest
     elif ((rc != 0)); then rm -f "$err"; echo "unreadable"; return; fi
     rm -f "$err"
   fi
