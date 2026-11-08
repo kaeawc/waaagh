@@ -27,6 +27,10 @@ red `{{BASE}}`.
    Exit 10 (pending on GitHub after a 5xx or "merge already in progress"; checked against
    `{{SCRIPTS}}/gh-status.sh`) is neither merged nor failed: record it as pending. If it printed
    `outage:`, Pull Requests is down: stop merging this pass and report the outage line.
+   Exit 11 (`stale:` it touches a merge-sensitive path and `{{BASE}}` moved past its head): never
+   merge it by other means; hand it to the rebase bot (merge `{{BASE}}` in, wait for a green run),
+   or, if your prompt gives a merge-result check, re-run with `--worktree <checkout> --merge-check
+   '<cmd>'`. Exit 12 (`busy:` another merge holds that path's lock): skip it this pass.
    After each successful merge re-run step 2 with `--delta` added, because mergeability of the
    others changes: it fetches everything fresh but prints only rows that changed (or `no-change`),
    so work from the rows you already hold plus the delta. Always pass the head from the newest row

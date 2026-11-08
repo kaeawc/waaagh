@@ -5,6 +5,7 @@
 # Usage: pr-merge.sh --pr N --head SHA [--repo OWNER/REPO] [--author LOGIN]...
 #                    [--method squash|merge|rebase] [--main-fix]
 #                    [--admin --except-check NAME... --evidence TEXT] [--ignore-check NAME]...
+#                    [--worktree DIR --merge-check CMD]
 #   --head      the head SHA (any prefix >= 7) that pr-ready.sh judged; a moved head refuses
 #   --admin     bypass branch protection. Allowed only in the fast path: more open PRs than
 #               ORCHESTRATE_FAST_PATH_OVER (default 20), or ORCHESTRATE_ADMIN_MERGE=1 when the
@@ -21,6 +22,14 @@
 # server's branch protection. Ungated merging is a deliberate mode: ORCHESTRATE_DIRECT_MERGE=1,
 # set only on the user's word, skips this readiness gate (not the identity, head or hold checks).
 #   --main-fix  this PR fixes a red default branch; merge although MAIN_RED is set
+# Merge-sensitive paths (merge-sensitive.sh; none configured: no reads, no effect): a PR touching
+# one takes a per-pattern lock in <state dir>/locks/ for the merge, so merges over the same path are
+# serialized (another PR holding it: exit 12; a lock older than ORCHESTRATE_SENSITIVE_LOCK_TTL,
+# default 900 s, is taken over). Then its head must contain the current base branch, or the
+# merge-result check must pass (`--worktree DIR --merge-check CMD`: CMD runs on the base merged with
+# the head in a temporary worktree of DIR); otherwise it is refused with exit 11 (merge the base in
+# and wait for a green run). After exit 8, 9 or 10 the lock is kept, so a merge still in flight on
+# GitHub keeps other PRs over that path waiting; a rerun for the same PR takes it back.
 # The merge itself is bound to the full head SHA read here (gh pr merge --match-head-commit), so a
 # push that lands between this check and the merge makes GitHub refuse it; that refusal is
 # re-read and reported as a moved head, never retried without the guard.
@@ -35,6 +44,8 @@
 #       | 10 pending on GitHub: the merge got a 5xx or "merge already in progress" and the PR is
 #       still OPEN after the waits (`pending:`), or Pull Requests is in an outage (`outage:`);
 #       not merged, not failed: do not merge by other means, run again later to reconcile
+#       | 11 stale: touches a merge-sensitive path and the base moved past the head
+#       | 12 busy: another PR's merge holds the lock of a merge-sensitive path it touches
 # GitHub outages: success is read from the PR state, never from the merge's exit code. A 5xx or
 # "merge already in progress" is pending, not success or failure: githubstatus.com is read
 # (gh-status.sh) and its non-operational components logged; then the PR state is re-read after
@@ -49,7 +60,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 
-repo="" pr="" head="" method=squash admin=no evidence="" main_fix=no
+repo="" pr="" head="" method=squash admin=no evidence="" main_fix=no mwt="" mcheck=""
 authors=() excepts=() ignores=()
 while (($#)); do
   case "$1" in
@@ -63,16 +74,33 @@ while (($#)); do
     --except-check) excepts+=("$2"); shift 2 ;;
     --ignore-check) ignores+=("$2"); shift 2 ;;
     --main-fix) main_fix=yes; shift ;;
-    -h | --help) sed -n '2,46p' "$0"; exit 0 ;;
+    --worktree) mwt=$2; shift 2 ;;
+    --merge-check) mcheck=$2; shift 2 ;;
+    -h | --help) sed -n '2,57p' "$0"; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,46p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,57p' "$0" >&2; exit 2; }
+[[ -z "$mwt" && -z "$mcheck" || -n "$mwt" && -n "$mcheck" ]] ||
+  { echo "pr-merge.sh: --worktree and --merge-check go together" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 state=$(orch_state_dir "$repo")
 log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "${head:0:9}" "$*" >>"$state/merges.log"; }
+
+# Merge-sensitive locks owned by this PR are released on exit, except while the merge may still be
+# in flight on GitHub (8 queued, 9 unknown, 10 pending).
+lockdir="$state/locks"
+release_locks() {
+  local d
+  for d in "$lockdir"/sensitive-*; do
+    [[ -d "$d" && "$(cat "$d/pr" 2>/dev/null)" == "$pr" ]] && rm -rf "$d"
+  done
+  return 0
+}
+on_exit() { case $? in 8 | 9 | 10) ;; *) release_locks ;; esac; }
+trap on_exit EXIT
 
 journal="$state/ops/merge-pr$pr.json"
 # An unfinished earlier attempt is reconciled before anything else: never merge twice.
@@ -195,6 +223,44 @@ if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERG
     exit 6
   fi
 fi
+
+# Merge-sensitive paths: lock each touched pattern, then require a head that contains the base or a
+# passing merge-result check. Locks are taken before the check so no other merge moves the base
+# over the same path between the check and this merge.
+src=0
+spats=$("$here/merge-sensitive.sh" paths --repo "$repo" --pr "$pr") || src=$?
+if ((src)); then
+  log "refused: $spats"; echo "$spats; nothing was attempted"; exit 9
+fi
+if [[ -n "$spats" ]]; then
+  mkdir -p "$lockdir"
+  ttl=${ORCHESTRATE_SENSITIVE_LOCK_TTL:-900}
+  while IFS= read -r p; do
+    d="$lockdir/sensitive-$(printf '%s' "$p" | cksum | cut -d' ' -f1)"
+    if ! mkdir "$d" 2>/dev/null; then
+      owner=$(cat "$d/pr" 2>/dev/null || true) at=$(cat "$d/at" 2>/dev/null || echo 0)
+      [[ "$at" =~ ^[0-9]+$ ]] || at=0
+      if [[ "$owner" != "$pr" ]] && (($(orch_now) - at < ttl)); then
+        log "busy: PR ${owner:-?} holds the merge lock of sensitive path $p"
+        echo "busy: PR ${owner:-?} is merging over merge-sensitive path $p (lock since $(orch_iso "$at")); try again after it"
+        exit 12
+      fi
+      rm -rf "$d"
+      mkdir "$d" 2>/dev/null || { echo "busy: lost the race for the lock of $p; try again"; exit 12; }
+    fi
+    printf '%s\n' "$pr" >"$d/pr"; printf '%s\n' "$p" >"$d/pattern"; orch_now >"$d/at"
+  done <<<"$spats"
+  cflags=(check --repo "$repo" --pr "$pr" --head "$full")
+  [[ -z "$mcheck" ]] || cflags+=(--worktree "$mwt" --check-cmd "$mcheck")
+  src=0
+  sout=$("$here/merge-sensitive.sh" "${cflags[@]}") || src=$?
+  case "$src" in
+    0) log "sensitive $sout" ;;
+    3) log "refused $sout"; echo "$sout"; exit 11 ;;
+    *) release_locks; log "refused: $sout"; echo "$sout; nothing was attempted"; exit 9 ;;
+  esac
+fi
+
 log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "$full" "$*" >>"$state/merges.log"; }
 args=("--$method" --match-head-commit "$full")
 [[ "$admin" == yes ]] && args+=(--admin)
