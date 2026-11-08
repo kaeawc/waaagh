@@ -49,6 +49,12 @@ issue then gets a local route for that remainder (`issue-route.sh set`), never a
       brief then says "commit the fixtures from <url> verbatim". Exit 5: they are missing — `queue
       drop N` and route it back to the local lane; never dispatch it to invent them. Exit 7: the
       issue could not be read; leave it for the next batch.
+      Before the fixtures check it runs `open-blockers.sh` for the issue (REST). Exit 8: an open
+      issue blocks it (the error names the blockers) — `queue drop N` and route the blocker
+      first. Exit 7 also covers blockers that could not be read: unverified is not clear, so
+      leave it for the next batch. `--no-blocker-check` skips the check only when you have just
+      run `open-blockers.sh` yourself. `queue add` runs the same check and warns
+      (`warning: #N BLOCKED by ...`); drop a warned issue then rather than at payload time.
       With `--brief-ref implement` the message is one line, `Follow .claude/briefs/implement.md
       for issue #N (branch work/N-auto).`, plus ` Fixtures: <url>... (commit verbatim).` when the
       fixtures check names any; the session reads the brief from its own checkout.

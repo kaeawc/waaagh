@@ -7,6 +7,7 @@
 #                                  [--limit 25] [--per-issue 3]
 #        issue-candidates.sh sweep [--repo OWNER/REPO] [--since-days N] [--route GLOB]
 #                                  [--bucket A,B,C,D] [--limit 50] [--checkout DIR] [--ref REF]
+#                                  [--drop-blocked]
 #   fixed  open issues that a PR merged in the window says it closes, fixes or resolves.
 #          TSV: issue  pr  merged_at  how(linked|body)  issue_title
 #   dupes  open issues (updated in the window) whose titles share most of their words.
@@ -32,6 +33,11 @@
 #          platforms (so B rows group into one verify batch per platform), then issue. At most
 #          --limit rows from the --bucket buckets; a last "# " line gives every bucket's count,
 #          whether git history was used, and the uncapped results file under <state dir>/candidates/.
+#          --drop-blocked runs open-blockers.sh (REST) on every C row: a row blocked by an open
+#          issue moves to bucket "blocked" (reason "blocked by #a #b"), listed after the other rows
+#          and shown unless --bucket leaves "blocked" out; a row whose blockers could not be read
+#          stays C with reason "...; blockers unverified (<what>)", never counted as clear. The
+#          last line then also gives blocked=N unverified=N.
 # Defaults: --since-days 14 (sweep: 180), --limit 25 (sweep: 50).
 # Reads go through gh-issues.sh: GraphQL, or REST where GitHub refuses GraphQL (cloud sessions);
 # over REST a merged PR's closing references come only from its body (how=body).
@@ -46,7 +52,7 @@ usage_end=$(($(grep -n '^set -euo pipefail' "$0" | cut -d: -f1 | sed -n 1p) - 1)
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" days="" min=0.5 limit="" per_issue=3 route_glob='needs-local:*' buckets=A,B,C,D
-checkout=. ref=""
+checkout=. ref="" drop_blocked=no bucket_set=no
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -55,7 +61,8 @@ while (($#)); do
     --limit) limit=$2; shift 2 ;;
     --per-issue) per_issue=$2; shift 2 ;;
     --route) route_glob=$2; shift 2 ;;
-    --bucket) buckets=$2; shift 2 ;;
+    --bucket) buckets=$2; bucket_set=yes; shift 2 ;;
+    --drop-blocked) drop_blocked=yes; shift ;;
     --checkout) checkout=$2; shift 2 ;;
     --ref) ref=$2; shift 2 ;;
     -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
@@ -208,15 +215,46 @@ case "$cmd" in
     out="$(orch_state_dir "$repo")/candidates"
     mkdir -p "$out"
     full="$out/sweep-$(orch_iso "$(orch_now)" | tr -d ':').tsv"
+    if [[ "$drop_blocked" == yes ]]; then
+      # Blocker check on every C row. open-blockers.sh lines go to awk as a file; a check that
+      # fails outright leaves every C row unverified, never clear.
+      [[ "$bucket_set" == yes ]] || buckets="$buckets,blocked"
+      : >"$tmp/blockers"
+      cs=$(awk -F'\t' '$1 == "C" { print $2 }' <<<"$all")
+      if [[ -n "$cs" ]]; then
+        rc=0
+        # shellcheck disable=SC2086  # issue numbers, one word each
+        "$here/open-blockers.sh" --repo "$repo" $cs >"$tmp/blockers" || rc=$?
+        case "$rc" in
+          0 | 3 | 4) ;;
+          *) echo "issue-candidates.sh: open-blockers.sh failed (exit $rc); C rows unverified" >&2
+             awk '{ print $1 " unreadable blocker check" }' <<<"$cs" >"$tmp/blockers" ;;
+        esac
+      fi
+      printf '%s\n' "$all" >"$tmp/all"
+      # blocker line: "<n> BLOCKED by #a #b" | "<n> clear" | "<n> unreadable <what>"
+      all=$(awk -F'\t' -v OFS='\t' '
+        FILENAME == ARGV[1] { k = split($0, a, " "); if (k < 2) next
+          r = ""; for (i = 3; i <= k; i++) r = r (r == "" ? "" : " ") a[i]
+          st[a[1]] = a[2]; rest[a[1]] = r; next }
+        NF == 0 { next }
+        $1 == "C" && st[$2] == "BLOCKED" { $1 = "blocked"; r = rest[$2]; sub(/^by /, "", r)
+          $6 = "blocked by " r; held[++h] = $0; next }
+        $1 == "C" && st[$2] == "unreadable" { $6 = $6 "; blockers unverified (" rest[$2] ")" }
+        { print }
+        END { for (i = 1; i <= h; i++) print held[i] }' "$tmp/blockers" "$tmp/all")
+    fi
     if [[ -n "$all" ]]; then printf '%s\n' "$all" >"$full"; else : >"$full"; fi
-    awk -F'\t' -v limit="$limit" -v want="$buckets" -v full="$full" -v git="$git_used" '
+    awk -F'\t' -v limit="$limit" -v want="$buckets" -v full="$full" -v git="$git_used" -v drop="$drop_blocked" '
       BEGIN { n = split(want, w, ","); for (i = 1; i <= n; i++) keep[w[i]] = 1 }
       NF == 0 { next }
       { count[$1]++ }
+      $1 == "C" && index($6, "; blockers unverified (") { unverified++ }
       ($1 in keep) { matched++; if (shown < limit) { shown++; print } }
       END {
-        printf "# A=%d B=%d C=%d D=%d; shown %d of %d in %s; git: %s; all: %s\n",
-          count["A"], count["B"], count["C"], count["D"], shown, matched, want, git, full
+        more = drop == "yes" ? sprintf(" blocked=%d unverified=%d", count["blocked"], unverified) : ""
+        printf "# A=%d B=%d C=%d D=%d%s; shown %d of %d in %s; git: %s; all: %s\n",
+          count["A"], count["B"], count["C"], count["D"], more, shown, matched, want, git, full
       }' <<<"$all"
     ;;
 esac

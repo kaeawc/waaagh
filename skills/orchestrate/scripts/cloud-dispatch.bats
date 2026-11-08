@@ -14,7 +14,7 @@ setup() {
   export ORCHESTRATE_NOW=1790510400   # 2026-09-27T12:00:00Z
   ST="$ORCHESTRATE_STATE_DIR/o__r"
 }
-cd_() { "$SCRIPTS/cloud-dispatch.sh" "$@" --repo o/r; }
+cd_() { "$SCRIPTS/cloud-dispatch.sh" "$@" --repo o/r --no-blocker-check; }   # blockers: cloud-blockers.bats
 has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1; }; }
 
 @test "queue add dedupes, and next/list skip dispatched issues" {

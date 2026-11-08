@@ -29,7 +29,7 @@ STUB
   echo '[]' >"$FX/comments.json"
   echo '[]' >"$FX/timeline.json"
 }
-cd_() { "$SCRIPTS/cloud-dispatch.sh" "$@" --repo o/r; }
+cd_() { "$SCRIPTS/cloud-dispatch.sh" "$@" --repo o/r --no-blocker-check; }   # blockers: cloud-blockers.bats
 issue() { # issue BODY [LABEL]
   jq -n --arg b "$1" --arg l "${2:-}" '{number: 7, html_url: "https://github.com/o/r/issues/7", body: $b,
     labels: (if $l == "" then [] else [{name: $l}] end)}' >"$FX/issue.json"
