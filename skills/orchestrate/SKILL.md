@@ -490,7 +490,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
     "fix_pass_consumed": true, "next_check_at": "…", "status": "awaiting-ci"}
    ```
 5. **After the pass**, concentrate on green CI and exact-head verification. Fix a demonstrated CI
-   regression; never silently start a second feedback fix pass.
+   regression; never silently start a second feedback fix pass. Review threads that arrive after
+   the first review round become follow-up issues, are answered `follow-up #N` and resolved, so
+   they never block the merge line (`scripts/review-followup.sh`; the PR doctor's later-round
+   step). `scripts/thread-resolve.sh` replies on and resolves any one thread.
 6. **Merge** per the policy table, through `pr-merge.sh`.
 
 ## PR watch and takeover (the user's own PRs only)

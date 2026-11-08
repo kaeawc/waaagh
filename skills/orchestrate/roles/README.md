@@ -42,7 +42,7 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 | Verify batch | `verify-batch.md` | `general-purpose`, `model: "sonnet"` | one verdict comment per issue, evidence-backed closes, issues for twice-reproduced failures |
 | Verification | `verification.md` | `general-purpose`, `model: "sonnet"` | new issues for findings |
 | Implementation lane | `implementation-lane.md` | `waaagh:codex-implementer` (routine, Luna `medium`) or `waaagh:sol-implementer` (judgment) | uncommitted diff in its worktree |
-| PR doctor | `pr-doctor.md` | `waaagh:sol-implementer`, `REASONING: high` | commits on its own PR branches |
+| PR doctor | `pr-doctor.md` | `waaagh:sol-implementer`, `REASONING: high` | commits on its own PR branches; follow-up issues and thread resolves via `review-followup.sh` |
 | Conflict lane | `conflict-lane.md` | `waaagh:sol-implementer` | resolved markers, uncommitted |
 | Triage tick | `triage-tick.md` | `general-purpose`, `model: "haiku"` | one rerun per known-flake run; comments on the red-main tracking issue |
 | Reviewer | `review.md` | `general-purpose`, `model: "opus"` (one per lane) | findings file |
