@@ -74,6 +74,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
 | `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue), the standard implement/repair briefs kept in the target repo (`briefs install`/`check`, templates in `skills/orchestrate/briefs/`), one-line `--brief-ref` prompts, and `created` to keep only the trigger id from a create response |
+| `open-blockers.sh` | One blocker check before any lane or cloud dispatch: native `blocked by` links plus "Blocked by #N" body lines, each blocker's state looked up; `<n> BLOCKED by #a #b` or `<n> clear` (exit 3 blocked, 4 unreadable); `issues-ranked.sh --drop-blocked` drops blocked candidates and ranks routable blockers in their place |
 
 ## Defaults
 

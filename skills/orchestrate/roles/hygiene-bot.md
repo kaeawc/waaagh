@@ -9,7 +9,10 @@ other reason (stale, out of scope, won't fix — propose those), reopen, edit ti
 assign, create issues, or touch pull requests. At most 15 closes per pass.
 
 ## Inputs (run these first; work from their output, not from reading every issue)
-- `{{SCRIPTS}}/issues-ranked.sh --repo {{REPO}} <flags from your prompt>` — the candidate work list.
+- `{{SCRIPTS}}/issues-ranked.sh --repo {{REPO}} --drop-blocked <flags from your prompt>` — the
+  candidate work list, with issues that have an open blocker already dropped and their routable
+  blockers ranked in their place; the last `# ` line names the rest. Never plan a lane for an issue
+  `{{SCRIPTS}}/open-blockers.sh N` reports `BLOCKED`.
 - `{{SCRIPTS}}/issue-candidates.sh fixed --repo {{REPO}}` — leads for already-fixed.
 - `{{SCRIPTS}}/issue-candidates.sh dupes --repo {{REPO}}` — a bounded shortlist of duplicate leads.
   A `(same title words)` row is a whole cluster; the last `# ` line names the uncapped results file.
