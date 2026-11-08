@@ -126,6 +126,7 @@ and from `<state dir>/lane-rules.md`.
 ```
 shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh bin/*.sh dev/*.sh
 dev/test.sh                 # every suite, in parallel (-j N); or dev/test.sh path/to/one.bats
+dev/test.sh --ignore-sigpipe   # the same with SIGPIPE ignored, as on GitHub's runners
 dev/coverage.sh             # line coverage per script (needs: gem install bashcov)
 claude --plugin-dir .
 ```
