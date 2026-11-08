@@ -15,7 +15,7 @@ setup() {
 #!/usr/bin/env bash
 echo "$*" >>"$FX/calls"
 case "$*" in
-  "run list"*) cat "$FX/runs.json" ;;
+  "api repos/o/r/actions/runs?"*) jq '{workflow_runs: map({name: .workflowName, status, conclusion, head_sha: .headSha, id: .databaseId, created_at: .createdAt})}' "$FX/runs.json" ;;
   "run view "*) a="$*"; id=${a#run view }; id=${id%% *}; cat "$FX/run-$id.json" ;;
   "pr list"*) [ -f "$FX/prs-fail" ] && { echo "HTTP 404: Not Found" >&2; exit 1; }; cat "$FX/prs.json" ;;
   "issue list"*) cat "$FX/issues.json" ;;

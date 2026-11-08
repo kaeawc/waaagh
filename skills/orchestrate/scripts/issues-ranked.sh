@@ -15,6 +15,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
+orch_gh_priority low
 
 repo="" days=7 limit=60 skip_in_pr=no route=""
 priority=() bug=() exclude=()

@@ -41,6 +41,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
+orch_gh_priority normal
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 
