@@ -27,6 +27,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | Path | What |
 |---|---|
 | `skills/orchestrate/SKILL.md` | The doctrine: roles and routing, isolation, briefs, evidence, the campaign loop, lane cap, merge policy, interrupts, PR lifecycle and takeover |
+| `skills/orchestrate/lane-safety.md`, `hooks/hooks.json` | Lane safety contract (deletion scope, no pattern kills, never quit Simulator.app, no writes around the edit hook) and the PreToolUse hook that enforces it |
 | `skills/orchestrate/subagent-hygiene.md` | Background subagent hygiene: premise-first, monitor-free, line-budgeted briefs; stop message vs `TaskStop` for closed or noisy lanes; model choice by role |
 | `skills/orchestrate/roles/` | Brief templates for the standing roles: merge bot, rebase bot, hygiene bot, local sweep, verify batch, verification, implementation lane, PR doctor, conflict lane, reviewer |
 | `skills/orchestrate/host-load.md` | Host load: lane admission thresholds, acting on the load's cause (Spotlight/`fseventsd`, lanes, other), the worktree budget, never removing a worktree that is a live process's cwd |
@@ -62,6 +63,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `claim-check.sh` | Confirm a delegated claim (merged, open, closed, evidence comment, no device check needed) with one read of the source of truth before relaying it |
 | `issue-route.sh` | Exactly one route label per actionable issue (`cloud-ready` or `needs-local:*`): route counts and unrouted/multi-routed issues, label bootstrap, and `set` with the local-work comment and a REST fallback |
 | `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid`; records the holder's serials or UDIDs and `check`s ownership (AVD suffix, simctl) before device commands |
+| `lane-safety.sh` | PreToolUse hook (wired by `hooks/hooks.json`) enforcing the lane safety contract on Bash calls: denies deleting protected or out-of-lane paths, pattern kills, quitting Simulator.app and shell writes outside the lane worktree; asks about backgrounded or silenced destructive commands (`skills/orchestrate/lane-safety.md`) |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
 | `validate.sh` | Run a validation command into a receipt outside the checkout; `check` says whether an independent, passing receipt for the exact current key can be reused |
 | `regen-merge.sh` | Merge the base into a branch; conflicts only in generated files are resolved by taking the base and regenerating (verified stable); anything else aborts |
@@ -111,6 +113,9 @@ and from `<state dir>/lane-rules.md`.
 - The hygiene bot can close issues only as fixed-by-a-merged-PR or duplicate-of-an-open-issue, with
   evidence in the closing comment; every close is logged.
 - No role kills processes by pattern, and a device has one owner at a time.
+- A PreToolUse hook blocks deleting `~/Library`, the Android SDK, `~/.gradle` and other protected
+  roots, pattern kills and quitting Simulator.app; inside a lane worktree it also blocks deletions
+  and shell writes outside the lane (`skills/orchestrate/lane-safety.md`).
 
 ## Development
 
