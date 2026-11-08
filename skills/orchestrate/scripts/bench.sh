@@ -3,7 +3,7 @@
 # on fixed fixtures with a stubbed gh (no network, no model calls). Use it to compare prompt and
 # output changes; budget.bats turns the numbers into ceilings.
 #
-# Usage: bench.sh [--timing]
+# Usage: bench.sh [--timing] [CASE...]
 # Output (TSV, with a header): case  stdout_bytes  rows  gh_calls
 #   Bytes and rows are of stdout only. No token counts: they depend on a tokenizer, and none is
 #   assumed here.
@@ -11,14 +11,20 @@
 #             processes the case started, counted by a jq wrapper first on PATH; the stub gh's
 #             own jq calls are not counted). They vary by machine: compare before and after a
 #             change on one machine, never against a ceiling. Without it the output is unchanged.
-# Exit: 0 done, 2 bad usage.
+#   CASE...   run only these cases (names as in the first column of the full output), plus the
+#             cases each declares it needs, which run first and print no row. Rows come in the
+#             full run's order and match its rows. With no CASE every case runs.
+# Exit: 0 done, 2 bad usage. Bad usage is an unknown flag or case name; 1 means a case declares a
+#   need that is not an earlier case (a bug in bench.sh itself).
 set -euo pipefail
-timing=0
+timing=0 picked=" " picked_list=()
 for arg in "$@"; do
   case "$arg" in
-    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
     --timing) timing=1 ;;
-    *) echo "bench.sh: unknown argument: $arg" >&2; exit 2 ;;
+    -*) echo "bench.sh: unknown argument: $arg" >&2; exit 2 ;;
+    *[!a-z0-9-]* | "") echo "bench.sh: unknown case: $arg" >&2; exit 2 ;;
+    *) picked+="$arg " picked_list+=("$arg") ;;
   esac
 done
 here=$(cd "$(dirname "$0")" && pwd)
@@ -88,11 +94,6 @@ export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE
 # Wall clock in seconds: EPOCHREALTIME (bash 5) has microseconds; bash 3.2 falls back to whole seconds.
 clock() { local t=${EPOCHREALTIME:-$(date +%s)}; printf '%s\n' "${t/,/.}"; }
 
-if [ "$timing" = 1 ]; then
-  printf 'case\tstdout_bytes\trows\tgh_calls\tseconds\tjq_calls\n'
-else
-  printf 'case\tstdout_bytes\trows\tgh_calls\n'
-fi
 measure() { # NAME CMD...: run CMD, report its stdout size, row count and gh calls (and with --timing, seconds and jq calls)
   local name=$1 out start end
   shift
@@ -111,56 +112,156 @@ measure() { # NAME CMD...: run CMD, report its stdout size, row count and gh cal
   printf '\n'
 }
 
-# excerpt.sh (#2): a large matching log and one megabyte line.
-awk 'BEGIN { for (i = 1; i <= 20000; i++) printf "error failure %d: %0100d\n", i, 0 }' >"$work/large.log"
-awk 'BEGIN { printf "error "; for (i = 0; i < 1000000; i++) printf "x"; print "" }' >"$work/wide.log"
-measure excerpt-20k-failures "$here/excerpt.sh" "$work/large.log"
-measure excerpt-1mb-line "$here/excerpt.sh" "$work/wide.log"
 
-# issue-candidates.sh dupes (#3): 400 identical titles.
-jq -n '[range(1; 401) | {number: ., title: "Fix shared device session recovery failure"}]' >"$FX/issues.json"
-measure dupes-400-identical "$here/issue-candidates.sh" dupes --repo o/r
-
-# pr-ready.sh (#4): 20 and 100 ready PRs, then an unchanged --delta pass.
+# The cases, in output order. `bench_case NAME [NEED...]` declares the function case_NAME below it
+# (dashes as underscores). Each case writes the fixtures it reads; a NEED is an earlier case whose
+# leftover state (in $ORCHESTRATE_STATE_DIR) changes this case's row, so picking NAME alone runs its
+# NEEDs first, without printing their rows.
+all_cases=" " rev_cases=""
+bench_case() {
+  local name=$1 need
+  shift
+  for need in "$@"; do
+    [[ $all_cases == *" $need "* ]] || { echo "bench.sh: case $name needs $need, which is not an earlier case" >&2; exit 1; }
+  done
+  all_cases+="$name " rev_cases="$name $rev_cases"
+  printf -v "needs_${name//-/_}" '%s' "$*"
+}
 pr_rows() {
   jq -n --argjson n "$1" '[range(1; $n + 1) | {number: ., author: {login: "me"}, isDraft: false,
     isCrossRepository: false, baseRefName: "main", headRefOid: ("abcdef0123456789" + tostring),
     mergeable: "MERGEABLE", labels: [],
-    statusCheckRollup: [{name: "build", conclusion: "SUCCESS", startedAt: "2026-09-27T01:00:00Z"}]}]'
+    statusCheckRollup: [{name: "build", conclusion: "SUCCESS", startedAt: "2026-09-27T01:00:00Z"}]}]' >"$FX/prs.json"
 }
-pr_rows 20 >"$FX/prs.json"
-measure pr-ready-20-ready "$here/pr-ready.sh" --repo o/r --base main
-pr_rows 100 >"$FX/prs.json"
-measure pr-ready-100-ready "$here/pr-ready.sh" --repo o/r --base main
-"$here/pr-ready.sh" --repo o/r --base main --delta >/dev/null 2>&1
-measure pr-ready-delta-unchanged "$here/pr-ready.sh" --repo o/r --base main --delta
+# The REST path (#109): the stub refuses GraphQL while $FX/rest exists. Allowing it again also
+# forgets the refusal (orch_gh_api remembers it in the state root).
+graphql_refused() { touch "$FX/rest"; }
+graphql_allowed() { rm -f "$FX/rest" "$ORCHESTRATE_STATE_DIR/gh-no-graphql"; }
+
+# excerpt.sh (#2): a large matching log and one megabyte line.
+bench_case excerpt-20k-failures
+case_excerpt_20k_failures() {
+  awk 'BEGIN { for (i = 1; i <= 20000; i++) printf "error failure %d: %0100d\n", i, 0 }' >"$work/large.log"
+  measure excerpt-20k-failures "$here/excerpt.sh" "$work/large.log"
+}
+bench_case excerpt-1mb-line
+case_excerpt_1mb_line() {
+  awk 'BEGIN { printf "error "; for (i = 0; i < 1000000; i++) printf "x"; print "" }' >"$work/wide.log"
+  measure excerpt-1mb-line "$here/excerpt.sh" "$work/wide.log"
+}
+
+# issue-candidates.sh dupes (#3): 400 identical titles.
+bench_case dupes-400-identical
+case_dupes_400_identical() {
+  jq -n '[range(1; 401) | {number: ., title: "Fix shared device session recovery failure"}]' >"$FX/issues.json"
+  measure dupes-400-identical "$here/issue-candidates.sh" dupes --repo o/r
+}
+
+# pr-ready.sh (#4): 20 and 100 ready PRs, then an unchanged --delta pass.
+bench_case pr-ready-20-ready
+case_pr_ready_20_ready() {
+  graphql_allowed
+  pr_rows 20
+  measure pr-ready-20-ready "$here/pr-ready.sh" --repo o/r --base main
+}
+bench_case pr-ready-100-ready
+case_pr_ready_100_ready() {
+  graphql_allowed
+  pr_rows 100
+  measure pr-ready-100-ready "$here/pr-ready.sh" --repo o/r --base main
+}
+bench_case pr-ready-delta-unchanged
+case_pr_ready_delta_unchanged() { # the pass before it, unmeasured, is what leaves nothing changed
+  graphql_allowed
+  pr_rows 100
+  "$here/pr-ready.sh" --repo o/r --base main --delta >/dev/null 2>&1
+  measure pr-ready-delta-unchanged "$here/pr-ready.sh" --repo o/r --base main --delta
+}
 # The same PRs where GraphQL is refused (#109): REST costs a constant plus a few calls per ready PR.
-touch "$FX/rest"
-pr_rows 20 >"$FX/prs.json"
-measure pr-ready-rest-20-ready "$here/pr-ready.sh" --repo o/r --base main
-pr_rows 100 >"$FX/prs.json"
-measure pr-ready-rest-100-ready "$here/pr-ready.sh" --repo o/r --base main
-rm -f "$FX/rest" "$ORCHESTRATE_STATE_DIR/gh-no-graphql"   # and forget the refusal (orch_gh_api)
+bench_case pr-ready-rest-20-ready
+case_pr_ready_rest_20_ready() {
+  graphql_refused
+  pr_rows 20
+  measure pr-ready-rest-20-ready "$here/pr-ready.sh" --repo o/r --base main
+}
+# It starts over REST without asking GraphQL: the refusal the 20-PR pass remembered saves one call.
+bench_case pr-ready-rest-100-ready pr-ready-rest-20-ready
+case_pr_ready_rest_100_ready() {
+  graphql_refused
+  pr_rows 100
+  measure pr-ready-rest-100-ready "$here/pr-ready.sh" --repo o/r --base main
+}
 
 # triage-tick.sh snapshot with 50 open PRs (#118): the open count and last reviews come from one
 # gh-snapshot.sh call. Then the same where GraphQL is refused, where the snapshot goes REST per PR.
-pr_rows 50 >"$FX/prs.json"
-echo '[{"number":900,"labels":[]}]' >"$FX/issues.json"
-measure triage-tick-50-open "$here/triage-tick.sh" snapshot --repo o/r --branch main
-touch "$FX/rest"
-measure triage-tick-rest-50-open "$here/triage-tick.sh" snapshot --repo o/r --branch main
-rm -f "$FX/rest" "$ORCHESTRATE_STATE_DIR/gh-no-graphql"   # and forget the refusal (orch_gh_api)
+bench_case triage-tick-50-open
+case_triage_tick_50_open() {
+  graphql_allowed
+  pr_rows 50
+  echo '[{"number":900,"labels":[]}]' >"$FX/issues.json"
+  measure triage-tick-50-open "$here/triage-tick.sh" snapshot --repo o/r --branch main
+}
+bench_case triage-tick-rest-50-open
+case_triage_tick_rest_50_open() {
+  graphql_refused
+  pr_rows 50
+  echo '[{"number":900,"labels":[]}]' >"$FX/issues.json"
+  measure triage-tick-rest-50-open "$here/triage-tick.sh" snapshot --repo o/r --branch main
+}
 # review-gate.sh check for one PR: its own reads, then with a fresh snapshot row for its head.
-"$here/review-gate.sh" policy review-at-head --repo o/r >/dev/null
-rm -rf "$ORCHESTRATE_STATE_DIR/o__r/pr-snapshot"
-measure review-gate-check-cold env -u ORCHESTRATE_NOW "$here/review-gate.sh" check --repo o/r --pr 7
-"$here/gh-snapshot.sh" --repo o/r >/dev/null 2>&1 || true
-measure review-gate-check-snapshot env -u ORCHESTRATE_NOW "$here/review-gate.sh" check --repo o/r --pr 7
+bench_case review-gate-check-cold
+case_review_gate_check_cold() {
+  graphql_allowed
+  pr_rows 50
+  "$here/review-gate.sh" policy review-at-head --repo o/r >/dev/null
+  rm -rf "$ORCHESTRATE_STATE_DIR/o__r/pr-snapshot"
+  measure review-gate-check-cold env -u ORCHESTRATE_NOW "$here/review-gate.sh" check --repo o/r --pr 7
+}
+bench_case review-gate-check-snapshot
+case_review_gate_check_snapshot() {
+  graphql_allowed
+  pr_rows 50
+  "$here/review-gate.sh" policy review-at-head --repo o/r >/dev/null
+  "$here/gh-snapshot.sh" --repo o/r >/dev/null 2>&1 || true
+  measure review-gate-check-snapshot env -u ORCHESTRATE_NOW "$here/review-gate.sh" check --repo o/r --pr 7
+}
 
 # codex-lane-wait.sh (#7): an unchanged run.
-run="$work/run/codex.jsonl"
-mkdir -p "${run%/*}"
-: >"$run.spec"
-printf 'Codex alive: yes\nChanged entries: 0\n\nMost recent agent message or command:\nworking\n' >"$run.progress.state"
-echo rev1 >"$run.progress.rev"
-measure lane-wait-unchanged "$waiter" --log "$run" --since rev1 --timeout 0
+bench_case lane-wait-unchanged
+case_lane_wait_unchanged() {
+  local run="$work/run/codex.jsonl"
+  mkdir -p "${run%/*}"
+  : >"$run.spec"
+  printf 'Codex alive: yes\nChanged entries: 0\n\nMost recent agent message or command:\nworking\n' >"$run.progress.state"
+  echo rev1 >"$run.progress.rev"
+  measure lane-wait-unchanged "$waiter" --log "$run" --since rev1 --timeout 0
+}
+
+# Which cases run: all of them, or the picked ones and (latest first, so needs of needs follow)
+# what each needs. Every NEED is an earlier case, so one pass from the end closes the set.
+want=$all_cases
+if [ "$picked" != " " ]; then
+  for name in "${picked_list[@]}"; do
+    [[ $all_cases == *" $name "* ]] || { echo "bench.sh: unknown case: $name" >&2; exit 2; }
+  done
+  want=$picked
+  for name in $rev_cases; do
+    [[ $want == *" $name "* ]] || continue
+    needs="needs_${name//-/_}"
+    for need in ${!needs}; do want+="$need "; done
+  done
+fi
+
+if [ "$timing" = 1 ]; then
+  printf 'case\tstdout_bytes\trows\tgh_calls\tseconds\tjq_calls\n'
+else
+  printf 'case\tstdout_bytes\trows\tgh_calls\n'
+fi
+for name in $all_cases; do
+  [[ $want == *" $name "* ]] || continue
+  if [ "$picked" = " " ] || [[ $picked == *" $name "* ]]; then
+    "case_${name//-/_}"
+  else
+    "case_${name//-/_}" >/dev/null
+  fi
+done
