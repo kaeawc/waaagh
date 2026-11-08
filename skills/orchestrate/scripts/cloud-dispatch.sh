@@ -181,13 +181,16 @@ check_fixtures() {
   jq -e 'type == "object" and has("body")' >/dev/null 2>&1 <<<"$iss" || unreadable "the issue"
   com=$(orch_read_retry 3 gh api "repos/$repo/issues/$issue/comments?per_page=100") || unreadable "its comments"
   jq -e 'type == "array"' >/dev/null 2>&1 <<<"$com" || unreadable "its comments"
-  needs=$(jq -rn --argjson i "$iss" --argjson c "$com" --arg req "$require" '
+  # The issue and its comments travel as files, not arguments: one argument is capped at 128 KiB (#121).
+  needs=$(jq -rn --slurpfile i <(printf '%s\n' "$iss") --slurpfile c <(printf '%s\n' "$com") --arg req "$require" '
     def mentions: test("fixture|captured|\\.claude/orchestrate/|evidence-"; "i");
+    $i[0] as $i | $c[0] as $c |
     if $req == "yes" or any($i.labels[]?; .name == "needs-fixtures")
        or ((($i.body // "") + " " + ([$c[].body // ""] | join(" "))) | mentions)
     then "yes" else "no" end')
   if [[ "$needs" == no ]]; then echo none; return 0; fi
-  refs=$(jq -rn --argjson i "$iss" --argjson c "$com" '
+  refs=$(jq -rn --slurpfile i <(printf '%s\n' "$iss") --slurpfile c <(printf '%s\n' "$com") '
+    $i[0] as $i | $c[0] as $c |
     [(if ($i.body // "") | test("<details"; "i") then $i.html_url else empty end),
      ($c[] | select((.body // "") | test("<details"; "i")) | .html_url)] | join(" ")')
   if [[ -z "$refs" ]]; then
@@ -198,7 +201,8 @@ check_fixtures() {
       unreadable "its timeline"
   fi
   if [[ -z "$refs" ]]; then
-    localpath=$(jq -rn --argjson i "$iss" --argjson c "$com" '
+    localpath=$(jq -rn --slurpfile i <(printf '%s\n' "$iss") --slurpfile c <(printf '%s\n' "$com") '
+      $i[0] as $i | $c[0] as $c |
       [($i.body // ""), ($c[].body // "")] | join("\n")
       | [scan("(?:~|/Users/[^/ ]+|/home/[^/ ]+)/[^ `)\n]*")] | first // ""')
     echo "cloud-dispatch.sh: #$issue needs captured fixtures but none travel with it: no <details>" \

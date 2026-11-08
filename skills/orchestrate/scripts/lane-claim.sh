@@ -97,11 +97,12 @@ conflicts() {
     if [[ -n "$files" ]]; then
       for n in $(jq -r '.[].number' <<<"$prs"); do
         f=$("$here/gh-rest-pr.sh" files --repo "$repo" --pr "$n" 2>/dev/null) || { echo "unreadable"; return; }
-        prs=$(jq -c --argjson n "$n" --argjson f "$f" 'map(if .number == $n then .files = $f else . end)' <<<"$prs")
+        prs=$(jq -c --argjson n "$n" --slurpfile f <(printf '%s\n' "$f") 'map(if .number == $n then .files = $f[0] else . end)' <<<"$prs")
       done
     fi
   fi
-  jq -rn --arg issues "$issues" --arg files "$files" --rawfile lanes "$lanes" --argjson prs "$prs" '
+  # The PR list travels as a file, not an argument: one argument is capped at 128 KiB (#121).
+  jq -rn --arg issues "$issues" --arg files "$files" --rawfile lanes "$lanes" --slurpfile prs <(printf '%s\n' "$prs") '
     def list: split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0));
     def overlaps($a; $b): $a == $b or ($a | endswith("/") and ($b | startswith($a))) or ($b | endswith("/") and ($a | startswith($b)));
     ($issues | list) as $want_i | ($files | list) as $want_f
@@ -111,7 +112,7 @@ conflicts() {
     | ($active[] as $l
        | ($want_i[] | select(. as $i | $l.issues | index($i)) | "conflict: lane \($l.wt) has issue \(.)"),
          ([$want_f[] as $f | $l.files[] | select(overlaps(.; $f)) | $f] | unique[] | "conflict: lane \($l.wt) owns \(.)")),
-      ($prs[] as $p
+      ($prs[0][] as $p
        | ($want_i[] | select(. as $i | (($p.closingIssuesReferences // []) | map(.number | tostring) | index($i))
                      or ((($p.title // "") + " " + ($p.body // "")) | test("#" + $i + "\\b")))
           | "conflict: PR \($p.number) covers issue \(.)"),
