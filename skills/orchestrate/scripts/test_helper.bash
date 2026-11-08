@@ -9,6 +9,11 @@
 # so every bash a test starts (stubs included) runs with them. A stub that reads an unset variable
 # (`$1` with no argument, an env var a test did not set) must use "${VAR:-}", and a test must not
 # pipe into an early-exit reader such as `grep -q` or `head` (#140, linted by early-exit-pipes.bats).
+# errexit reaches fewer of them: bats' `run` and command substitution `$(...)` drop errexit from the
+# SHELLOPTS their children inherit, so under bashcov only a script or helper a test calls directly
+# (not through `run`, not inside `$(...)`) runs with errexit. A wrapper called directly can then
+# fail under coverage and pass everywhere else (#152, #153); dev/test.sh --bashcov-shellopts
+# reproduces it.
 hermetic_git() {
   local cfg="${BATS_TEST_TMPDIR:-$BATS_FILE_TMPDIR}/.gitconfig-hermetic"
   cat >"$cfg" <<'CFG'
@@ -57,5 +62,56 @@ seed_origin_copy() {
   cp -R "$BATS_FILE_TMPDIR/seed-template/origin.git" "$BATS_FILE_TMPDIR/seed-template/seed" "$BATS_TEST_TMPDIR/"
   git -C "$BATS_TEST_TMPDIR/seed" remote set-url origin "$BATS_TEST_TMPDIR/origin.git"
 }
+# --- Stubbing gh ----------------------------------------------------------------------------
+# Tests stub gh with an executable $BATS_TEST_TMPDIR/bin/gh first on PATH. Every read that goes
+# through gh-read.sh (most helpers' GitHub reads) gets `--include` appended to each `gh api` call
+# without --paginate, for the status line and rate-limit headers: a stub that matches an exact
+# `api <route>` argument list misses the call, and gh-read reports the miss as "transient" and
+# retries it. Strip it (a="$*"; a=${a% --include}) or match with a trailing *. A stub need not
+# print headers: output whose first line is not "HTTP/<v> <status>" is taken as the body.
+#
+# stub_gh_routes: the shared route stub. It writes that gh, exports FX=$BATS_TEST_TMPDIR/fx and
+# puts the stub first on PATH. Each call drops `--include` and `-i` from a `gh api` call, appends
+# the remaining arguments (a) to $FX/calls, then answers from, in order:
+#   gh_route PATTERN FILE   the route table $FX/routes.tsv: the first PATTERN, a bash glob over a
+#                           ("api repos/o/r/pulls/5", "pr list*"), that matches prints FILE
+#                           (relative to $FX unless absolute) and exits 0
+#   gh_routes <<'R' ... R   a `case "$a" in ... esac` body ($FX/routes.sh, replaced on each call)
+#                           for answers a file cannot give (computed, an error, an exit status);
+#                           an arm must exit, or the call falls through
+# and anything unmatched prints "unexpected gh call: <a>" on stderr and exits 9.
+stub_gh_routes() {
+  FX="$BATS_TEST_TMPDIR/fx"
+  mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
+  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+a=""
+for x in "$@"; do
+  if [[ "$1" == api && ("$x" == --include || "$x" == -i) ]]; then continue; fi
+  a="${a:+$a }$x"
+done
+echo "$a" >>"$FX/calls"
+if [[ -f "$FX/routes.tsv" ]]; then
+  while IFS=$'\t' read -r pat file; do
+    # shellcheck disable=SC2053 # PATTERN is a glob on purpose
+    if [[ -n "$pat" && "$a" == $pat ]]; then
+      [[ "$file" == /* ]] || file="$FX/$file"
+      cat "$file"
+      exit 0
+    fi
+  done <"$FX/routes.tsv"
+fi
+if [[ -f "$FX/routes.sh" ]]; then
+  # shellcheck source=/dev/null
+  . "$FX/routes.sh"
+fi
+echo "unexpected gh call: $a" >&2
+exit 9
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+  export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+gh_route() { printf '%s\t%s\n' "$1" "$2" >>"$FX/routes.tsv"; }
+gh_routes() { cat >"$FX/routes.sh"; }
 # `run ! cmd` is how a mid-test negative assertion fails (#134); bats >= 1.5 has it.
 bats_require_minimum_version 1.5.0

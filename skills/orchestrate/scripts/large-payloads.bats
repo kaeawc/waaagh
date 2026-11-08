@@ -4,24 +4,15 @@
 # then dies with "Argument list too long". Each test feeds one script a payload over 128 KiB (many
 # PRs, comments, threads or checks with long text) and requires the normal answer. The doc-contract
 # test at the end keeps repository-sized variables off --argjson/--arg.
-# gh is stubbed: $FX/routes.sh is a `case "$a"` body (a = the gh arguments) that each test writes.
+# gh is stubbed by test_helper.bash's stub_gh_routes: each test maps routes to fixture files with
+# gh_route, or writes a `case "$a"` body with gh_routes where an answer is computed.
 # Run: bats large-payloads.bats
 
 setup() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-  FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
-  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
-#!/usr/bin/env bash
-a="$*"; a=${a% --include}
-echo "$a" >>"$FX/calls"
-# shellcheck source=/dev/null
-. "$FX/routes.sh"
-echo "unexpected gh call: $a" >&2
-exit 9
-STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
-  export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
+  stub_gh_routes
+  export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export ORCHESTRATE_NOW=1793880000 ORCHESTRATE_AUTHOR=me GH_READ_JITTER=0   # 2026-11-05T10:40:00Z
   unset ORCHESTRATE_GH_API ORCHESTRATE_REVIEW_BOTS PR_READY_EXTRA
 }
@@ -32,7 +23,6 @@ big() { # big FILE: the fixture really is over the 128 KiB single-argument cap
   n=$(wc -c <"$1")
   ((n > 131072)) || { echo "fixture $1 is only $n bytes"; return 1; }
 }
-routes() { cat >"$FX/routes.sh"; }
 
 @test "cloud-dispatch.sh fixtures: an issue with 150 long comments" {
   jq -n '{number: 7, html_url: "https://github.com/o/r/issues/7", body: "Parse the captured dump.", labels: []}' >"$FX/issue.json"
@@ -40,12 +30,8 @@ routes() { cat >"$FX/routes.sh"; }
     + [{id: 999, body: "<details><summary>fixture</summary>dump</details>", html_url: "https://github.com/o/r/issues/7#issuecomment-999"}]' \
     >"$FX/comments.json"
   big "$FX/comments.json"
-  routes <<'R'
-case "$a" in
-  "api repos/o/r/issues/7/comments"*) cat "$FX/comments.json"; exit 0 ;;
-  "api repos/o/r/issues/7") cat "$FX/issue.json"; exit 0 ;;
-esac
-R
+  gh_route "api repos/o/r/issues/7/comments*" comments.json
+  gh_route "api repos/o/r/issues/7" issue.json
   run "$SCRIPTS/cloud-dispatch.sh" fixtures --issue 7 --repo o/r --no-blocker-check
   [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   [ "$output" = "fixtures https://github.com/o/r/issues/7#issuecomment-999" ]
@@ -56,12 +42,8 @@ R
     updated_at: "2026-11-01T00:00:00Z", created_at: "2026-11-01T00:00:00Z"}]' >"$FX/issues.json"
   jq -n --arg p "$(pad 1000)" '[range(150) | {user: {login: "u\(.)"}, body: $p, created_at: "2026-11-01T00:00:00Z"}]' >"$FX/comments.json"
   big "$FX/comments.json"
-  routes <<'R'
-case "$a" in
-  "api repos/o/r/issues?state=open"*) cat "$FX/issues.json"; exit 0 ;;
-  "api repos/o/r/issues/1/comments"*) cat "$FX/comments.json"; exit 0 ;;
-esac
-R
+  gh_route "api repos/o/r/issues?state=open*" issues.json
+  gh_route "api repos/o/r/issues/1/comments*" comments.json
   ORCHESTRATE_GH_API=rest run "$SCRIPTS/gh-issues.sh" issues --repo o/r --fields number,comments
   [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   [ "$(jq -c '[length, (.[0].comments | length), .[0].comments[149].author.login]' <<<"$output")" = '[1,150,"u149"]' ]
@@ -78,7 +60,7 @@ R
   jq -n --arg p "$(pad 200)" '[range(600) | {id: "T\(.)", isResolved: false, isOutdated: false,
     comments: [{databaseId: (1000 + .), body: $p}]}]' >"$FX/threads.json"
   big "$FX/threads.json"
-  routes <<'R'
+  gh_routes <<'R'
 case "$a" in
   "api repos/o/r/pulls/5") cat "$FX/pull.json"; exit 0 ;;
   "api --paginate repos/o/r/commits/abc123/check-runs"*) cat "$FX/check-runs.json"; exit 0 ;;
@@ -108,12 +90,8 @@ R
         reviews: {nodes: [{state: "COMMENTED", commit: {oid: $p}}]}}]}}}}' >"$FX/page$pg.json"
   done
   big "$FX/page1.json"
-  routes <<'R'
-case "$a" in
-  "api graphql"*"after=c1"*) cat "$FX/page2.json"; exit 0 ;;
-  "api graphql"*) cat "$FX/page1.json"; exit 0 ;;
-esac
-R
+  gh_route "api graphql*after=c1*" page2.json
+  gh_route "api graphql*" page1.json
   run "$SCRIPTS/gh-snapshot.sh" --repo o/r --limit 300 --json
   [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   [ "$(jq -c '[length, .[139].number, .[139].cache, .[139].reviewed]' <<<"$output")" = '[140,140,"new","stale"]' ]
@@ -126,12 +104,8 @@ R
   big "$FX/prs.json"
   jq -n '[{number: 1, title: "one", labels: [], updatedAt: "2026-11-01T00:00:00Z"},
           {number: 2, title: "two", labels: [], updatedAt: "2026-11-02T00:00:00Z"}]' >"$FX/issues.json"
-  routes <<'R'
-case "$a" in
-  "pr list"*) cat "$FX/prs.json"; exit 0 ;;
-  "issue list"*) cat "$FX/issues.json"; exit 0 ;;
-esac
-R
+  gh_route "pr list*" prs.json
+  gh_route "issue list*" issues.json
   run "$SCRIPTS/issues-ranked.sh" --repo o/r
   [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   [ "$(cut -f2,4 <<<"$output" | tr '\t\n' ' |')" = "2 1299|1 -|" ]
@@ -142,11 +116,7 @@ R
     closingIssuesReferences: [], files: [{path: "x/\(.).ts"}]}]
     + [{number: 999, title: "last", body: "Fixes #42", closingIssuesReferences: [{number: 42}], files: []}]' >"$FX/prs.json"
   big "$FX/prs.json"
-  routes <<'R'
-case "$a" in
-  "pr list"*) cat "$FX/prs.json"; exit 0 ;;
-esac
-R
+  gh_route "pr list*" prs.json
   run "$SCRIPTS/lane-claim.sh" check --issues 42 --files src/a.ts --repo o/r
   [ "$status" -eq 3 ] || { echo "status=$status: $output"; false; }
   [[ "$output" == *"conflict: PR 999 covers issue 42"* ]] || { echo "$output"; false; }
@@ -156,12 +126,8 @@ R
     head: {ref: "b", sha: "abc", repo: {full_name: "o/r"}}, base: {ref: "main", repo: {full_name: "o/r"}}, labels: []}]' >"$FX/pulls.json"
   jq -n --arg p "$(pad 40)" '[range(3000) | {filename: "deep/\($p)/\(.).ts"}] + [{filename: "src/a.ts"}]' >"$FX/files.json"
   big "$FX/files.json"
-  routes <<'R'
-case "$a" in
-  "api repos/o/r/pulls?state=open"*) cat "$FX/pulls.json"; exit 0 ;;
-  "api --paginate repos/o/r/pulls/7/files"*) cat "$FX/files.json"; exit 0 ;;
-esac
-R
+  gh_route "api repos/o/r/pulls?state=open*" pulls.json
+  gh_route "api --paginate repos/o/r/pulls/7/files*" files.json
   ORCHESTRATE_GH_API=rest run "$SCRIPTS/lane-claim.sh" check --issues 43 --files src/a.ts --repo o/r
   [ "$status" -eq 3 ] || { echo "status=$status: $output"; false; }
   [[ "$output" == *"conflict: PR 7"*"src/a.ts"* ]] || { echo "$output"; false; }
@@ -177,7 +143,7 @@ R
   jq -s 'add' "$FX"/pulls?.json >"$FX/all.json"
   big "$FX/all.json"
   jq '.[249] + {mergeable: true}' "$FX/all.json" >"$FX/pull250.json"
-  routes <<'R'
+  gh_routes <<'R'
 case "$a" in
   "api user") echo '{"login":"me"}'; exit 0 ;;
   *rules/branches*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"build"}]}}]'; exit 0 ;;
@@ -206,11 +172,7 @@ R
       comments: {nodes: [{author: {login: "bot"}, createdAt: "2026-11-01T00:00:00Z", url: "u\(.)", body: ("finding \(.) " + $p)}]}}]}}}}}' \
     >"$FX/page.json"
   big "$FX/page.json"
-  routes <<'R'
-case "$a" in
-  "api graphql"*) cat "$FX/page.json"; exit 0 ;;
-esac
-R
+  gh_route "api graphql*" page.json
   run --separate-stderr "$SCRIPTS/review-followup.sh" list --pr 5 --repo o/r
   [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   [ "${#lines[@]}" -eq 100 ]
@@ -225,12 +187,8 @@ R
   jq -n --arg p "$(pad 800)" '[range(200) | {user: {login: "someone"}, body: $p, created_at: "2026-11-01T00:00:00Z"}]' >"$FX/comments.json"
   big "$FX/reviews.json"
   big "$FX/comments.json"
-  routes <<'R'
-case "$a" in
-  "api repos/o/r/pulls/5/reviews"*) cat "$FX/reviews.json"; exit 0 ;;
-  "api repos/o/r/issues/5/comments"*) cat "$FX/comments.json"; exit 0 ;;
-esac
-R
+  gh_route "api repos/o/r/pulls/5/reviews*" reviews.json
+  gh_route "api repos/o/r/issues/5/comments*" comments.json
   run "$SCRIPTS/review-gate.sh" scan --pr 5 --repo o/r
   [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   "$SCRIPTS/review-gate.sh" policy review-at-head --repo o/r >/dev/null
@@ -246,11 +204,7 @@ R
         starter: {nodes: [{author: {login: "bot"}, url: "u"}]},
         latest: {totalCount: 1, nodes: [{author: {login: "bot"}, body: $p}]}}]}}]}}}}' >"$FX/page.json"
   big "$FX/page.json"
-  routes <<'R'
-case "$a" in
-  "api graphql"*) cat "$FX/page.json"; exit 0 ;;
-esac
-R
+  gh_route "api graphql*" page.json
   run "$SCRIPTS/thread-sweep.sh" scan --summary --repo o/r
   [ "$status" -eq 0 ] || { echo "status=$status: $output"; false; }
   [ "$output" = "threads unresolved=250 answered=0 resolve-now=- repair=$(seq 100 124 | sed 's/^/#/' | paste -sd, -)" ]
@@ -263,7 +217,7 @@ R
   jq -n '[range(300) | . as $i | {number: (1000 + $i), closingIssuesReferences: [range(50) | {number: (5000 + $i * 50 + .)}]}]' >"$FX/prs.json"
   big "$FX/prs.json"
   echo '[{"number":5,"labels":[{"name":"cloud-ready"}]},{"number":5001,"labels":[{"name":"cloud-ready"}]}]' >"$FX/issues.json"
-  routes <<'R'
+  gh_routes <<'R'
 case "$a" in
   "api repos/o/r/actions/runs?"*) echo '{"workflow_runs":[{"name":"Test","status":"completed","conclusion":"success","head_sha":"aaaaaaaaaaaa","id":10,"created_at":"2026-11-05T01:00:00Z"}]}'; exit 0 ;;
   "pr list"*) cat "$FX/prs.json"; exit 0 ;;

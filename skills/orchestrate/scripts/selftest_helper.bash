@@ -53,7 +53,10 @@ WAITER() { "$SCRIPTS/../../../bin/codex-lane-wait.sh" "$@"; }
 
 # --- campaign scripts: readiness, merge, main health, issues, lanes, device lock ---------------
 
-# gh stub that answers by subcommand from fixture files and records every call.
+# gh stub that answers by subcommand from fixture files and records every call. Its `api` routes
+# match exact argument lists, so they serve scripts that call gh directly: a read through
+# gh-read.sh arrives with `--include` appended (see "Stubbing gh" in test_helper.bash). A new suite
+# should start from test_helper.bash's stub_gh_routes instead of another case statement.
 stub_gh_router() {
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
