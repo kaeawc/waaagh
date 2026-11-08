@@ -121,7 +121,7 @@ if [[ "$admin" == yes || "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
   flags=(--repo "$repo" --pr "$pr")
   for a in "${authors[@]}"; do flags+=(--author "$a"); done
   for c in ${ignores[@]+"${ignores[@]}"}; do flags+=(--ignore-check "$c"); done
-  row=$("$here/pr-ready.sh" "${flags[@]}" 2>/dev/null | head -1) || row=""
+  row=$("$here/pr-ready.sh" "${flags[@]}" 2>/dev/null | awk 'NR == 1') || row=""
   IFS=$'\t' read -r _ verdict rhead _ _ detail <<<"$row"
   why=""
   if [[ -z "$row" ]]; then why=" no readiness row for PR $pr"
@@ -162,7 +162,7 @@ fi
 if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" == 1 ]]; }; then
   rflags=(--repo "$repo" --pr "$pr" --no-threads)
   for a in "${authors[@]}"; do rflags+=(--author "$a"); done
-  raw=$("$here/pr-ready.sh" "${rflags[@]}" 2>/dev/null | head -1) || raw=""
+  raw=$("$here/pr-ready.sh" "${rflags[@]}" 2>/dev/null | awk 'NR == 1') || raw=""
   if [[ -z "$raw" ]]; then
     log "refused: check state unreadable and no --evidence"
     echo "refused: the head's checks could not be read; a merge past them needs --evidence"; exit 6
