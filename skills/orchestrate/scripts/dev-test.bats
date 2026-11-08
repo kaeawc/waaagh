@@ -75,3 +75,38 @@ PROBE
   [[ "$output" == *"not ok 1"* ]]
   [[ "$output" != *"SHELLOPTS="* ]]
 }
+
+# fake_root: a copy of dev/test.sh in a repo root of its own with one passing suite, so a bare
+# suite name resolves there and not among the real suites (#191).
+fake_root() {
+  R="$BATS_TEST_TMPDIR/root"
+  mkdir -p "$R/dev" "$R/skills/orchestrate/scripts"
+  cp "$ROOT/dev/test.sh" "$R/dev/test.sh"
+  printf '@test "in the scripts dir" {\n  true\n}\n' >"$R/skills/orchestrate/scripts/probe.bats"
+}
+
+@test "a bare suite name is found in skills/orchestrate/scripts/, from any directory (#191)" {
+  fake_root
+  cd "$P"
+  run "$R/dev/test.sh" -j 1 probe.bats
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"ok"*"skills/orchestrate/scripts/probe.bats"* ]]
+  [[ "$output" == *"1/1 tests passed in 1 files"* ]]
+}
+
+@test "a path that exists is run as given, before the scripts dir is tried (#191)" {
+  fake_root
+  cd "$P"
+  printf '@test "local one" {\n  false\n}\n' >probe.bats
+  run "$R/dev/test.sh" -j 1 probe.bats
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not ok 1 local one"* ]]
+}
+
+@test "a name in neither place is still a usage error, named on stderr (#191)" {
+  fake_root
+  cd "$P"
+  run "$R/dev/test.sh" nope.bats
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no such suite: nope.bats"* ]]
+}

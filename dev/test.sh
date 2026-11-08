@@ -8,7 +8,9 @@
 #   --bashcov-shellopts  export SHELLOPTS=errexit:errtrace:functrace:nounset:pipefail to every
 #                        suite, as bashcov does under dev/coverage.sh (without its xtrace), so every
 #                        bash a test starts inherits them: finds coverage-only failures before merge (#153)
-#   FILE                 suites to run (default: every skills/orchestrate/scripts/*.bats)
+#   FILE                 suites to run (default: every skills/orchestrate/scripts/*.bats). A FILE
+#                        that is not a path is looked for in skills/orchestrate/scripts/, so a bare
+#                        name such as gh-read.bats works from any directory
 # Env: BATS (default bats)
 # Exit: 0 every suite passed | 1 a suite failed | 2 usage
 # Suites must not share state: each test works under its own $BATS_TEST_TMPDIR (test_helper.bash).
@@ -22,7 +24,7 @@ while (($#)); do
     -j*) jobs=${1#-j}; shift ;;
     --ignore-sigpipe) sigpipe=ignore; shift ;;
     --bashcov-shellopts) shellopts=errexit:errtrace:functrace:nounset:pipefail; shift ;;
-    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
     -*) echo "dev/test.sh: unknown argument: $1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -32,7 +34,13 @@ if [[ -z "$jobs" ]]; then
   ((jobs <= 8)) || jobs=8
 fi
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo "dev/test.sh: -j needs a positive number" >&2; exit 2; }
-if (($#)); then files=("$@"); else files=("$root"/skills/orchestrate/scripts/*.bats); fi
+files=()
+for f in "$@"; do
+  # A bare suite name: every suite lives in skills/orchestrate/scripts/.
+  [[ -f "$f" || ! -f "$root/skills/orchestrate/scripts/$f" ]] || f=$root/skills/orchestrate/scripts/$f
+  files+=("$f")
+done
+((${#files[@]})) || files=("$root"/skills/orchestrate/scripts/*.bats)
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

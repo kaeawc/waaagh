@@ -267,3 +267,14 @@ STUB
   [ "$(grep -c 'using' <<<"$output" || true)" -eq 0 ]
   [ -f "$BATS_TEST_TMPDIR/argv" ]
 }
+
+@test "a bare suite name is found in skills/orchestrate/scripts/ and passed on as an absolute path (#191)" {
+  fake_root
+  run "$R/dev/coverage.sh" two.bats
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(cat argv)" = "$(printf '%s\n' --root "$R" -- dev/test.sh -j 1 "$R/skills/orchestrate/scripts/two.bats")" ]
+  [ "$(cat "$R/coverage/subset.txt")" = "skills/orchestrate/scripts/two.bats" ]
+  run "$R/dev/coverage.sh" nope.bats
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no such suite: nope.bats"* ]]
+}
