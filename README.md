@@ -51,12 +51,15 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first; `--route` filters to one route for cloud or local dispatch |
 | `issue-candidates.sh` | Leads for already-fixed issues and duplicate titles; `sweep` sorts `needs-local:*` issues into A (closeable), B (fix merged, device check left), C (needs implementation) and D (unclear) |
 | `issue-close.sh` | Close an issue as fixed or duplicate, with required evidence, and log it |
+| `review-followup.sh` | One review round per PR: classify unresolved review threads as first-round, later-round or the author's; file a later-round thread as a follow-up issue (or append it to one with the same root cause), reply `follow-up #N`, resolve it and route the issue `cloud-ready` |
+| `thread-resolve.sh` | Reply once (marker-keyed) on one review thread and resolve it, with readback and typed exits |
 | `issue-route.sh` | Exactly one route label per actionable issue (`cloud-ready` or `needs-local:*`): route counts and unrouted/multi-routed issues, label bootstrap, and `set` with the local-work comment and a REST fallback |
 | `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid` |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
 | `validate.sh` | Run a validation command into a receipt outside the checkout; `check` says whether an independent, passing receipt for the exact current key can be reused |
 | `regen-merge.sh` | Merge the base into a branch; conflicts only in generated files are resolved by taking the base and regenerating (verified stable); anything else aborts |
-| `lane-claim.sh` | Duplicate-work guard: refuses a lane whose issue or files an active lane or open PR already covers; keeps `lanes.tsv` |
+| `lane-claim.sh` | Duplicate-work guard: refuses a lane whose issue or files an active lane or open PR already covers; keeps `lanes.tsv`; `on-issue` / `closed` name the active lanes to stop when their issue closes |
+| `decision.sh` | Owner decisions: `record` the "Owner decision (YYYY-MM-DD): ..." comment and clear `needs-decision`, `batch` the open ones into one question with every recommendation listed, `steps` lists owner-only steps; with `campaign.sh close-policy` and `issue-close.sh --as completed` (`skills/orchestrate/owner-decisions.md`) |
 | `gate-slot.sh`, `heavy-build-slot.sh` | Host-wide gate semaphore (default 3) with a per-repo gate environment; Gradle/Xcode builds run alone with capped workers; bounded waits, stale-holder reclaim |
 | `wt-cleanup.sh` | Conservative worktree cleanup: only clean, idle, pushed, unprotected worktrees no process is in; dry run by default |
 | `gh-read.sh` | Bounded, typed GitHub reads: per-call timeout, backoff inside a time budget, Retry-After and rate-limit reset handling with a cooldown shared by local lanes; refuses writes |

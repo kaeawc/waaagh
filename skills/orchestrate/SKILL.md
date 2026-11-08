@@ -195,7 +195,7 @@ Everything a campaign must remember lives in one directory per repository:
 
 | File | Written by | Purpose |
 |---|---|---|
-| `campaign.json` | `campaign.sh` | start time, last verification time and SHA |
+| `campaign.json` | `campaign.sh` | start time, last verification time and SHA, wrap-up, `close_policy` (`owner-decisions.md`) |
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
 | `GITHUB_OUTAGE` | `pr-merge.sh` | present while githubstatus.com reports Pull Requests down; pauses merges |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
@@ -210,7 +210,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `briefs/`, `lane-rules.md` | you | filled role briefs; repository rules for every lane |
 | `learnings/` | `learning.sh` | one file per learning (rule, why, how to apply, date, source), `INDEX.md` (in `campaign.json` as `.learnings`), `history.log` of superseded rules (`learnings.md`) |
 | `lanes.tsv` | you | lanes: worktree, branch, issues, files, agent, status (last column; `done`, `merged`, `closed`, `abandoned` end a lane) |
-| `decisions.md` | you | owner-decision queue, one `- [ ] question — options — what it blocks` line each, `- [x]` once answered |
+| `decisions.md`, `decisions.log` | you; `decision.sh` | owner-decision queue, one `- [ ] #N question — options — recommend: X — what it blocks` line each, `- [x]` once recorded on the issue; every recorded decision |
 | `verify/<batch>/` | verification | evidence and report per batch |
 
 Per-PR checkpoints and claims stay under `~/.claude/orchestrate/prs/` (`pr-claim.sh path`). Do not
@@ -264,7 +264,8 @@ agent reports or a PR changes. Do not tick on a timer.
 6. **Fill lanes** up to the cap (below) from the ranked lane list. Start each through
    `"$SCRIPTS/lane-claim.sh" add --worktree … --branch … --issues … --files …`, which refuses a lane
    whose issue or files an active lane or an open PR already has, and records it in `lanes.tsv`;
-   mark it ended with `lane-claim.sh set --status merged|closed|abandoned`. Name every lane
+   mark it ended with `lane-claim.sh set --status merged|closed|abandoned`. When a lane's issue
+   closes, stop the lane (`lane-claim.sh closed`, `owner-decisions.md`). Name every lane
    branch `work/<issue>-<slug>`, whoever drives the lane. Nothing may select PRs by that name:
    the merge bot selects by author and readiness and excludes by labels, and `pr-ready.sh` reports
    any otherwise-ready PR an exclusion hid as `ready-but-skipped=<n>`.
@@ -446,7 +447,9 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
 
 - **Owner decisions.** Design questions from the hygiene bot and lanes go to `decisions.md`. Do
   not stop other lanes for them; surface the queue at the next natural checkpoint, and at once if
-  it blocks most of the ranked plan.
+  it blocks most of the ranked plan, as one batched question (`decision.sh batch`). Record each
+  answer on its issue and collect the owner-only steps; the campaign's close policy decides what
+  may then close (`owner-decisions.md`).
 - **Implementer unavailable.** Codex is missing, unauthenticated or out of quota. The lane stops
   and reports `implementer-unavailable`; there is no Claude implementer fallback unless the user
   opted in. Report "usage limit" and "401 / sign in again" separately, with the exact text: one
@@ -509,7 +512,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
     "fix_pass_consumed": true, "next_check_at": "…", "status": "awaiting-ci"}
    ```
 5. **After the pass**, concentrate on green CI and exact-head verification. Fix a demonstrated CI
-   regression; never silently start a second feedback fix pass.
+   regression; never silently start a second feedback fix pass. Review threads that arrive after
+   the first review round become follow-up issues, are answered `follow-up #N` and resolved, so
+   they never block the merge line (`scripts/review-followup.sh`; the PR doctor's later-round
+   step). `scripts/thread-resolve.sh` replies on and resolves any one thread.
 6. **Merge** per the policy table, through `pr-merge.sh`.
 
 ## PR watch and takeover (the user's own PRs only)

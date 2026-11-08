@@ -2,7 +2,7 @@
 
 Read `{{SCRIPTS}}/../roles/_common.md` first. You get each PR in your bucket to "green, up to
 date, no unaddressed feedback" so the merge bot can merge it. You do not merge, close, approve,
-change draft state or open PRs. Codex writes all code; if it falls short on a PR, stop on that PR
+change draft state or open PRs; you open or comment on issues only through `review-followup.sh`. Codex writes all code; if it falls short on a PR, stop on that PR
 and move to the next.
 
 Your prompt gives: the PR numbers and their worktrees, and the feedback policy (`fix-pass` or
@@ -15,6 +15,19 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    threads; all pages). Classify each item: (a) actionable defect or requested change, (b)
    question or nit needing no code, (c) not applicable — wrong, already done, or against the
    repo's conventions.
+   **Later-round threads (one review round per PR).** `{{SCRIPTS}}/review-followup.sh list --repo
+   {{REPO}} --pr <n>` classifies every unresolved, current review thread as `first` (the PR's
+   first review round), `later` (started after that round) or `own` (the author's). `first`
+   threads go through the steps below. A `later` thread is never fixed on this PR and never left
+   open to block its merge, unless it is a serious regression this PR itself introduces (fix it
+   in the fix pass if that is still unconsumed; otherwise report it). For each other `later`
+   thread, first search open issues for the same root cause (same file and symptom), then run
+   `{{SCRIPTS}}/review-followup.sh file --repo {{REPO}} --pr <n> --thread <id>` with either
+   `--title "<the finding, imperative>"` for a new issue or `--append <issue>` plus
+   `--note "<the shared root cause>"`. It quotes the finding in the issue, replies
+   `follow-up #N` on the thread, resolves it, and routes the issue `cloud-ready` (an appended
+   issue keeps its route). Exit 5 or 9: rerun the same command once; it reconciles and never
+   files twice.
 3. **Base.** Branch conflicts with or lacks `{{BASE}}` and its checks ran on a stale base: merge
    `origin/{{BASE}}` in (never rebase, never force-push). Generated-file conflicts
    ({{GENERATED_FILES}}): take `{{BASE}}`'s side and regenerate. Anything else: resolve only when
@@ -28,7 +41,8 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    failure by weakening or skipping a test, raising a budget or growing a baseline.
 5. **Fix pass — at most ONE consolidated codex pass per PR**, combining every class-(a) item (when
    the policy is `fix-pass`) and every diff-caused CI failure. With the `follow-ups` policy, do not
-   fix review feedback: list each class-(a) item for the orchestrator to file as an issue, unless
+   fix review feedback: file each class-(a) review thread as above and list every other class-(a)
+   item for the orchestrator to file as an issue, unless
    it is a serious regression the PR itself introduces — fix that. Check `{{STATE}}`'s PR
    checkpoint (`{{SCRIPTS}}/pr-claim.sh path --repo {{REPO}} --pr <n>`)/state.json: if
    `fix_pass_consumed` is true, report new feedback instead of starting another pass.
@@ -39,5 +53,5 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
 
 ## Report (under 450 words)
 One line per PR: number — green / pending / red: <check> / conflicting / needs owner / skipped —
-what you did — what remains. Then follow-up items to file (PR, file:line, finding), owner
+what you did — what remains. Then follow-ups filed (PR, thread, issue, new or appended), follow-up items to file (PR, file:line, finding), owner
 questions, and anything denied.
