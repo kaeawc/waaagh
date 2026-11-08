@@ -113,3 +113,28 @@ JSON
   [[ "$output" == *"3 --check"* ]]
   [ "$output" = "$(awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$COV")" ]
 }
+
+@test "without bashcov on PATH, exit 2 names gem's executable directory (#140)" {
+  # A PATH with only what the script needs before that check, and a gem stub.
+  b="$BATS_TEST_TMPDIR/bin" gb="$BATS_TEST_TMPDIR/gembin"
+  mkdir -p "$b" "$gb"
+  for t in bash dirname sed; do ln -s "$(command -v "$t")" "$b/$t"; done
+  cat >"$b/gem" <<STUB
+#!/bin/sh
+echo "RubyGems Environment:"
+echo "  - EXECUTABLE DIRECTORY: $gb"
+STUB
+  chmod +x "$b/gem"
+  PATH="$b" run "$COV"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"bashcov not found"*"put gem's executable directory $gb on PATH"* ]]
+  printf '#!/bin/sh\n' >"$gb/bashcov"
+  chmod +x "$gb/bashcov"
+  PATH="$b" run "$COV"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"bashcov not on PATH, but it is in gem's executable directory: PATH=\"$gb:"* ]]
+  rm "$b/gem"
+  PATH="$b" run "$COV"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"EXECUTABLE DIRECTORY from 'gem environment'"* ]]
+}
