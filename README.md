@@ -45,9 +45,10 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `merge-queue.sh` | Serial local merge queue (`add`, `run-once`, `status`, `retry`): merge base in, run the check command, hand off to `pr-merge.sh`; records a per-item outcome and only `merged` satisfies dependents |
 | `main-health.sh` | Sets or clears the merge hold from the default branch's newest completed runs |
 | `campaign.sh` | Campaign ledger: merge mode, lane cap, merged-since-verification, pause label |
-| `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first |
+| `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first; `--route` filters to one route for cloud or local dispatch |
 | `issue-candidates.sh` | Leads for already-fixed issues and duplicate titles |
 | `issue-close.sh` | Close an issue as fixed or duplicate, with required evidence, and log it |
+| `issue-route.sh` | Exactly one route label per actionable issue (`cloud-ready` or `needs-local:*`): route counts and unrouted/multi-routed issues, label bootstrap, and `set` with the local-work comment and a REST fallback |
 | `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid` |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
 | `validate.sh` | Run a validation command into a receipt outside the checkout; `check` says whether an independent, passing receipt for the exact current key can be reused |

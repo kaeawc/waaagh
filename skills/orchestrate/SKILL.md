@@ -202,6 +202,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `ops/` | `pr-merge.sh`, `issue-close.sh` | journal of each GitHub write (intent, attempt, state) and its raw output, so a lost answer is reconciled, never replayed |
 | `../validate/` | `validate.sh` | validation receipts and logs, keyed by `fingerprint.sh --key` (shared across repos; `ORCHESTRATE_VALIDATE_DIR`) |
 | `hygiene-actions.log`, `hygiene/` | hygiene bot | closes made; plans and ranked lanes |
+| `routes.tsv`, `route-actions.log` | you; `issue-route.sh` | the repo's route-label schema (optional); every route change and label created |
 | `briefs/`, `lane-rules.md` | you | filled role briefs; repository rules for every lane |
 | `lanes.tsv` | you | lanes: worktree, branch, issues, files, agent, status (last column; `done`, `merged`, `closed`, `abandoned` end a lane) |
 | `decisions.md` | you | owner-decision queue, one `- [ ] question — options — what it blocks` line each, `- [x]` once answered |
@@ -235,6 +236,11 @@ agent reports or a PR changes. Do not tick on a timer.
 4. **Plan.** When the lane plan is stale (no plan, most of its lanes consumed, or a burst of new
    issues), launch the hygiene bot. Between plans, `"$SCRIPTS/issues-ranked.sh" --skip-in-pr` is
    the cheap view of what is next.
+   **Routing** (campaigns with both local and cloud lanes; `routing.md`): every actionable issue
+   carries exactly one route label, `cloud-ready` or `needs-local:<type>`.
+   `"$SCRIPTS/issue-route.sh" status` shows the counts; any `unrouted` or `multi` issue → launch
+   the router (`roles/router.md`). Cloud dispatch takes only `cloud-ready` and local lanes only
+   `needs-local:*` (`issues-ranked.sh --route …`).
 5. **Verify.** `verification_due=yes` and the repository has a verification skill → launch one
    verification batch over everything merged since the last one. Sooner when a risky change lands.
    No verification skill: skip this phase and say so once.
@@ -273,6 +279,7 @@ the cap; say so in the status.
 | Merge bot | a PR is ready, or blocked only by failures in fast mode | `pr-ready.sh`, `pr-merge.sh`, `main-health.sh` |
 | Rebase bot | a PR conflicts, or is stale against files main changed | `pr-ready.sh --no-threads` |
 | Hygiene bot | the plan is stale | `issues-ranked.sh`, `issue-candidates.sh`, `issue-close.sh` |
+| Router | `issue-route.sh status` shows unrouted or multi-routed issues | `issue-route.sh` (`routing.md`) |
 | Verification | about every 16 merged PRs | the repo's verification skill, `device-lock.sh`, `campaign.sh verified` |
 
 One instance of each at a time. The hygiene bot may label, link, and close an issue as a duplicate
