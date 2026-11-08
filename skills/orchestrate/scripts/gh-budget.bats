@@ -203,16 +203,62 @@ count() { grep -c -- "$1" "$FX/calls" 2>/dev/null || true; }
   [ "${lines[0]}" = "$SCRIPTS/gh-shim" ]; [ "${lines[1]}" = 1 ]
 }
 
-@test "every script that calls GitHub declares its budget priority" {
-  missing=""
-  for f in "$SCRIPTS"/*.sh; do
-    case "${f##*/}" in _lib.sh | gh-read.sh | gh-budget.sh | bench.sh) continue ;; esac
-    grep -vE '^[[:space:]]*#' "$f" | grep -cE '(^|[^-a-z_])gh (api|pr|issue|run|repo|label|search|release|workflow)|gh-read\.sh|orch_read_retry|orch_repo|orch_author|orch_default_branch' >/dev/null || continue
-    grep -qE '^[[:space:]]*(if declare -F orch_gh_priority >/dev/null; then )?orch_gh_priority (high|normal|low)(; fi)?$' "$f" || missing="$missing ${f##*/}"
+# No script is skipped by name (#182). A sourced library says "Source, do not execute" in its header
+# (the convention cli-contract.bats reads, #181); any other script that calls GitHub without a
+# priority of its own carries "# gh-budget: exempt (REASON)" in its header. A marker with no reason,
+# outside the header, or on a script that makes no GitHub call is reported, so an exemption cannot
+# outlive its cause unnoticed. priority_lint DIR prints one problem per line; silence is a pass.
+calls_github() {
+  grep -vE '^[[:space:]]*#' "$1" | grep -cE '(^|[^-a-z_])gh (api|pr|issue|run|repo|label|search|release|workflow)|gh-read\.sh|orch_read_retry|orch_repo|orch_author|orch_default_branch' >/dev/null
+}
+script_header() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$1"; }
+priority_lint() {
+  local f h
+  for f in "$1"/*.sh; do
+    h=$(script_header "$f")
+    [[ "$h" == *"Source, do not execute"* ]] && continue
+    if grep -qE '^[[:space:]]*#.*gh-budget: exempt' "$f"; then
+      grep -qE '^# gh-budget: exempt \([^)]*[^)[:space:]][^)]*\)$' <<<"$h" ||
+        echo "${f##*/}: gh-budget exemption needs a reason, in the header: # gh-budget: exempt (REASON)"
+      calls_github "$f" || echo "${f##*/}: gh-budget exemption is stale: the script makes no GitHub call"
+      continue
+    fi
+    calls_github "$f" || continue
+    grep -qE '^[[:space:]]*(if declare -F orch_gh_priority >/dev/null; then )?orch_gh_priority (high|normal|low)(; fi)?$' "$f" ||
+      echo "${f##*/}: calls GitHub with no orch_gh_priority and no '# gh-budget: exempt (REASON)' header line"
   done
-  [ -z "$missing" ] || { echo "no orch_gh_priority in:$missing"; false; }
+}
+
+@test "every script that calls GitHub declares its budget priority" {
+  run priority_lint "$SCRIPTS"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -qx 'orch_gh_priority high' "$SCRIPTS/pr-merge.sh"
   grep -qx 'orch_gh_priority high' "$SCRIPTS/main-health.sh"
+  # The two ways out are read from the scripts themselves, not from a list here.
+  [[ "$(script_header "$SCRIPTS/_lib.sh")" == *"Source, do not execute"* ]]
+  [[ "$(script_header "$SCRIPTS/gh-budget.sh")" == *"# gh-budget: exempt ("* ]]
+}
+
+@test "priority lint: exemptions need a reason in the header and a GitHub call to excuse" {
+  d="$BATS_TEST_TMPDIR/lint"; mkdir -p "$d"
+  printf '#!/usr/bin/env bash\n# A library. Source, do not execute.\nf() { gh api user; }\n' >"$d/_lib.sh"
+  printf '#!/usr/bin/env bash\n# Tool.\n# gh-budget: exempt (it is the pacer)\ngh api rate_limit\n' >"$d/ok-exempt.sh"
+  printf '#!/usr/bin/env bash\n# Tool.\norch_gh_priority low\ngh api x\n' >"$d/ok-priority.sh"
+  printf '#!/usr/bin/env bash\n# Tool.\necho no github here\n' >"$d/ok-offline.sh"
+  printf '#!/usr/bin/env bash\n# Tool.\ngh pr view 1\n' >"$d/no-priority.sh"
+  printf '#!/usr/bin/env bash\n# Tool.\n# gh-budget: exempt\ngh api x\n' >"$d/no-reason.sh"
+  printf '#!/usr/bin/env bash\n# Tool.\n# gh-budget: exempt ( )\ngh api x\n' >"$d/blank-reason.sh"
+  printf '#!/usr/bin/env bash\n# Tool.\nset -e\n# gh-budget: exempt (below the header)\ngh api x\n' >"$d/not-header.sh"
+  printf '#!/usr/bin/env bash\n# Tool.\n# gh-budget: exempt (used to call gh)\necho offline now\n' >"$d/stale.sh"
+  run priority_lint "$d"
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 5 ]
+  [[ "$output" == *"no-priority.sh: calls GitHub with no orch_gh_priority"* ]]
+  [[ "$output" == *"no-reason.sh: gh-budget exemption needs a reason"* ]]
+  [[ "$output" == *"blank-reason.sh: gh-budget exemption needs a reason"* ]]
+  [[ "$output" == *"not-header.sh: gh-budget exemption needs a reason"* ]]
+  [[ "$output" == *"stale.sh: gh-budget exemption is stale"* ]]
+  [[ "$output" != *ok-* ]]; [[ "$output" != *_lib.sh* ]]
 }
 
 @test "scripts avoid gh commands that make hidden extra requests (run list, run watch, workflow list/view)" {

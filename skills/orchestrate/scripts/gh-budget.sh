@@ -24,12 +24,13 @@
 #   With no headroom it logs "gh-budget: exhausted resource=<r> retry-at=<iso>".
 # An unreadable /rate_limit fails open: the call runs unpaced ("gh-budget: unpaced ...").
 # Governs local callers only: cloud sessions use their own GitHub auth and budget.
+# gh-budget: exempt (the pacer itself: callers pass their priority; its own read, /rate_limit, is free)
 # Exit: gh's own status | 75 out of budget, or the endpoint is backing off | 2 usage
 # Env: ORCHESTRATE_STATE_DIR (state root; state in <root>/gh-budget), GH_BUDGET_TTL (cache seconds,
 #   20), GH_BUDGET_FAKE_SLEEP=1 (tests: waits logged as "gh-budget: wait <s>"), ORCHESTRATE_NOW.
 set -euo pipefail
 
-usage() { sed -n '2,29p' "$0"; }
+usage() { sed -n '2,30p' "$0"; }
 cmd=${1:-}
 case "$cmd" in
   -h | --help) usage; exit 0 ;;
