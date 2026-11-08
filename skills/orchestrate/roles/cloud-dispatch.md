@@ -26,6 +26,9 @@ issue then gets a local route for that remainder (`issue-route.sh set`), never a
 - `ENV`: the cloud environment id (`env_…`) the sessions run in, and `SOURCE`: the repository URL
   (or one `session_context.sources` entry as JSON). `MODEL` if the owner named one.
 - `GATES`: the repository's gate commands, as one short line for the brief.
+- **The standard briefs, in the repository** (the default once installed; see "Briefs in the
+  repository" below): `cloud-dispatch.sh briefs check --remote` must pass before you dispatch with
+  `--brief-ref`. Until it does, dispatch with the rendered brief (no `--brief-ref`).
 
 ## Steps
 
@@ -46,6 +49,9 @@ issue then gets a local route for that remainder (`issue-route.sh set`), never a
       brief then says "commit the fixtures from <url> verbatim". Exit 5: they are missing — `queue
       drop N` and route it back to the local lane; never dispatch it to invent them. Exit 7: the
       issue could not be read; leave it for the next batch.
+      With `--brief-ref implement` the message is one line, `Follow .claude/briefs/implement.md
+      for issue #N (branch work/N-auto).`, plus ` Fixtures: <url>... (commit verbatim).` when the
+      fixtures check names any; the session reads the brief from its own checkout.
       Map its fields onto the `RemoteTrigger create` call; if the tool's schema places a field
       elsewhere, follow the tool.
    3. `RemoteTrigger create`. On HTTP 429 ("Try again in Ns"): `cloud-dispatch.sh backoff
@@ -61,13 +67,38 @@ issue then gets a local route for that remainder (`issue-route.sh set`), never a
   it right after `run`.
 - **Creation is rate limited** at about 10 per minute; a burst of 5 can already return 429. Keep
   batches of 3 to 5 with staggered `run_once_at`, and back off on every 429.
-- **Echo cost.** Every create response repeats the whole brief about three times (3–4k tokens), so
-  50 dispatches cost about 150k tokens of orchestrator context. Keep the brief short (the template
-  is under 1500 characters; `cloud-dispatch.bats` holds it there), do not paste the response
-  anywhere, and record only the trigger id.
+- **Echo cost.** Every create response repeats the prompt about four times (derived_state,
+  job_config, session_request, events): a 900-character brief costs about 3k tokens of orchestrator
+  context per dispatch, a one-line `--brief-ref` prompt about 100. So dispatch with `--brief-ref`
+  once the briefs are in the repository; otherwise keep the brief short (the template is under 1500
+  characters; `cloud-dispatch.bats` holds it there). Never paste a response anywhere and keep only
+  the trigger id: a response that reaches you as text or a file (an API call rather than the tool)
+  goes through `cloud-dispatch.sh created --issue N`, which prints `created <trigger> <run_at>`,
+  records it and drops the echoed prompt.
 - **Finished routines pile up** at claude.ai/code/routines and the tool cannot delete them. Tell the
   owner once, at the end of the campaign, how many were created (`status` → `dispatched`) so they
   can clear them.
+
+## Briefs in the repository
+
+The standard implement and repair briefs live in the target repository as
+`.claude/briefs/implement.md` and `.claude/briefs/repair.md`, so a brief change lands as a reviewed,
+versioned PR and stops drifting between ticks (a repository knob such as a test wall-clock timeout
+goes into the file once, not into every prompt by hand). waaagh's templates (`../briefs/`, first
+line `<!-- waaagh-brief <kind> v<V> -->`) are the default:
+
+1. `cloud-dispatch.sh briefs install --dir <checkout> --base <base> --gates "GATES"` writes both
+   with the repository, base and gates filled (the per-issue values stay in the one-line prompt);
+   it never overwrites a different file without `--force`. Commit them on a branch and merge them
+   by PR like any change; edit them later only by PR.
+2. `cloud-dispatch.sh briefs check --remote` reads them from the base branch: `ok`, `custom` (no
+   version line: the repository wrote its own; kept), `outdated` (waaagh's template is newer:
+   re-install, review the diff, PR) or `missing`. Exit 6 on missing or outdated: dispatch the
+   rendered brief instead until it passes.
+3. Dispatch with `payload --brief-ref implement`. To send a cloud session back to its own red or
+   reviewed PR: `payload --issue N --pr P --brief-ref repair` (`Follow .claude/briefs/repair.md for
+   PR #P (issue #N, branch work/N-auto).`), then `record --kind repair`; a repair is never refused
+   as a second dispatch and never counts as one.
 
 ## Results come back only through PRs
 

@@ -133,6 +133,10 @@ review on every poll or push.
   first, stop all monitors before finishing, report in N lines. A lane whose issue closed elsewhere
   gets a stop message; one that holds nothing but noise (no answer, or its only notifications come
   from stale monitors it armed) gets `TaskStop`, never a resume.
+- **Lane drivers wait once and own their devices** (`subagent-hygiene.md`, "Lane drivers"). A
+  backgrounded gate gets one blocking wait, never a repeating monitor; a driver is not resumed on
+  a monitor expiry alone. Before any `adb` or `simctl` command a driver runs `device-lock.sh
+  check` against the serial or UDID its claim recorded. Check `blocked by` links before dispatch.
 - With many lanes the host saturates and whole-suite gates hit their wall caps. Lanes run targeted
   suites; CI's clean runners carry the full suite. Say so in the PR.
 
@@ -486,6 +490,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   `transient`, `malformed`), and one rate-limit cooldown shared by every lane on the host. A
   `rate-limited` result past the pass budget means: stop GitHub work until `retry-at`, do not
   retry in a loop. It never runs a write; writes are journaled and reconciled (`ops/`).
+- Pace the API budget across every local caller (`skills/orchestrate/gh-budget.md`): run loops with
+  `ORCHESTRATE_GH_BUDGET=1` so all `gh` calls go through `gh-budget.sh` by priority; a `budget`
+  result (exit 9, or 75 from the pacer) means skip the pass until `retry-at`. Take one
+  `gh-snapshot.sh` per pass instead of per-PR reads, and keep `gh run list` out of loops.
 - A classifier that reads only PR workflows misses push and default-branch runs; feed it both.
 - On slow platforms, setup and hook timeouts often surface as unnamed or anonymous failures:
   triage them as timeout headroom, not regression.
@@ -512,7 +520,8 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
 ## PR lifecycle
 
 1. **Open a ready PR** once implementation and required pre-PR validation pass, unless the user
-   asked for a draft.
+   asked for a draft. Missing device evidence is no reason for a draft: open ready once the
+   CI-verifiable work is complete and list the missing evidence in the body (drafts skip bot review).
 2. **Feedback snapshot.** A complete, current snapshot across paginated conversation comments,
    reviews, inline comments and review threads (use `github-pr-feedback` if present). Triage the
    actionable items together.
@@ -594,7 +603,8 @@ the main session (subagents lack `RemoteTrigger`) creates one run-once routine p
 recorded through `"$SCRIPTS/cloud-dispatch.sh"`: `roles/cloud-dispatch.md`. Results come back only
 as PRs and issue comments, which the triage loop reads. A cloud-ready follow-up split from local
 work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
-`device-cloud-handoff.md`.
+`device-cloud-handoff.md`. The standard implement and repair briefs live in the target repository
+(`.claude/briefs/`, installed from `briefs/`, changed by PR), so each dispatched prompt is one line.
 
 ## Final report
 

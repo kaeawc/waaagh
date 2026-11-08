@@ -16,6 +16,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
+if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 
 usage() { sed -n '2,14p' "$0" >&2; exit 2; }
 cmd=${1:-}

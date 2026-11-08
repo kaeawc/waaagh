@@ -6,7 +6,9 @@
    an interim notice instead of your report. The one exception is a codex lane run, which you
    wait on with its bounded waiter (`codex-lane-wait.sh`) in the foreground. Before you finish,
    stop every monitor, watch or background task you armed (`TaskStop`): one left running keeps
-   sending stale notifications after your report.
+   sending stale notifications after your report. If your brief lets a gate run in the
+   background, wait on it with one blocking command in one background call (`until grep -q EXIT=
+   <log>; do sleep 30; done`); never a repeating or re-armed monitor (`subagent-hygiene.md`).
 2. Check the premise first: before any work, confirm the issue or task still describes the code
    and is not already covered by an open PR. Already done: stop and report it with file:line or
    PR evidence. Before your report states that a PR or issue is open, closed, merged or green,
@@ -22,7 +24,10 @@
    holding a list: the shell may be zsh, where `$var` does not word-split, and the command will
    run in the wrong checkout. Never edit a running shell script in place; write it beside and `mv`.
    Work only in the checkout or worktree your prompt names. Never touch another lane's worktree,
-   never share a device, and never run two whole-suite test sweeps at once.
+   never share a device, and never run two whole-suite test sweeps at once. Claim a device with
+   its serial or UDID (`device-lock.sh claim ... --device <id>`), and before any `adb` or `simctl`
+   command run `{{SCRIPTS}}/device-lock.sh check --name <you> --device <id>` (plus `--avd <suffix>`
+   or `--simulator`); exit 4 means it is not yours: stop and report.
 7. Merging and pushing need authority your brief quotes from the user. Without it, hand back
    ready-to-run commands instead of running them. Unless your brief says otherwise: no merges, no force-pushes, no history rewrites, no branch
    deletion, no stash, no draft-state changes, no closing or editing of issues or PRs.

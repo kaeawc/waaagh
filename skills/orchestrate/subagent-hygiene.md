@@ -54,3 +54,36 @@ Pick the cheapest model that has done the role well; always pass `model` explici
 
 A Haiku lane that fails its spec once is relaunched on Sonnet, as a stated decision; it is not
 resumed. Implementation itself stays with the codex implementers (`SKILL.md`, "Codex implements").
+
+## Lane drivers
+
+Local lane drivers (often Haiku) that wait on slow gates and drive devices need four more rules.
+Lane briefs and role templates state them; `roles/_common.md` rules 1 and 6 carry the first two.
+
+1. **One blocking wait per gate.** A driver runs its gate inline. When the gate must run in the
+   background (a pre-push hook, a long build), the driver waits on it with ONE background command
+   that blocks until the gate exits, in a single `run_in_background` call:
+   `until grep -q EXIT= <log>; do sleep 30; done` (the gate's wrapper writes `EXIT=<code>` last).
+   Never arm a repeating monitor, or a short monitor that is re-armed when it expires: each expiry
+   wakes the driver and sends the orchestrator a "stale expiry, nothing new" report. One lane
+   waiting on one slow pre-push gate sent about 30 of them, roughly 1k tokens each, with no
+   information. A stopped driver is not resumed on a monitor expiry alone; the orchestrator
+   treats such a notification as noise (the "Stopping lanes" table above) and waits for the
+   gate's own exit.
+2. **Confirm device ownership before acting.** The device lock records the lane's devices:
+   `device-lock.sh claim --name <lane> --device <serial or UDID>` (a simulator the lane creates
+   after the claim is added with `record --token <T> --device <UDID>`). Before any `adb` or
+   `simctl` command the driver runs `device-lock.sh check --name <lane> --device <id>`, with
+   `--avd <lane AVD suffix>` for an emulator (`adb -s <serial> emu avd name` must end with it) or
+   `--simulator` for a simulator; exit 4 means the device is not the lane's: stop and report. One
+   lane ran `cmd lock_settings` against another lane's car emulator and set and cleared a PIN
+   there. A host whose lanes each own a device gives each device its own lock file, named in the
+   brief.
+3. **Open PRs ready for review.** Once the CI-verifiable work is complete, the PR opens ready for
+   review, and its body lists the device evidence still missing (what to exercise, on which
+   platform). A draft opened while device evidence is pending skips bot review (CodeRabbit does
+   not review drafts), so findings arrive late.
+4. **Check blockers before dispatch.** Before launching a lane, read the issue's `blocked by`
+   links (`gh-read.sh -- api repos/<owner>/<repo>/issues/<n>/dependencies/blocked_by`) and any
+   "blocked by #N" in its body. An open blocker: do not dispatch; route the blocker first or
+   wait. Two lanes spent a launch only to stop on an open blocker.

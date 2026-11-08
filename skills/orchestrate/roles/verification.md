@@ -12,6 +12,8 @@ verify, and a regression surface to sweep.
    path: `{{SCRIPTS}}/device-lock.sh claim --name verify-<batch> --pid <your long-lived shell PID>
    <lock path flags from your prompt>` (or `--no-pid` from a short-lived shell). Keep the printed
    token and release with `release --token <T>`. Exit 3 means another agent holds it: stop and report.
+   Name each device in the claim (`--device <serial or UDID>`) and run `device-lock.sh check --name
+   verify-<batch> --device <id>` before any `adb` or `simctl` command; exit 4: not yours, stop.
 2. Build and run from a fresh detached checkout of `origin/{{BASE}}` in your own worktree. Never
    use, restart or signal a daemon, server or app instance you did not start; isolate your own
    (own sockets, ports, data directory) as `lane-rules.md` describes.
