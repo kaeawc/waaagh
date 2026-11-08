@@ -45,6 +45,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `pr-merge.sh` | Merge one PR after re-checking head, author, draft and fork state; honours the red-main hold; `--admin` only in the fast path and only with evidence |
 | `merge-queue.sh` | Serial local merge queue (`add`, `run-once`, `status`, `retry`): merge base in, run the check command, hand off to `pr-merge.sh`; records a per-item outcome and only `merged` satisfies dependents |
 | `merge-sensitive.sh` | Which merge-sensitive paths a PR touches, and whether it may merge: its head contains the base, or a merge-result check passes on base + head |
+| `review-gate.sh` | The owner's bot-review policy (off, review-at-head, reviewed-once, green-only) enforced by `pr-merge.sh`; review-bot quota outages detected and asked once; unreviewed-merges ledger; one review request per bot per window across all PRs, gating PRs first |
 | `main-health.sh` | Sets or clears the merge hold from the default branch's newest completed runs |
 | `triage-tick.sh` | One-call snapshot for a recurring triage tick (main health and classifier verdict, open PRs, merge-loop liveness, dispatch queue, free device slots, cron expiry, answered review threads to resolve now) with one verdict line; one known-flake rerun per run, merge-loop heartbeat |
 | `campaign.sh` | Campaign ledger: merge mode, lane cap, merged-since-verification, pause label |
@@ -74,7 +75,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
 | `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue), the standard implement/repair briefs kept in the target repo (`briefs install`/`check`, templates in `skills/orchestrate/briefs/`), one-line `--brief-ref` prompts, and `created` to keep only the trigger id from a create response |
-| `review-gate.sh` | The owner's bot-review policy (off, review-at-head, reviewed-once, green-only) enforced by `pr-merge.sh`; review-bot quota outages detected and asked once; unreviewed-merges ledger; one review request per bot per window across all PRs, gating PRs first |
+| `open-blockers.sh` | One blocker check before any lane or cloud dispatch: native `blocked by` links plus "Blocked by #N" body lines, each blocker's state looked up; `<n> BLOCKED by #a #b` or `<n> clear` (exit 3 blocked, 4 unreadable); `issues-ranked.sh --drop-blocked` drops blocked candidates and ranks routable blockers in their place |
 
 ## Defaults
 
