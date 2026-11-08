@@ -214,8 +214,9 @@ done_() { [ -z "$FAILS" ] || { echo "mismatches:$FAILS"; return 1; }; }
 
 @test "the stdin contract: no arguments, non-Bash tools, empty commands, unreadable payloads" {
   run "$SCRIPTS/lane-safety.sh" extra <<<"$(payload 'rm -rf ~' "$MAIN")"
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"no arguments"* ]]
+  [[ "$output" == *"Usage: lane-safety.sh"* ]]
   [[ "$output" != *permissionDecision* ]]
   # With no argument (or an empty one) the payload is read from stdin.
   run "$SCRIPTS/lane-safety.sh" <<<"$(payload 'rm -rf ~' "$MAIN")"

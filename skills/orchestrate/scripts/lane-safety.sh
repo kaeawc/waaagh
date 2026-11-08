@@ -16,13 +16,16 @@
 #   (output to /dev/null), even when its path looks safe.
 # Output: nothing (allow; the normal permission flow continues) or one hookSpecificOutput JSON
 #   object with permissionDecision deny|ask and the reason. WAAAGH_LANE_SAFETY=off disables it.
-# Exit: 0 decided (or not a Bash call); 1 cannot run (no jq, unreadable payload; non-blocking).
+# Exit: 0 decided (or not a Bash call); 1 cannot run (no jq, unreadable payload; non-blocking);
+#   2 bad usage: any argument but -h (the hook takes none; exit 2 blocks the call, so a mis-wired
+#   hook is loud rather than silently off).
 set -euo pipefail
 
 case "${1:-}" in
-  -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+  -h | --help) sed -n '2,21p' "$0"; exit 0 ;;
   "") ;;
-  *) echo "lane-safety.sh: reads a hook payload on stdin; no arguments" >&2; exit 1 ;;
+  *) echo "lane-safety.sh: reads a hook payload on stdin; no arguments" >&2
+    echo "Usage: lane-safety.sh < payload.json" >&2; exit 2 ;;
 esac
 [[ "${WAAAGH_LANE_SAFETY:-on}" != off ]] || exit 0
 command -v jq >/dev/null 2>&1 || { echo "lane-safety.sh: jq not found; lane safety not enforced" >&2; exit 1; }
