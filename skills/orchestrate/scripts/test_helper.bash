@@ -40,7 +40,7 @@ export GH_READ_FAKE_SLEEP=1 GH_READ_JITTER=0
 unset ORCHESTRATE_GH_BUDGET GH_BUDGET_ACTIVE
 # No suite reaches githubstatus.com (gh-status.sh): an unreadable fixture unless a test writes it,
 # and pr-merge.sh outage waits are logged ("pr-merge: wait <s>"), not slept.
-export GITHUB_STATUS_URL="file://$BATS_TEST_TMPDIR/githubstatus.json" ORCHESTRATE_MERGE_FAKE_SLEEP=1
+export GITHUB_STATUS_URL="file://${BATS_TEST_TMPDIR:-$BATS_FILE_TMPDIR}/githubstatus.json" ORCHESTRATE_MERGE_FAKE_SLEEP=1
 # A bare origin (branch main) and a clone of it, seed, with one pushed commit (f.txt "base"): built
 # once in setup_file by seed_origin_template, copied into each test's $BATS_TEST_TMPDIR by
 # seed_origin_copy, instead of git init, commit and push in every test (#112).
