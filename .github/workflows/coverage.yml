@@ -1,0 +1,53 @@
+name: Coverage
+
+# Line coverage of the scripts (dev/coverage.sh, bashcov). A run takes about 5 minutes, so it runs on
+# pushes to main and by hand, never on pull requests: the PR check stays fast. It fails when a
+# script drops below its floor in dev/coverage-floor.tsv or a script has no row there.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to main supersedes a coverage run still in flight.
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # bats from its pinned release (commit checked), as in test.yml.
+      - name: Install bats
+        run: |
+          git clone -q --depth 1 --branch v1.13.0 https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats"
+          test "$(git -C "$RUNNER_TEMP/bats" rev-parse HEAD)" = 3bca150ec86275d6d9d5a4fd7d48ab8b6c6f3d87
+          sudo "$RUNNER_TEMP/bats/install.sh" /usr/local >/dev/null
+          bats --version
+      # The runner's preinstalled Ruby; bashcov pulls in simplecov.
+      - name: Install bashcov
+        run: |
+          gem install --user-install --no-document bashcov -v 4.0.2
+          echo "$(ruby -e 'print Gem.user_dir')/bin" >>"$GITHUB_PATH"
+      - name: Hostile git config (the suites must not depend on it)
+        run: |
+          git config --global commit.gpgsign true
+          git config --global gpg.program false
+      - name: Coverage (every suite under bashcov)
+        run: dev/coverage.sh
+      - name: Coverage floors
+        if: ${{ !cancelled() && hashFiles('coverage/.resultset.json') != '' }}
+        run: dev/coverage.sh --check dev/coverage-floor.tsv
+      - name: Upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          include-hidden-files: true
+          if-no-files-found: warn
