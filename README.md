@@ -48,6 +48,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `main-health.sh` | Sets or clears the merge hold from the default branch's newest completed runs |
 | `triage-tick.sh` | One-call snapshot for a recurring triage tick (main health and classifier verdict, open PRs, merge-loop liveness, dispatch queue, free device slots, cron expiry, answered review threads to resolve now) with one verdict line; one known-flake rerun per run, merge-loop heartbeat |
 | `campaign.sh` | Campaign ledger: merge mode, lane cap, merged-since-verification, pause label |
+| `counters.sh` | Cumulative campaign counters in the ledger (merged, dispatched, closed, owner blockers; today and campaign total) for the tick report (`skills/orchestrate/reporting.md`) |
 | `learning.sh` | Campaign learnings: one file per owner rule or procedural fix, an index in the ledger, `brief --role` for briefs, consolidation (`supersede`, `retire`) and `upstream` of repo-agnostic ones as waaagh issues (`skills/orchestrate/learnings.md`) |
 | `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first; `--route` filters to one route for cloud or local dispatch |
 | `issue-candidates.sh` | Leads for already-fixed issues and duplicate titles; `sweep` sorts `needs-local:*` issues into A (closeable), B (fix merged, device check left), C (needs implementation) and D (unclear) |
@@ -72,6 +73,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `usage-report.sh` | Codex usage per model and verified lane status, from per-run receipts (`bin/codex-lane-usage.sh`) |
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
+| `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, and create pacing with 429 backoff |
 
 ## Defaults
 
