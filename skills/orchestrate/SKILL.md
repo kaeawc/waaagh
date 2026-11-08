@@ -273,7 +273,9 @@ agent reports or a PR changes. Do not tick on a timer.
    branch `work/<issue>-<slug>`, whoever drives the lane. Nothing may select PRs by that name:
    the merge bot selects by author and readiness and excludes by labels, and `pr-ready.sh` reports
    any otherwise-ready PR an exclusion hid as `ready-but-skipped=<n>`.
-7. **Report** only what changed: merged, opened, blocked, decisions queued.
+7. **Report** only what changed, in the fixed order of `reporting.md`: main health, merges,
+   dispatches, closes, owner blockers, then the cumulative counts from
+   `"$SCRIPTS/counters.sh" show` (bump them as events happen), never from recall.
 
 Findings feed back: verification and review findings become issues, and the next plan ranks them.
 
@@ -459,6 +461,9 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   opted in. Report "usage limit" and "401 / sign in again" separately, with the exact text: one
   needs time or a plan change, the other a login.
 - **Claude-driven device verification** needs the user's go-ahead for each batch.
+- **Owner-only blockers** (signing, notarization, a device approval, a console registration, a
+  secret): surface each as it appears, as "action — where — exact names" (`reporting.md`), not
+  batched until the end; keep the lanes that do not need it running.
 - **Backlog drained.** No ranked, actionable, unblocked work is left. Report and stop; do not
   invent work or launch bug hunters unasked.
 
@@ -520,6 +525,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
    the first review round become follow-up issues, are answered `follow-up #N` and resolved, so
    they never block the merge line (`scripts/review-followup.sh`; the PR doctor's later-round
    step). `scripts/thread-resolve.sh` replies on and resolves any one thread.
+   **Only the local orchestrator resolves threads** (`thread-resolution.md`): cloud sessions
+   cannot, so cloud briefs say reply on each thread and do not resolve; after each repair,
+   `scripts/thread-sweep.sh resolve` settles threads whose last reply links an issue or names a
+   pushed fix.
 6. **Merge** per the policy table, through `pr-merge.sh`.
 
 ## PR watch and takeover (the user's own PRs only)

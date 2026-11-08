@@ -18,9 +18,15 @@
 #                  --exclude-label, default "blocked") with no open PR closing them and no active lane
 #       slots <type>=<busy>/<n>,... | slots none
 #       cron <none|age=<h>h expires_in=<h>h>
+#       threads none | threads unknown
+#             | threads unresolved=<n> answered=<n> resolve-now=#a,...|- repair=#b,...|-
+#                  review threads on open PRs (thread-sweep.sh scan --summary): resolve-now PRs have
+#                  every unresolved thread answered (an issue link or a pushed fix in the last reply)
 #     Reasons: main-red, flake-rerun, rerun-pending, main-unknown, merge-loop-<state> (only while PRs
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
-#     cron-expiring (under 24h left). A part that could not be read says "unknown"; never a guess.
+#     cron-expiring (under 24h left), resolve-now=<n> (PRs whose threads only need resolving: the
+#     local orchestrator resolves them, they are not repair targets). A part that could not be read
+#     says "unknown"; never a guess.
 #     Device slots: an active lanes.tsv row whose agent column reads "<type>:<agent>" holds one
 #     <type> slot. Types and sizes: --device-slots or ORCHESTRATE_DEVICE_SLOTS (e.g.
 #     android=2,ios=2,xcode=2). A rerun that is still running holds merges (MAIN_RED is rewritten),
@@ -44,7 +50,7 @@ source "$here/_lib.sh"
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 
-usage() { sed -n '2,39p' "$0"; }
+usage() { sed -n '2,45p' "$0"; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 case "$cmd" in -h | --help) usage; exit 0 ;; esac
@@ -255,6 +261,18 @@ if [[ -f "$cronf" ]] && c=$(sed -n 1p "$cronf") && [[ "$c" =~ ^[0-9]+$ ]]; then
   ((left >= 86400)) || reasons+=("cron-expiring")
 fi
 
+# Review threads on open PRs: all answered means resolve now, not a repair target (#70).
+threads="threads unknown"
+if [[ "$open" == 0 ]]; then
+  threads="threads none"
+elif [[ "$open" != unknown ]]; then
+  t=$("$here/thread-sweep.sh" scan --summary --repo "$repo" 2>/dev/null) || true
+  t=$(printf '%s\n' "$t" | sed -n '$p')
+  [[ "$t" != "threads unresolved="* ]] || threads=$t
+fi
+rn=$(sed -n 's/.* resolve-now=\([^ ]*\).*/\1/p' <<<"$threads")
+if [[ -n "$rn" && "$rn" != - ]]; then reasons+=("resolve-now=$(tr ',' '\n' <<<"$rn" | awk 'END { print NR }')"); fi
+
 if ((${#reasons[@]})); then echo "verdict act $(IFS=,; echo "${reasons[*]}")"; else echo "verdict ok"; fi
 echo "$main_line"
 echo "prs open=$open"
@@ -262,3 +280,4 @@ echo "merge_loop $loop$loop_extra $last"
 echo "dispatch $dispatch next=$next"
 echo "slots $slots"
 echo "cron $cron"
+echo "$threads"

@@ -46,14 +46,16 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `merge-queue.sh` | Serial local merge queue (`add`, `run-once`, `status`, `retry`): merge base in, run the check command, hand off to `pr-merge.sh`; records a per-item outcome and only `merged` satisfies dependents |
 | `merge-sensitive.sh` | Which merge-sensitive paths a PR touches, and whether it may merge: its head contains the base, or a merge-result check passes on base + head |
 | `main-health.sh` | Sets or clears the merge hold from the default branch's newest completed runs |
-| `triage-tick.sh` | One-call snapshot for a recurring triage tick (main health and classifier verdict, open PRs, merge-loop liveness, dispatch queue, free device slots, cron expiry) with one verdict line; one known-flake rerun per run, merge-loop heartbeat |
+| `triage-tick.sh` | One-call snapshot for a recurring triage tick (main health and classifier verdict, open PRs, merge-loop liveness, dispatch queue, free device slots, cron expiry, answered review threads to resolve now) with one verdict line; one known-flake rerun per run, merge-loop heartbeat |
 | `campaign.sh` | Campaign ledger: merge mode, lane cap, merged-since-verification, pause label |
+| `counters.sh` | Cumulative campaign counters in the ledger (merged, dispatched, closed, owner blockers; today and campaign total) for the tick report (`skills/orchestrate/reporting.md`) |
 | `learning.sh` | Campaign learnings: one file per owner rule or procedural fix, an index in the ledger, `brief --role` for briefs, consolidation (`supersede`, `retire`) and `upstream` of repo-agnostic ones as waaagh issues (`skills/orchestrate/learnings.md`) |
 | `issues-ranked.sh` | Open issues updated recently, priority labels and bugs first; `--route` filters to one route for cloud or local dispatch |
 | `issue-candidates.sh` | Leads for already-fixed issues and duplicate titles; `sweep` sorts `needs-local:*` issues into A (closeable), B (fix merged, device check left), C (needs implementation) and D (unclear) |
 | `issue-close.sh` | Close an issue as fixed or duplicate, with required evidence, and log it |
 | `review-followup.sh` | One review round per PR: classify unresolved review threads as first-round, later-round or the author's; file a later-round thread as a follow-up issue (or append it to one with the same root cause), reply `follow-up #N`, resolve it and route the issue `cloud-ready` |
 | `thread-resolve.sh` | Reply once (marker-keyed) on one review thread and resolve it, with readback and typed exits |
+| `thread-sweep.sh` | Find review threads whose last reply links an issue or names a pushed fix (resolve-now vs repair per PR) and resolve them locally; cloud sessions reply but cannot resolve |
 | `issue-route.sh` | Exactly one route label per actionable issue (`cloud-ready` or `needs-local:*`): route counts and unrouted/multi-routed issues, label bootstrap, and `set` with the local-work comment and a REST fallback |
 | `device-lock.sh` | Exclusive lock for emulators, simulators and attached hardware; token release, PID-reuse detection, `--no-pid` |
 | `pr-intake.sh`, `pr-claim.sh` | Find and claim your own open PRs across sessions |
