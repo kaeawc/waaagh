@@ -30,3 +30,8 @@
    to evidence, decisions needed. No narration of the steps you took.
 11. Say whether each result is `verified-local` or `verified-ci`. Your report states what you did, what you skipped and why, and anything denied or surprising.
    An item you could not finish is reported as unfinished, not as done.
+12. If `{{STATE}}/learnings/INDEX.md` exists, run `{{SCRIPTS}}/learning.sh brief --role <role>` once
+   (`<role>` is your template's file name, e.g. `merge-bot`) and obey the entries it prints, like
+   `lane-rules.md`. Do not read the rest of the learnings store. A procedural failure you worked
+   around (a tool limit, a rate limit, a delivery gap) goes in your report as a proposed learning:
+   rule, why, how to apply; the orchestrator writes it (`learnings.md`).

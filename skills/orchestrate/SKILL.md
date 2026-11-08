@@ -208,6 +208,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `hygiene-actions.log`, `hygiene/` | hygiene bot | closes made; plans and ranked lanes |
 | `routes.tsv`, `route-actions.log` | you; `issue-route.sh` | the repo's route-label schema (optional); every route change and label created |
 | `briefs/`, `lane-rules.md` | you | filled role briefs; repository rules for every lane |
+| `learnings/` | `learning.sh` | one file per learning (rule, why, how to apply, date, source), `INDEX.md` (in `campaign.json` as `.learnings`), `history.log` of superseded rules (`learnings.md`) |
 | `lanes.tsv` | you | lanes: worktree, branch, issues, files, agent, status (last column; `done`, `merged`, `closed`, `abandoned` end a lane) |
 | `decisions.md`, `decisions.log` | you; `decision.sh` | owner-decision queue, one `- [ ] #N question — options — recommend: X — what it blocks` line each, `- [x]` once recorded on the issue; every recorded decision |
 | `verify/<batch>/` | verification | evidence and report per batch |
@@ -215,6 +216,13 @@ Everything a campaign must remember lives in one directory per repository:
 Per-PR checkpoints and claims stay under `~/.claude/orchestrate/prs/` (`pr-claim.sh path`). Do not
 keep campaign state in a worktree's scratch directory: the next session will not find it. Memory
 holds the repository's standing rules; the state directory holds the campaign's moving parts.
+
+**Learnings.** Write one with `learning.sh add` the moment the owner changes how work is routed,
+delegated or closed, or a failure turns out to need a procedural fix (a tool limit, a rate limit,
+a delivery gap). Learnings true of every repository go upstream as a waaagh issue; a periodic
+consolidation pass folds duplicates and drops superseded rules. Load
+`learning.sh brief --role orchestrator` at session start and after a compaction; briefs load only
+the index plus their role's entries. Rules: `learnings.md`.
 
 ## Campaign loop
 
