@@ -252,3 +252,17 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
   [ "$status" -eq 0 ]
   [[ "$output" == "# Bot-review gate:"* && "$output" == *"5 a write failed" ]]
 }
+
+@test "request without --bot: the first listed bot not out of quota; none asked when all are out" {
+  run rg request
+  [ "$status" -eq 2 ]
+  rg notice --author chatgpt-codex-connector <<<"You have reached your Codex usage limits" >/dev/null
+  run rg request --pr 7
+  [ "$status" -eq 0 ] && [ "$output" = "requested coderabbit pr=7 queued=0" ]
+  [ "$(grep -c '@codex' "$FX/writes" || true)" -eq 0 ]
+  ORCHESTRATE_REVIEW_BOTS=codex run rg request --pr 8
+  [ "$status" -eq 0 ] && [ "$output" = "out-of-quota all pr=8" ]
+  [ "$(wc -l <"$FX/writes" | tr -d ' ')" -eq 1 ]
+  run test -e "$STATE/review-queue/codex.tsv"
+  [ "$status" -ne 0 ]
+}

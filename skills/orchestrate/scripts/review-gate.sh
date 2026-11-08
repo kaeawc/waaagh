@@ -10,6 +10,7 @@
 #        review-gate.sh outage [ask [--waiting N] [--force] | clear --bot ID]
 #        review-gate.sh ledger [list|pending|requested --pr N | add --pr N --head SHA --note VIA]
 #        review-gate.sh request --bot ID [--pr N [--priority high|normal]] [--dry-run]
+#        review-gate.sh request --pr N [--priority high|normal] [--dry-run]
 #   Every command takes [--repo OWNER/REPO]. Bot ids (ORCHESTRATE_REVIEW_BOTS, default
 #   "codex coderabbit"): codex = chatgpt-codex-connector[bot], coderabbit = coderabbitai[bot].
 #   policy   print the review policy (default off), or set it and log the change to decisions.log.
@@ -39,6 +40,8 @@
 #            ORCHESTRATE_REVIEW_EVERY seconds (default 1200) across all PRs, and while the bot is
 #            out of quota one probe every ORCHESTRATE_REVIEW_PROBE_EVERY (default 3600).
 #            Prints "requested <id> pr=<n>", "throttled <id> next=<iso> queued=<n>" or "empty <id>".
+#            Without --bot: the first listed bot that is not out of quota (merge-queue.sh on exit 13);
+#            an out-of-quota bot is never asked, and when all are out: "out-of-quota all pr=<n>".
 # State (<state dir>): review-policy, review-exempt.tsv, reviewer-out-of-quota.tsv,
 #   unreviewed-merges.tsv, review-queue/<id>.tsv and <id>.last, review-requests.log; pr-snapshot/ read.
 # Exit: 0 ok | 2 usage | 3 check: a review is still needed | 4 a read failed | 5 a write failed
@@ -48,10 +51,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 
-usage() { sed -n '2,44p' "$0" >&2; exit 2; }
+usage() { sed -n '2,47p' "$0" >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
-  -h | --help) sed -n '2,44p' "$0"; exit 0 ;;
+  -h | --help) sed -n '2,47p' "$0"; exit 0 ;;
   -*) echo "review-gate.sh: unknown argument: $cmd" >&2; exit 2 ;;
 esac
 if [[ -n "$cmd" ]]; then shift; fi
@@ -70,7 +73,7 @@ while (($#)); do
     --force) force=yes; shift ;;
     --dry-run) dry=yes; shift ;;
     --list) list=yes; shift ;;
-    -h | --help) sed -n '2,44p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,47p' "$0"; exit 0 ;;
     -*) echo "review-gate.sh: unknown argument: $1" >&2; exit 2 ;;
     *) [[ -z "$sub" ]] || { echo "review-gate.sh: unexpected argument: $1" >&2; exit 2; }; sub=$1; shift ;;
   esac
@@ -321,8 +324,18 @@ cmd_ledger() {
   esac
 }
 
+out_of_quota() { [[ -f "$flags" ]] && awk -F'\t' -v b="$1" '$1 == b { f = 1 } END { exit !f }' "$flags"; }
+
 cmd_request() {
-  [[ -n "$bot" ]] || usage
+  if [[ -z "$bot" ]]; then
+    [[ -n "$pr" ]] || usage
+    local b
+    for b in $bots; do
+      known_bot "$b" && bot_login "$b" >/dev/null || continue
+      out_of_quota "$b" || { bot=$b; break; }
+    done
+    [[ -n "$bot" ]] || { echo "out-of-quota all pr=$pr"; return 0; }
+  fi
   known_bot "$bot" || { echo "review-gate.sh: unknown bot id '$bot' (ORCHESTRATE_REVIEW_BOTS: $bots)" >&2; exit 2; }
   mkdir -p "$qdir"
   local q="$qdir/$bot.tsv" last=0 every next top tpr n rc=0
@@ -334,7 +347,7 @@ cmd_request() {
   [[ -f "$qdir/$bot.last" ]] && last=$(cat "$qdir/$bot.last")
   [[ "$last" =~ ^[0-9]+$ ]] || last=0
   every=${ORCHESTRATE_REVIEW_EVERY:-1200}
-  if [[ -f "$flags" ]] && awk -F'\t' -v b="$bot" '$1 == b { f = 1 } END { exit !f }' "$flags"; then
+  if out_of_quota "$bot"; then
     every=${ORCHESTRATE_REVIEW_PROBE_EVERY:-3600}
   fi
   n=$(wc -l <"$q" | tr -d ' ')
