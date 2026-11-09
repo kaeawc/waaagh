@@ -216,6 +216,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
 | `merge-sensitive` | you | merge-sensitive path globs (optional): PRs touching one merge serially and only up to date |
 | `locks/` | `pr-merge.sh` | one lock per merge-sensitive path while a merge over it is in flight |
+| `holds`, `holds.log` | `hold.sh` | merge-loop holds, one `<pr> until:<event> since:<iso> <reason>` line each (skipped by `pr-ready.sh`, aged by the tick); every hold and release, logged in the same step as the file edit |
 | `reruns.log`, `merge-loop.beat`, `triage-cron` | `triage-tick.sh` | known-flake reruns of default-branch runs (one per run); the merge loop's heartbeat and why it ended; when the session cron was created |
 | `bin/`, `loops/` | `loops.sh` | long-lived loop scripts (merge loop, tick, review snapshot), never in a session scratchpad; one `<name>.heartbeat` per loop, beaten every pass |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |

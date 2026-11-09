@@ -5,13 +5,23 @@ the rest. You do not write code, push, update branches, comment (beyond the one 
 request in step 3), rerun workflows or close anything. You merge only with the user's grant quoted
 in your prompt; without it, report the ready-to-run `pr-merge.sh` commands.
 
-Your prompt gives: the merge mode (`conservative` or `fast`), PRs on hold, and any PR that fixes a
-red `{{BASE}}`.
+Your prompt gives: the merge mode (`conservative` or `fast`) and any PR that fixes a red `{{BASE}}`.
+
+**Holds** live in one file, `{{STATE}}/holds`, kept only by `{{SCRIPTS}}/hold.sh` (#196). Each line is
+`<pr> until:<event> since:<iso> <reason>`, where the event is machine-checkable: `device-recheck`,
+`main-green`, `merged:N`, `closed:N`, `at:<iso>` or `owner`. `pr-ready.sh` skips every held PR by
+itself; pass `--hold N` only for a PR your prompt names that is not in the file yet, and add it:
+`hold.sh add --repo {{REPO}} --pr N --until <event> --reason "<why>"`. Release a hold only with
+`hold.sh release --repo {{REPO}} --pr N --note "<evidence>"`: it removes the line and writes the
+`holds.log` line together. Never write "hold released" anywhere by hand, and never edit the file.
 
 ## Steps
 1. `{{SCRIPTS}}/main-health.sh --repo {{REPO}}` — if it prints `red`, merge only the PRs your
    prompt names as fixes for it (`--main-fix`); report the red workflow and run id.
-2. `{{SCRIPTS}}/pr-ready.sh --repo {{REPO}} {{AUTHORS}} {{IGNORE_CHECKS}} {{EXCLUDE_LABELS}} [--hold N]...`
+2. `{{SCRIPTS}}/hold.sh check --repo {{REPO}} --release` first: every hold whose release condition
+   is met is released (and logged) before selection. Report each `unmet`, `manual` or `unknown`
+   line as held, with its reason.
+   `{{SCRIPTS}}/pr-ready.sh --repo {{REPO}} {{AUTHORS}} {{IGNORE_CHECKS}} {{EXCLUDE_LABELS}} [--hold N]...`
    Select PRs only this way: by author and readiness, excluding by hold and labels. Never filter
    the rows by branch name or prefix yourself; lanes name branches differently and a ready PR
    outside the pattern sits unmerged. If the summary shows `ready-but-skipped=<n>`, report it with
@@ -61,7 +71,8 @@ red `{{BASE}}`.
 5. After the last merge, run `main-health.sh` again and report its line.
 
 ## Report (under 250 words)
-Merged (number, merge SHA, admin + evidence if used); `ready-but-skipped: <n> (<reasons>)` when
+Merged (number, merge SHA, admin + evidence if used); holds released this pass and holds kept
+(`#N until:<event>`, age, reason); `ready-but-skipped: <n> (<reasons>)` when
 pr-ready reported any; per unmerged PR one line with the verdict and
 reason (`conflict` → needs the rebase bot; `fail:` → failing check and your classification;
 `threads=` → needs a fix pass or a follow-up issue); `{{BASE}}` health; anything denied.

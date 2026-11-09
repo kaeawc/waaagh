@@ -13,8 +13,10 @@ from memory (advisory workflows, ready label, device slot types).
    [--classifier "<command>"] [--ready-label L] [--device-slots android=2,ios=2,xcode=2]`
    The classifier command comes from {{CI_CLASSIFIER}}; it is called as `<command> --repo R --run ID`
    and the first word it prints is the verdict. Without one, no red run is treated as a flake.
-   Nine lines; the first is the verdict: `verdict ok`, or `verdict act <reason>,...`. It refreshes
-   main health (sets or clears `MAIN_RED`) in the same call. Work only from these lines.
+   Nine lines, then `holds n=<k> stale=<m>` and one `hold-stale` line per stale hold when the
+   merge loop holds any PR (`hold.sh`). The first is the verdict: `verdict ok`, or
+   `verdict act <reason>,...`. It refreshes main health (sets or clears `MAIN_RED`) in the same
+   call. Work only from these lines.
 2. Act on each reason:
    - `flake-rerun` (main is red only because of runs the classifier calls a known flake or infra):
      for each run in `runs=`, `"{{SCRIPTS}}/triage-tick.sh" rerun --repo {{REPO}} --run <id>
@@ -41,11 +43,19 @@ from memory (advisory workflows, ready label, device slot types).
      thread answered (an issue link or a pushed fix in the last reply). They are not repair
      targets: for each, `"{{SCRIPTS}}/thread-sweep.sh" resolve --repo {{REPO}} --pr <n>` (exit 5
      or 9: rerun once). Only `repair=` PRs need a lane. See `{{SCRIPTS}}/../thread-resolution.md`.
+   - `hold-stale=<m>`: each `hold-stale #<pr> age=<h>h until:<event> reason=<text>` line is a
+     merge-loop hold older than `--hold-hours` (default 12, `ORCHESTRATE_HOLD_STALE_HOURS`), or an
+     old-format line of unknown age. Run `"{{SCRIPTS}}/hold.sh" check --repo {{REPO}} --release`:
+     it releases every hold whose condition is met, writing the file and `holds.log` together.
+     Report the rest with age, condition and reason; `manual` (owner, or an old line with no
+     condition) needs the owner or a re-add with `hold.sh add --until <event>`. Never report a hold
+     as released unless `hold.sh` printed `released:`.
 3. Re-run the snapshot only if you wrote something in step 2, and report its verdict line.
 
 ## Report (under 150 words)
-The final verdict line; reruns requested (run id, issue noted); red runs needing a fix lane; merge
-loop state with `last_merge`; dispatch candidates by slot type; anything denied.
+The final verdict line; stale holds (PR, age, condition, reason) and any released; reruns
+requested (run id, issue noted); red runs needing a fix lane; merge loop state with `last_merge`;
+dispatch candidates by slot type; anything denied.
 
 ---
 

@@ -60,6 +60,12 @@ The hold is the `needs-device-recheck` label plus a record in `<state dir>/devic
 - The merge loop honours it: `pr-ready.sh --exclude-label needs-device-recheck` keeps labelled
   PRs out of the READY rows, and the merge bot runs `check` before each `pr-merge.sh`
   (`roles/merge-bot.md`), which also catches a head that moved after the recheck.
+- A merge-loop hold kept for the recheck goes in the hold file with its release condition:
+  `hold.sh add --repo <o/r> --pr <n> --until device-recheck --reason "<what must pass>"`. After
+  `pass`, `hold.sh check --release` frees it (or `hold.sh release --pr <n>`), and only that writes
+  the release to `holds.log`. A hold whose recheck passed but whose line stayed shows up at the
+  next tick as `hold-stale` (#196: a verified fix sat unmerged 33 h behind a released-in-the-log
+  hold).
 
 ## 3. Delegated reports are claims
 
