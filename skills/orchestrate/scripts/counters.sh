@@ -18,8 +18,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 
-usage() { sed -n '2,14p' "$0" >&2; exit 2; }
-case "${1:-}" in -h | --help) sed -n '2,14p' "$0"; exit 0 ;; -*) echo "counters.sh: unknown argument: $1" >&2; exit 2 ;; esac
+usage() { orch_usage >&2; exit 2; }
+case "${1:-}" in -h | --help) orch_usage; exit 0 ;; -*) echo "counters.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" by=1 name=""

@@ -36,8 +36,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,32p' "$0" >&2; exit 2; }
-case "${1:-}" in -h | --help) sed -n '2,32p' "$0"; exit 0 ;; -*) echo "decision.sh: unknown argument: $1" >&2; exit 2 ;; esac
+usage() { orch_usage >&2; exit 2; }
+case "${1:-}" in -h | --help) orch_usage; exit 0 ;; -*) echo "decision.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" issue="" issues="" text="" date="" label=needs-decision file="" dry=no question="" dflt=""
@@ -55,7 +55,7 @@ while (($#)); do
     --label) label=$2; shift 2 ;;
     --file) file=$2; shift 2 ;;
     --dry-run) dry=yes; shift ;;
-    -h | --help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "decision.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

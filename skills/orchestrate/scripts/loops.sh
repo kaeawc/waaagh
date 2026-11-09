@@ -27,7 +27,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,23p' "$0"; }
+usage() { orch_usage; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 case "$cmd" in -h | --help) usage; exit 0 ;; esac

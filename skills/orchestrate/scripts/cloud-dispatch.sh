@@ -92,9 +92,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
-usage_end=$(($(grep -n '^set -euo pipefail' "$0" | cut -d: -f1 | sed -n 1p) - 1))
 
-usage() { sed -n "2,${usage_end}p" "$0" >&2; exit 2; }
+usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 sub=""
@@ -131,7 +130,7 @@ while (($#)); do
     --message) message=$2; shift 2 ;;
     --trigger) trigger=$2; shift 2 ;;
     --run-at) run_at=$2; shift 2 ;;
-    -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     [0-9]*) nums+=("${1#\#}"); shift ;;
     \#[0-9]*) nums+=("${1#\#}"); shift ;;
     *) echo "cloud-dispatch.sh: unknown argument: $1" >&2; exit 2 ;;
@@ -141,7 +140,7 @@ case "$cmd" in
   queue) case "$sub" in add | drop | list) ;; *) usage ;; esac ;;
   briefs) case "$sub" in install | check) ;; *) usage ;; esac ;;
   next | fixtures | brief | payload | pace | backoff | record | created | status) ;;
-  -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
+  -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
 is_num() { [[ "$1" =~ ^[0-9]+$ ]]; }

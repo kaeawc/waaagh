@@ -20,7 +20,7 @@ set -euo pipefail
 timing=0 picked=" " picked_list=()
 for arg in "$@"; do
   case "$arg" in
-    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     --timing) timing=1 ;;
     -*) echo "bench.sh: unknown argument: $arg" >&2; exit 2 ;;
     *[!a-z0-9-]* | "") echo "bench.sh: unknown case: $arg" >&2; exit 2 ;;

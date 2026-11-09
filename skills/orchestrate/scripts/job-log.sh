@@ -42,13 +42,13 @@ while (($#)); do
     --context) context=$2; shift 2 ;;
     --max-lines) max=$2; shift 2 ;;
     --fresh-minutes) fresh=$2; shift 2 ;;
-    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "job-log.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 if [[ -z "$job" && -z "$run$name" && -z "$pr$check" ]] || { [[ -n "$run$name" ]] && [[ -z "$run" || -z "$name" ]]; } ||
   { [[ -n "$pr$check" ]] && [[ -z "$pr" || -z "$check" ]]; }; then
-  sed -n '2,24p' "$0" >&2; exit 2
+  orch_usage >&2; exit 2
 fi
 repo=$(orch_repo "$repo")
 [[ -n "$out" ]] || out="$(orch_state_dir "$repo")/logs"

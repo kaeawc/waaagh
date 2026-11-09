@@ -34,7 +34,7 @@ while (($#)); do
         --soft) SOFT=$value ;; --stall) STALL=$value ;; --hard) HARD=$value ;; --poll) POLL=$value ;;
       esac
       ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h|--help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     *) usage; exit 2 ;;
   esac
 done

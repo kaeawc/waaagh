@@ -41,7 +41,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 
-usage() { sed -n '2,37p' "$0"; }
+usage() { orch_usage; }
 cmd=${1:-}
 case "$cmd" in
   decide | rerun | record | match | list) shift ;;

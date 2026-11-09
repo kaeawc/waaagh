@@ -84,7 +84,7 @@ while (($#)); do
     --no-threads) threads=no; shift ;;
     --delta) delta=yes; shift ;;
     --pr) only_pr=$2; shift 2 ;;
-    -h | --help) sed -n '2,63p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "pr-ready.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

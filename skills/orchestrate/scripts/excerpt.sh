@@ -11,7 +11,7 @@
 set -euo pipefail
 
 case "${1:-}" in
-  -h | --help) sed -n '2,10p' "$0"; exit 0 ;;
+  -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
   -*) echo "excerpt.sh: unknown argument: $1" >&2; exit 2 ;;
 esac
 log=${1:?usage: excerpt.sh LOG [CONTEXT_LINES] [MAX_LINES] [MAX_BYTES]}
