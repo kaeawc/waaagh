@@ -50,6 +50,7 @@ skills/orchestrate/scripts/regen-merge.sh	94
 skills/orchestrate/scripts/relay.sh	94
 skills/orchestrate/scripts/review-followup.sh	96
 skills/orchestrate/scripts/review-gate.sh	96
+skills/orchestrate/scripts/supersede-check.sh	90
 skills/orchestrate/scripts/thread-resolve.sh	97
 skills/orchestrate/scripts/thread-sweep.sh	94
 skills/orchestrate/scripts/triage-tick.sh	94

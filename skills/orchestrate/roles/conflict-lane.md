@@ -5,6 +5,13 @@ IN PROGRESS in the worktree named in your prompt, stopped on conflict markers in
 Codex resolves the markers; you verify. Neither of you runs a mutating VCS command — the
 orchestrator commits. If codex falls short, STOP and report.
 
+First, before any resolution: `"{{SCRIPTS}}/supersede-check.sh" --pr P --worktree <worktree>`
+(P is the PR in your prompt; it reads the conflicts with `git merge-tree`, never the markers).
+Exit 10 SUPERSEDED-CANDIDATE: later merges may already ship this PR's issue under another design,
+and re-applying it would reverse them. Do NOT resolve: STOP and report the check's output
+verbatim; the orchestrator routes the PR to a supersede-evidence session
+(`supersede-evidence.md`). Exit 0: resolve as below.
+
 Spec for codex:
 - Resolve every marker so BOTH sides' intent survives. Use the base, ours and theirs versions of
   each file and the recent history of `{{BASE}}` for it to understand each side. Independent

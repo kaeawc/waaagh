@@ -79,7 +79,7 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   cd_ briefs install --dir "$CO" --base main
   run cd_ briefs check --dir "$CO" --base main
   [ "$status" -eq 0 ]
-  [ "$output" = "$(printf 'brief implement ok v1\nbrief repair ok v1')" ]
+  [ "$output" = "$(printf 'brief implement ok v1\nbrief repair ok v2')" ]
   # A repository's own edits at the current version are fine; a version line it dropped is "custom".
   echo "Extra repo rule." >>"$CO/.claude/briefs/implement.md"
   printf 'Our own repair brief.\n' >"$CO/.claude/briefs/repair.md"

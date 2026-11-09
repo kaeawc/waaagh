@@ -29,6 +29,9 @@
 #   blocked    readiness found a real blocker (failed check, review thread, conflict, unknown
 #              policy...); parked until `retry`
 #   conflict | checkfail | error   parked until `retry`
+#   superseded a conflict that supersede-check.sh calls a SUPERSEDED-CANDIDATE (later merges ship
+#              the PR's issue another way): taken off the queue front, parked until `retry`, for
+#              an evidence session (roles/supersede-evidence.md), never a re-apply
 # Bot review (pr-merge.sh exit 13): the item asks `review-gate.sh request --pr N` once per pushed
 # head; the gate's throttle decides whether a request is posted and never asks an out-of-quota bot.
 # The answer is in the outcome detail: `review requested from <bot>`, `review throttled until
@@ -231,7 +234,12 @@ case "$cmd" in
         "$here/regen-merge.sh" --worktree "$qwt" --base "$base" >>"$log" 2>&1 || mrc=$?
         case "$mrc" in
           0) ;;
-          3) set_outcome "$qid" conflict "see $log"; continue ;;
+          3) # Superseded by later merges? Then it needs an evidence session, not a conflict lane.
+            sargs=(--repo "$repo" --worktree "$qwt" --base "$base")
+            [[ ! -f "$qdir/$qid.pr" ]] || sargs+=(--pr "$(cat "$qdir/$qid.pr")")
+            src=0; "$here/supersede-check.sh" "${sargs[@]}" >>"$log" 2>&1 || src=$?
+            if ((src == 10)); then set_outcome "$qid" superseded "route to an evidence session, see $log"; continue; fi
+            set_outcome "$qid" conflict "see $log"; continue ;;
           5) set_outcome "$qid" conflict "generated files did not regenerate cleanly, see $log"; continue ;;
           *) set_outcome "$qid" error "base merge failed, see $log"; continue ;;
         esac
