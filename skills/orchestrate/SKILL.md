@@ -263,7 +263,9 @@ whenever an agent reports or a PR changes. Do not tick on a timer.
 3. **Merge.** `"$SCRIPTS/pr-ready.sh"` (advisory checks from memory as `--ignore-check`; add
    `--delta` on later ticks to see only changed rows, or `no-change`). Any
    `READY` row, or any `BLOCK fail:` row in fast mode → launch the merge bot. `conflict` rows →
-   rebase bot. Real conflicts it reports → a conflict lane. Failing or feedback-blocked PRs → the
+   rebase bot. Real conflicts it reports → a conflict lane, which first runs `supersede-check.sh`;
+   a SUPERSEDED-CANDIDATE goes to a supersede-evidence session (`roles/supersede-evidence.md`), never
+   a re-apply. Failing or feedback-blocked PRs → the
    PR doctor, at most one writer per PR branch.
 4. **Plan.** When the lane plan is stale (no plan, most of its lanes consumed, or a burst of new
    issues), launch the hygiene bot. Between plans, `"$SCRIPTS/issues-ranked.sh" --skip-in-pr` is
@@ -386,7 +388,9 @@ against its PR's own changes.
   exact pushed head is READY, whatever the server's protection would accept. Outcomes: `merged`
   (done; the only one that satisfies dependents), `waiting` (pushed, readiness not there yet; the
   next `run-once` resumes it without redoing the base merge, check or push), and `blocked`,
-  `conflict`, `checkfail`, `error`, which park the item until `retry <id>`. Ids are never reused (`add`
+  `conflict`, `checkfail`, `error`, `superseded`, which park the item until `retry <id>`. A conflict
+  that `supersede-check.sh` calls a SUPERSEDED-CANDIDATE is `superseded`: off the queue front, for a
+  supersede-evidence session. Ids are never reused (`add`
   refuses). Stacked `name-N` branches: the parent of `-2` is the bare name (`parent <branch>`).
 - **GitHub outages: a 5xx or "merge already in progress" is pending, never done.** `pr-merge.sh`
   verifies by reading the PR state, logs githubstatus.com's non-operational components
