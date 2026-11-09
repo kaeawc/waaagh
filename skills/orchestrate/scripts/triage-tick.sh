@@ -4,7 +4,7 @@
 #
 # Usage: triage-tick.sh <snapshot|rerun|beat|cron> [--repo OWNER/REPO] [options]
 #   snapshot [--branch B] [--ignore-workflow NAME]... [--classifier CMD] [--ready-label L]...
-#            [--exclude-label L]... [--device-slots TYPE=N,...] [--loop-stale SECONDS]
+#            [--exclude-label L]... [--device-slots TYPE=N,...] [--loop-stale SECONDS] [--hold-hours H]
 #     Refreshes main health (main-health.sh, so MAIN_RED is set or cleared as usual), classifies
 #     each red run with CMD (run as `CMD --repo R --run ID`; the first word of its first line is the
 #     verdict: flake, known-flake or infra are known, anything else is not), and prints:
@@ -30,11 +30,16 @@
 #       host <ADMIT|HOLD|BACKOFF> cause=<indexing|lanes|other|-> free_gb=<g|unknown> load=<l> limit=<x>
 #            | host unknown      lane admission on this host (host-load.sh --top 3; the command is
 #                  ORCHESTRATE_HOST_LOAD, default host-load.sh beside this script)
+#       holds n=<k> stale=<m>      merge-loop holds in <state dir>/holds (hold.sh); omitted with none.
+#                  Then one line per hold older than --hold-hours (default
+#                  ORCHESTRATE_HOLD_STALE_HOURS, 12) or of unknown age (an old-format line):
+#       hold-stale #<pr> age=<h>h|unknown until:<event> reason=<text>
 #     Reasons: main-red, flake-rerun, rerun-pending, main-unknown, merge-loop-<state> (only while PRs
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
 #     host-hold (in place of dispatch=<n> while the host line is HOLD or BACKOFF; "host unknown"
 #     holds nothing), cron-expiring (under 24h left), resolve-now=<n> (PRs whose threads only need
-#     resolving: the local orchestrator resolves them, they are not repair targets). A part that
+#     resolving: the local orchestrator resolves them, they are not repair targets), hold-stale=<m>
+#     (holds past --hold-hours: check their release condition, `hold.sh check`). A part that
 #     could not be read says "unknown"; never a guess.
 #     Device slots: an active lanes.tsv row whose agent column reads "<type>:<agent>" holds one
 #     <type> slot. Types and sizes: --device-slots or ORCHESTRATE_DEVICE_SLOTS (e.g.
@@ -65,7 +70,7 @@ cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 case "$cmd" in -h | --help) usage; exit 0 ;; esac
 repo="" branch="" classifier=${ORCHESTRATE_CLASSIFIER_CMD:-} device=${ORCHESTRATE_DEVICE_SLOTS:-}
-loop_stale=1800 run_id="" issue="" deadline="" pid="" end="" created=""
+loop_stale=1800 hold_hours=${ORCHESTRATE_HOLD_STALE_HOURS:-12} run_id="" issue="" deadline="" pid="" end="" created=""
 ignore=() ready=() exclude=()
 while (($#)); do
   case "$1" in
@@ -77,6 +82,7 @@ while (($#)); do
     --exclude-label) exclude+=("$2"); shift 2 ;;
     --device-slots) device=$2; shift 2 ;;
     --loop-stale) loop_stale=$2; shift 2 ;;
+    --hold-hours) hold_hours=$2; shift 2 ;;
     --run) run_id=$2; shift 2 ;;
     --issue) issue=$2; shift 2 ;;
     --deadline) deadline=$2; shift 2 ;;
@@ -87,6 +93,7 @@ while (($#)); do
     *) echo "triage-tick.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+[[ "$hold_hours" =~ ^[0-9]+$ ]] || { echo "triage-tick.sh: --hold-hours must be a whole number" >&2; exit 2; }
 case "$cmd" in
   snapshot | cron) ;;
   rerun) [[ "$run_id" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; } ;;
@@ -316,6 +323,17 @@ fi
 rn=$(sed -n 's/.* resolve-now=\([^ ]*\).*/\1/p' <<<"$threads")
 if [[ -n "$rn" && "$rn" != - ]]; then reasons+=("resolve-now=$(tr ',' '\n' <<<"$rn" | awk 'END { print NR }')"); fi
 
+# Merge-loop holds (hold.sh): count them and name every one past --hold-hours with its reason, so
+# a hold whose condition passed but was never released is seen at the next tick (#196).
+holds_line="" stale_holds=""
+if hold_rows=$("$here/hold.sh" list --repo "$repo" 2>/dev/null) && [[ -n "$hold_rows" ]]; then
+  stale_holds=$("$here/hold.sh" stale --repo "$repo" --hours "$hold_hours" 2>/dev/null) || true
+  ns=0
+  [[ -z "$stale_holds" ]] || ns=$(awk 'END { print NR }' <<<"$stale_holds")
+  holds_line="holds n=$(awk 'END { print NR }' <<<"$hold_rows") stale=$ns"
+  ((ns == 0)) || reasons+=("hold-stale=$ns")
+fi
+
 if ((${#reasons[@]})); then echo "verdict act $(IFS=,; echo "${reasons[*]}")"; else echo "verdict ok"; fi
 echo "$main_line"
 echo "prs open=$open${reviews:+ $reviews}"
@@ -325,3 +343,5 @@ echo "slots $slots"
 echo "cron $cron"
 echo "$threads"
 echo "$host"
+[[ -z "$holds_line" ]] || echo "$holds_line"
+[[ -z "$stale_holds" ]] || sed 's/^/hold-stale /' <<<"$stale_holds"
