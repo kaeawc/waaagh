@@ -22,7 +22,7 @@
 set -euo pipefail
 
 case "${1:-}" in
-  -h | --help) sed -n '2,21p' "$0"; exit 0 ;;
+  -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
   "") ;;
   *) echo "lane-safety.sh: reads a hook payload on stdin; no arguments" >&2
     echo "Usage: lane-safety.sh < payload.json" >&2; exit 2 ;;

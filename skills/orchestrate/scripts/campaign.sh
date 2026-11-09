@@ -32,7 +32,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-case "${1:-}" in -h | --help) sed -n '2,28p' "$0"; exit 0 ;; -*) echo "campaign.sh: unknown argument: $1" >&2; exit 2 ;; esac
+case "${1:-}" in -h | --help) orch_usage; exit 0 ;; -*) echo "campaign.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" bots=working verify=idle sha=""
@@ -74,7 +74,7 @@ case "$cmd" in
   close-policy)
     [[ "${wrap_pos:-owner-only}" =~ ^(owner-only|verified)$ ]] || { echo "campaign.sh: close-policy is owner-only or verified" >&2; exit 2; } ;;
   path | status | verified | wrap-up) ;;
-  *) sed -n '2,28p' "$0" >&2; exit 2 ;;
+  *) orch_usage >&2; exit 2 ;;
 esac
 
 repo=$(orch_repo "$repo")

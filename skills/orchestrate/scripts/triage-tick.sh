@@ -60,7 +60,7 @@ orch_gh_priority normal
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 
-usage() { sed -n '2,54p' "$0"; }
+usage() { orch_usage; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 case "$cmd" in -h | --help) usage; exit 0 ;; esac

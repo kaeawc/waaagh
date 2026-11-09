@@ -35,7 +35,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-case "${1:-}" in -h | --help) sed -n '2,31p' "$0"; exit 0 ;; -*) echo "lane-claim.sh: unknown argument: $1" >&2; exit 2 ;; esac
+case "${1:-}" in -h | --help) orch_usage; exit 0 ;; -*) echo "lane-claim.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" issues="" files="" worktree="" branch="" agent="-" status=""
@@ -48,17 +48,17 @@ while (($#)); do
     --branch) branch=$2; shift 2 ;;
     --agent) agent=$2; shift 2 ;;
     --status) status=$2; shift 2 ;;
-    -h | --help) sed -n '2,31p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "lane-claim.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$cmd" in
-  check) [[ -n "$issues$files" ]] || { sed -n '2,31p' "$0" >&2; exit 2; } ;;
-  add) [[ -n "$worktree" && -n "$branch" && -n "$issues$files" ]] || { sed -n '2,31p' "$0" >&2; exit 2; } ;;
-  set) [[ -n "$worktree" && -n "$status" ]] || { sed -n '2,31p' "$0" >&2; exit 2; } ;;
-  on-issue) [[ -n "$issues" ]] || { sed -n '2,31p' "$0" >&2; exit 2; } ;;
+  check) [[ -n "$issues$files" ]] || { orch_usage >&2; exit 2; } ;;
+  add) [[ -n "$worktree" && -n "$branch" && -n "$issues$files" ]] || { orch_usage >&2; exit 2; } ;;
+  set) [[ -n "$worktree" && -n "$status" ]] || { orch_usage >&2; exit 2; } ;;
+  on-issue) [[ -n "$issues" ]] || { orch_usage >&2; exit 2; } ;;
   closed) ;;
-  *) sed -n '2,31p' "$0" >&2; exit 2 ;;
+  *) orch_usage >&2; exit 2 ;;
 esac
 api=$(orch_gh_api lane-claim.sh) || exit 2
 repo=$(orch_repo "$repo")

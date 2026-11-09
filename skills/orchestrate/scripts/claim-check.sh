@@ -22,11 +22,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 
-usage() { sed -n '2,18p' "$0" >&2; exit 2; }
+usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
   merged | open | closed | evidence | device-clear) shift ;;
-  -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
+  -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
 repo="" pr="" issue="" reason="" match="" since=""

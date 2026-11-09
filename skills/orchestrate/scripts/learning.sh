@@ -34,11 +34,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority low
 
-usage() { sed -n '2,30p' "$0" >&2; exit 2; }
+usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
   add | index | list | show | brief | status | consolidate | supersede | retire | upstream) shift ;;
-  -h | --help) sed -n '2,30p' "$0"; exit 0 ;;
+  -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
 repo="" title="" rule="" why="" how="" source_ev="" trigger="" scope="" roles="" date=""

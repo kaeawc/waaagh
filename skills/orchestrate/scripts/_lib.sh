@@ -7,6 +7,11 @@
 
 orch_now() { echo "${ORCHESTRATE_NOW:-${EPOCHSECONDS:-$(date +%s)}}"; }   # EPOCHSECONDS: bash 5
 
+# orch_usage -> the running script's header, its -h text: the comment block after the shebang, up to
+# the first line that is not a comment (the rule cli-contract.bats checks). No line range to bump
+# when the header grows (#184). Scripts that print usage before sourcing this file inline the awk.
+orch_usage() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; }
+
 # This file's directory, without a dirname process per call (#112).
 case "${BASH_SOURCE[0]}" in */*) _orch_lib_dir=${BASH_SOURCE[0]%/*} ;; *) _orch_lib_dir=. ;; esac
 

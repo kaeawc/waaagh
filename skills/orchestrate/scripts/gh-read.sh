@@ -32,11 +32,11 @@ while (($#)); do
     --tries) tries=$2; shift 2 ;;
     --json) want_json=yes; shift ;;
     --) shift; break ;;
-    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     *) echo "gh-read: unknown argument: $1 (put gh arguments after --)" >&2; exit 2 ;;
   esac
 done
-(($#)) || { sed -n '2,24p' "$0" >&2; exit 2; }
+(($#)) || { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0" >&2; exit 2; }
 
 # --- only reads -------------------------------------------------------------------------------
 not_read() { echo "gh-read: refused: not a read: gh $*" >&2; exit 2; }

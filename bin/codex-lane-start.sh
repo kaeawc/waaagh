@@ -24,8 +24,8 @@ while (($#)); do
     --soft) soft=${2:-}; shift 2 ;;
     --stall) stall=${2:-}; shift 2 ;;
     --hard) hard=${2:-}; shift 2 ;;
-    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
-    *) sed -n '2,14p' "$0" >&2; exit 2 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
+    *) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0" >&2; exit 2 ;;
   esac
 done
 [[ -n $model ]] || { echo "codex-lane-start: --model is required" >&2; exit 2; }

@@ -32,7 +32,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,28p' "$0" >&2; exit 2; }
+usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" limit=200 dry=no issue="" route="" what="" requires="" type=""
@@ -48,11 +48,11 @@ while (($#)); do
     --requires) requires=$2; shift 2 ;;
     --type) type=$2; shift 2 ;;
     --dry-run) dry=yes; shift ;;
-    -h | --help) sed -n '2,28p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "issue-route.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-case "$cmd" in status | labels | set) ;; -h | --help) sed -n '2,28p' "$0"; exit 0 ;; *) usage ;; esac
+case "$cmd" in status | labels | set) ;; -h | --help) orch_usage; exit 0 ;; *) usage ;; esac
 ((${#skip[@]})) || skip=(physical-device needs-human blocked desktop epic needs-decision)
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")

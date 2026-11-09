@@ -54,7 +54,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-case "${1:-}" in -h | --help) sed -n '2,50p' "$0"; exit 0 ;; -*) echo "merge-queue.sh: unknown argument: $1" >&2; exit 2 ;; esac
+case "${1:-}" in -h | --help) orch_usage; exit 0 ;; -*) echo "merge-queue.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 
@@ -75,7 +75,7 @@ fi
 repo="" id="" worktree="" branch="" title="" body="" requires="-" arg=""
 case "$cmd" in
   add | run-once | status | retry) ;;
-  *) sed -n '2,50p' "$0" >&2; exit 2 ;;
+  *) orch_usage >&2; exit 2 ;;
 esac
 while (($#)); do
   case "$1" in
@@ -159,7 +159,7 @@ unmet_deps() {
 case "$cmd" in
   add)
     [[ "$id" =~ ^[A-Za-z0-9._-]+$ && -n "$worktree" && -n "$branch" && -n "$title" && -n "$body" ]] ||
-      { sed -n '2,50p' "$0" >&2; exit 2; }
+      { orch_usage >&2; exit 2; }
     if cut -f1 "$queue" | grep -Fxq -- "$id"; then
       echo "refused: id '$id' is already queued; ids are never reused" >&2; exit 3
     fi

@@ -27,11 +27,11 @@ while (($#)); do
     --label) label=$2; pass+=(--label "$2"); shift 2 ;;
     --env-file) env_file=$2; pass+=(--env-file "$2"); shift 2 ;;
     --) shift; break ;;
-    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     *) echo "gate-slot.sh: unknown argument: $1 (put the command after --)" >&2; exit 2 ;;
   esac
 done
-(($#)) || { sed -n '2,15p' "$0" >&2; exit 2; }
+(($#)) || { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0" >&2; exit 2; }
 [[ "$slots" =~ ^[1-9][0-9]*$ && "$wait_s" =~ ^[0-9]+$ ]] || { echo "gate-slot.sh: bad --slots or --wait" >&2; exit 2; }
 
 for word in "$@"; do

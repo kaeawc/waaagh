@@ -33,11 +33,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,29p' "$0" >&2; exit 2; }
+usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
   send | mark | reply | say | status | check) shift ;;
-  -h | --help) sed -n '2,29p' "$0"; exit 0 ;;
+  -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
 repo="" to="" text="" quote="" date="" ref="" id="" new="" evidence="" note="" from="" open=no
@@ -58,7 +58,7 @@ while (($#)); do
     --open) open=yes; shift ;;
     --ack-within) ack_within=$2; shift 2 ;;
     --done-within) done_within=$2; shift 2 ;;
-    -h | --help) sed -n '2,29p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "relay.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

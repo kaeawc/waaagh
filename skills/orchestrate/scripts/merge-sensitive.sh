@@ -27,11 +27,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,23p' "$0" >&2; exit 2; }
+usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
   paths | check) shift ;;
-  -h | --help) sed -n '2,23p' "$0"; exit 0 ;;
+  -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
 repo="" pr="" head="" worktree="" check_cmd=""

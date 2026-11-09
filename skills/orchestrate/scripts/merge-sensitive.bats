@@ -237,7 +237,6 @@ STUB
 
 @test "headers: -h prints exactly the header comment" {
   for s in merge-sensitive.sh pr-merge.sh merge-queue.sh; do
-    end=$(awk '/^set -euo pipefail/ {print NR - 1; exit}' "$SCRIPTS/$s")
-    grep -q "sed -n '2,${end}p'" "$SCRIPTS/$s"
+    [ "$("$SCRIPTS/$s" -h)" = "$(awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$SCRIPTS/$s")" ]
   done
 }

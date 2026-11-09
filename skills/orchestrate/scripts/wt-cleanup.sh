@@ -35,7 +35,7 @@ while (($#)); do
     --max-count) max_count=$2; shift 2 ;;
     --max-gb) max_gb=$2; shift 2 ;;
     --apply) apply=yes; shift ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     *) echo "wt-cleanup.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
