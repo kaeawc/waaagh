@@ -28,6 +28,7 @@ skills/orchestrate/scripts/gh-shim/gh	99
 skills/orchestrate/scripts/gh-snapshot.sh	99
 skills/orchestrate/scripts/gh-status.sh	99
 skills/orchestrate/scripts/heavy-build-slot.sh	79
+skills/orchestrate/scripts/hold.sh	96
 skills/orchestrate/scripts/host-load.sh	99
 skills/orchestrate/scripts/issue-candidates.sh	94
 skills/orchestrate/scripts/issue-close.sh	99

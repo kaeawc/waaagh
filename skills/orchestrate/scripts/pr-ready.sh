@@ -19,7 +19,8 @@
 #   SKIP   draft | fork | hold | label:<label> | branch, then " ready-but-skipped" when the PR
 #          would otherwise be READY (checks, review threads and policy are judged for it too)
 # Selection is by author and base, never by branch name: a lane that names its branches
-# differently is still judged. Exclusions are explicit and visible as SKIP rows: --hold PR,
+# differently is still judged. Exclusions are explicit and visible as SKIP rows: --hold PR, every
+# PR in the campaign's hold file (<state dir>/holds, kept by hold.sh: its holds need no --hold),
 # --hold-label (default hold), --exclude-label (repeatable; e.g. `dependencies` when dependabot
 # PRs have their own lane) and --head-match REGEX (a jq regex the head branch must match;
 # discouraged). A skipped PR that is otherwise READY is counted on the summary line, so a filter
@@ -92,6 +93,8 @@ api=$(orch_gh_api pr-ready.sh) || exit 2
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 [[ -n "$base" ]] || base=$(orch_default_branch "$repo")
+# The hold file (hold.sh) is the merge loop's list of holds: each one is skipped like --hold (#196).
+while IFS= read -r h; do [[ -z "$h" ]] || holds+=("$h"); done < <("$here/hold.sh" prs --repo "$repo" 2>/dev/null || true)
 
 json_list() { if (($#)); then jq -nc '$ARGS.positional' --args "$@"; else echo '[]'; fi; }
 authors_json=$(json_list "${authors[@]}")
