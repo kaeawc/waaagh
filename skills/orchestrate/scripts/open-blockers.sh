@@ -24,19 +24,18 @@ caller_priority=${GH_BUDGET_PRIORITY:-}
 orch_gh_priority normal
 [[ -z "$caller_priority" ]] || orch_gh_priority "$caller_priority"
 
-usage_end=$(($(grep -n '^set -euo pipefail' "$0" | cut -d: -f1 | sed -n 1p) - 1))
 repo="" issues=()
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
-    -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     -*) echo "open-blockers.sh: unknown argument: $1" >&2; exit 2 ;;
     *) n=${1#\#}
        [[ "$n" =~ ^[0-9]+$ ]] || { echo "open-blockers.sh: not an issue number: $1" >&2; exit 2; }
        issues+=("$n"); shift ;;
   esac
 done
-((${#issues[@]})) || { sed -n "2,${usage_end}p" "$0" >&2; exit 2; }
+((${#issues[@]})) || { orch_usage >&2; exit 2; }
 repo=$(orch_repo "$repo")
 
 ghr() { "$here/gh-read.sh" --json -- "$@"; }   # bounded, typed, read-only

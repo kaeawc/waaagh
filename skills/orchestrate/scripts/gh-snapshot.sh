@@ -36,7 +36,7 @@ while (($#)); do
     --repo) repo=$2; shift 2 ;;
     --limit) limit=$2; shift 2 ;;
     --json) json=yes; shift ;;
-    -h | --help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "gh-snapshot.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

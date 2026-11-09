@@ -27,7 +27,6 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority low
 
-usage_end=$(($(grep -n '^set -euo pipefail' "$0" | cut -d: -f1 | sed -n 1p) - 1))
 repo="" days=7 limit=60 skip_in_pr=no route="" drop_blocked=no
 priority=() bug=() exclude=()
 while (($#)); do
@@ -41,7 +40,7 @@ while (($#)); do
     --skip-in-pr) skip_in_pr=yes; shift ;;
     --route) route=$2; shift 2 ;;
     --drop-blocked) drop_blocked=yes; shift ;;
-    -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "issues-ranked.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

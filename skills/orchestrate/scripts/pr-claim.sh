@@ -14,7 +14,7 @@
 # Env: ORCHESTRATE_STATE_DIR (default ~/.claude/orchestrate), ORCHESTRATE_NOW (tests only).
 set -euo pipefail
 
-case "${1:-}" in -h | --help) sed -n '2,14p' "$0"; exit 0 ;; -*) echo "pr-claim.sh: unknown argument: $1" >&2; exit 2 ;; esac
+case "${1:-}" in -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;; -*) echo "pr-claim.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" pr="" ttl=1800
@@ -28,7 +28,7 @@ while (($#)); do
     *) echo "pr-claim.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$repo" && -n "$pr" ]] || { sed -n '2,14p' "$0" >&2; exit 2; }
+[[ -n "$repo" && -n "$pr" ]] || { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0" >&2; exit 2; }
 
 state_root=${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}
 dir="$state_root/prs/${repo//\//__}__${pr}"
@@ -88,5 +88,5 @@ case "$cmd" in
     fi
     echo "not held by $owner"
     ;;
-  *) sed -n '2,14p' "$0" >&2; exit 2 ;;
+  *) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0" >&2; exit 2 ;;
 esac

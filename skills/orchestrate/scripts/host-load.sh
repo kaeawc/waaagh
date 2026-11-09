@@ -40,7 +40,7 @@ while (($#)); do
     --min-free-gb) num "$1" "$2"; min_gb=$2; shift 2 ;;
     --backoff-gb) num "$1" "$2"; backoff_gb=$2; shift 2 ;;
     --third-slot-gb) num "$1" "$2"; third_gb=$2; shift 2 ;;
-    -h | --help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     *) echo "host-load.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

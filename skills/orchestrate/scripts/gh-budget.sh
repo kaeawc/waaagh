@@ -30,7 +30,7 @@
 #   20), GH_BUDGET_FAKE_SLEEP=1 (tests: waits logged as "gh-budget: wait <s>"), ORCHESTRATE_NOW.
 set -euo pipefail
 
-usage() { sed -n '2,30p' "$0"; }
+usage() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; }
 cmd=${1:-}
 case "$cmd" in
   -h | --help) usage; exit 0 ;;

@@ -41,7 +41,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-case "${1:-}" in -h | --help) sed -n '2,37p' "$0"; exit 0 ;; -*) echo "device-lock.sh: unknown argument: $1" >&2; exit 2 ;; esac
+case "${1:-}" in -h | --help) orch_usage; exit 0 ;; -*) echo "device-lock.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 name="" pid=$PPID path="" repo="" stale=9 token="" sdir="" devs="" avd="" sim=0
@@ -63,7 +63,7 @@ while (($#)); do
     *) echo "device-lock.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-case "$cmd" in claim | release | status | record | check) ;; *) sed -n '2,37p' "$0" >&2; exit 2 ;; esac
+case "$cmd" in claim | release | status | record | check) ;; *) orch_usage >&2; exit 2 ;; esac
 [[ "$cmd" != claim || -n "$name" ]] || { echo "device-lock.sh: --name is required" >&2; exit 2; }
 [[ "$cmd" != release || -n "$name" || -n "$token" ]] || { echo "device-lock.sh: --name or --token is required" >&2; exit 2; }
 [[ "$cmd" != record || ( -n "$token" && -n "$devs" ) ]] || { echo "device-lock.sh: record needs --token and --device" >&2; exit 2; }

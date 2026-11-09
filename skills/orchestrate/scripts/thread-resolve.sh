@@ -33,11 +33,11 @@ while (($#)); do
     --pr) pr=$2; shift 2 ;;
     --reply) reply=$2; shift 2 ;;
     --dry-run) dry=yes; shift ;;
-    -h | --help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "thread-resolve.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ "$thread" =~ ^[A-Za-z0-9_=-]+$ ]] && [[ -z "$pr" || "$pr" =~ ^[0-9]+$ ]] || { sed -n '2,21p' "$0" >&2; exit 2; }
+[[ "$thread" =~ ^[A-Za-z0-9_=-]+$ ]] && [[ -z "$pr" || "$pr" =~ ^[0-9]+$ ]] || { orch_usage >&2; exit 2; }
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 marker=""

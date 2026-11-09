@@ -48,7 +48,6 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority low
 
-usage_end=$(($(grep -n '^set -euo pipefail' "$0" | cut -d: -f1 | sed -n 1p) - 1))
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" days="" min=0.5 limit="" per_issue=3 route_glob='needs-local:*' buckets=A,B,C,D
@@ -65,14 +64,14 @@ while (($#)); do
     --drop-blocked) drop_blocked=yes; shift ;;
     --checkout) checkout=$2; shift 2 ;;
     --ref) ref=$2; shift 2 ;;
-    -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "issue-candidates.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$cmd" in
   fixed | dupes | sweep) ;;
-  -h | --help) sed -n "2,${usage_end}p" "$0"; exit 0 ;;
-  *) sed -n "2,${usage_end}p" "$0" >&2; exit 2 ;;
+  -h | --help) orch_usage; exit 0 ;;
+  *) orch_usage >&2; exit 2 ;;
 esac
 if [[ -z "$days" ]]; then if [[ "$cmd" == sweep ]]; then days=180; else days=14; fi; fi
 if [[ -z "$limit" ]]; then if [[ "$cmd" == sweep ]]; then limit=50; else limit=25; fi; fi

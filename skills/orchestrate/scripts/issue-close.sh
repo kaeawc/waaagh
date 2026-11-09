@@ -45,11 +45,11 @@ while (($#)); do
     --platforms) platforms=$2; shift 2 ;;
     --device) devices+=("$2"); shift 2 ;;
     --dry-run) dry=yes; shift ;;
-    -h | --help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "issue-close.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$issue" && -n "$as" && ${#evidence} -ge 20 ]] || { sed -n '2,27p' "$0" >&2; exit 2; }
+[[ -n "$issue" && -n "$as" && ${#evidence} -ge 20 ]] || { orch_usage >&2; exit 2; }
 ((${#keep[@]})) || keep=(pinned epic needs-human needs-decision)
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")

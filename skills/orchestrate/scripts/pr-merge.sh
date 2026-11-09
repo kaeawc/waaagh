@@ -80,11 +80,11 @@ while (($#)); do
     --main-fix) main_fix=yes; shift ;;
     --worktree) mwt=$2; shift 2 ;;
     --merge-check) mcheck=$2; shift 2 ;;
-    -h | --help) sed -n '2,60p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "pr-merge.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$pr" && ${#head} -ge 7 ]] || { sed -n '2,60p' "$0" >&2; exit 2; }
+[[ -n "$pr" && ${#head} -ge 7 ]] || { orch_usage >&2; exit 2; }
 [[ -z "$mwt" && -z "$mcheck" || -n "$mwt" && -n "$mcheck" ]] ||
   { echo "pr-merge.sh: --worktree and --merge-check go together" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac

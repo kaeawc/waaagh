@@ -14,7 +14,7 @@
 # Exit: 0 done | 10 progress | 11 no-change | 2 usage or no such run
 set -euo pipefail
 
-usage() { sed -n '2,14p' "$0" >&2; exit 2; }
+usage() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0" >&2; exit 2; }
 log='' since='' timeout=540 interval=2
 while (($#)); do
   case "$1" in
@@ -22,7 +22,7 @@ while (($#)); do
     --since) since=${2:-}; shift 2 ;;
     --timeout) timeout=${2:-}; shift 2 ;;
     --interval) interval=${2:-}; shift 2 ;;
-    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     *) usage ;;
   esac
 done

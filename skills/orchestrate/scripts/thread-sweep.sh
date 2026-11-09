@@ -33,7 +33,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-usage() { sed -n '2,29p' "$0"; }
+usage() { orch_usage; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" pr="" summary=no dry=no

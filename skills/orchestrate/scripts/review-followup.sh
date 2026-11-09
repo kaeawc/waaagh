@@ -28,7 +28,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 source "$here/_lib.sh"
 orch_gh_priority low
 
-usage() { sed -n '2,24p' "$0" >&2; exit 2; }
+usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 repo="" pr="" round_end="" thread="" title="" append="" note="" route=cloud-ready dry=no
@@ -43,11 +43,11 @@ while (($#)); do
     --note) note=$2; shift 2 ;;
     --route) route=$2; shift 2 ;;
     --dry-run) dry=yes; shift ;;
-    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "review-followup.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-case "$cmd" in list | file) ;; -h | --help) sed -n '2,24p' "$0"; exit 0 ;; *) usage ;; esac
+case "$cmd" in list | file) ;; -h | --help) orch_usage; exit 0 ;; *) usage ;; esac
 [[ "$pr" =~ ^[0-9]+$ ]] || usage
 repo=$(orch_repo "$repo")
 ghr() { "$here/gh-read.sh" --json --tries 3 -- "$@" 2>/dev/null; }

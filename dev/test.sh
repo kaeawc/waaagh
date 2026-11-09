@@ -24,7 +24,7 @@ while (($#)); do
     -j*) jobs=${1#-j}; shift ;;
     --ignore-sigpipe) sigpipe=ignore; shift ;;
     --bashcov-shellopts) shellopts=errexit:errtrace:functrace:nounset:pipefail; shift ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     -*) echo "dev/test.sh: unknown argument: $1" >&2; exit 2 ;;
     *) break ;;
   esac

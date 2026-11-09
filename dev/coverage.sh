@@ -41,7 +41,7 @@ while (($#)); do
       floor=$2; shift 2 ;;
     --resultset) [[ -n "${2:-}" ]] || { echo "dev/coverage.sh: --resultset needs a file" >&2; exit 2; }
       resultset=$2; shift 2 ;;
-    -h | --help) sed -n '2,31p' "$0"; exit 0 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     -*) echo "dev/coverage.sh: unknown argument: $1" >&2; exit 2 ;;
     *) s=$1; shift
       # A bare suite name: every suite lives in skills/orchestrate/scripts/.

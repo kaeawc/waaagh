@@ -24,7 +24,7 @@ while (($#)); do
     --ttl) ttl=$2; shift 2 ;;
     --quiet-minutes) quiet=$2; shift 2 ;;
     --include-drafts) include_drafts=yes; shift ;;
-    -h | --help) sed -n '2,10p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "pr-intake.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

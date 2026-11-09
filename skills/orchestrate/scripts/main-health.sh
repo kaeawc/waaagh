@@ -33,7 +33,7 @@ while (($#)); do
     --workflow) only+=("$2"); shift 2 ;;
     --ignore-workflow) ignore+=("$2"); shift 2 ;;
     --limit) limit=$2; shift 2 ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h | --help) orch_usage; exit 0 ;;
     *) echo "main-health.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
