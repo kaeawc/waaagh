@@ -21,6 +21,9 @@ setup() {
   BENCH="$BATS_FILE_TMPDIR/bench.tsv" TIMING="$BATS_FILE_TMPDIR/timing.tsv"
 }
 
+# The snapshot prints at most one line per kind its usage header documents (test_helper.bash's
+# snapshot_line_names), however many PRs are open: the row ceiling follows the header, not a count.
+snapshot_lines_documented() { snapshot_line_names "$SCRIPTS/triage-tick.sh" | awk 'END { print NR }'; }
 metric() { awk -F'\t' -v c="$1" -v col="$2" 'NR == 1 { for (i = 1; i <= NF; i++) k[$i] = i; next } $1 == c { print $k[col] }' "$BENCH"; }
 within() { # CASE COLUMN MAX
   local v
@@ -67,7 +70,7 @@ within() { # CASE COLUMN MAX
   # main health, gh-snapshot.sh (one GraphQL page), the PR list for closing references, the issue
   # list, then thread-sweep.sh at 25 PRs a page: 6 calls (#118).
   within triage-tick-50-open gh_calls 6
-  within triage-tick-50-open rows 9
+  within triage-tick-50-open rows "$(snapshot_lines_documented)"
 }
 
 @test "triage-tick snapshot over REST (GraphQL refused) costs a constant plus four calls per open PR" {
@@ -76,7 +79,7 @@ within() { # CASE COLUMN MAX
   # (#136); thread-sweep.sh's REST open list, then per PR its review threads (no thread: no
   # comments or commits read).
   within triage-tick-rest-50-open gh_calls 210
-  within triage-tick-rest-50-open rows 9
+  within triage-tick-rest-50-open rows "$(snapshot_lines_documented)"
 }
 
 @test "review-gate check with a fresh snapshot row and no review reads only the comments" {

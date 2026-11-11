@@ -215,11 +215,14 @@ STUB
   run "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" == "verdict act "*"hold-stale=1"* ]]
-  [ "${lines[9]}" = "holds n=2 stale=1" ]
-  [ "${lines[10]}" = "hold-stale #17403 age=33h until:device-recheck reason=device recheck" ]
-  [ "${#lines[@]}" -eq 11 ]
+  [ "$(snap_line holds)" = "holds n=2 stale=1" ]
+  # one hold-stale line, for the stale hold only, right after holds; the required lines unchanged
+  [ "$(snap_line hold-stale)" = "hold-stale #17403 age=33h until:device-recheck reason=device recheck" ]
+  [ "$(awk 'p { print; exit } $1 == "holds" { p = 1 }' <<<"$output")" = "$(snap_line hold-stale)" ]
+  required_snapshot_lines
   run "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main --hold-hours 40
-  [ "${lines[9]}" = "holds n=2 stale=0" ]
+  [ "$(snap_line holds)" = "holds n=2 stale=0" ]
+  [ "$(grep -c '^hold-stale' <<<"$output" || true)" -eq 0 ]
   [[ "${lines[0]}" != *hold-stale* ]]
   run "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --hold-hours soon
   [ "$status" -eq 2 ]
