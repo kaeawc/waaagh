@@ -7,10 +7,21 @@
 # Usage: merge-sensitive.sh paths --pr N [--repo OWNER/REPO]
 #        merge-sensitive.sh check --pr N --head SHA [--repo OWNER/REPO]
 #                                 [--worktree DIR --check-cmd CMD]
+#        merge-sensitive.sh drift --worktree DIR --base B [--repo OWNER/REPO]
 #   paths   print each configured pattern the PR touches, one per line (nothing: touches none)
-#   check   one line: `clear: ...` (touches none, head contains the base, or the merge-result
-#           check passed) or `stale: ...` (touches a pattern and the base has commits the head
-#           lacks; merge the base in and wait for a green run, or pass a merge-result check)
+#   check   one line: `clear: ...` (touches none, head contains the base, the base's newer
+#           commits touch no protected path, or the merge-result check passed) or `stale: ...`
+#           (touches a pattern and the base's newer commits touch a protected path; merge the base
+#           in and wait for a green run, or pass a merge-result check)
+#   drift   print each protected pattern that origin/B's commits since its merge-base with DIR's
+#           HEAD touch (`git diff --name-only <merge-base> origin/B`, read locally), one per line
+#           (nothing: unrelated drift). merge-queue.sh re-validates its front only then (#204).
+# Protected paths = the merge-sensitive patterns plus the shared manifests, one per line from
+# <state dir>/merge-manifests and ORCHESTRATE_MERGE_MANIFESTS (same syntax; either one, even
+# empty, replaces the default). Default, at the root or in any directory: package.json and the
+# lockfiles (package-lock.json, yarn.lock, pnpm-lock.yaml, Cargo.lock, go.sum, Gemfile.lock,
+# poetry.lock, uv.lock, libs.versions.toml) and schema files (*.schema.json, schema.graphql,
+# schema.prisma). A manifest never makes a PR merge-sensitive; it only counts as drift.
 #   --worktree, --check-cmd   the merge-result check: in a temporary detached worktree of DIR (any
 #           clone of the repo), fetch the base and the head, merge the head into the base, and run
 #           CMD there (e.g. `./gradlew help`, the budget test). A conflict or a failing CMD is stale.
@@ -30,34 +41,72 @@ orch_gh_priority normal
 usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
-  paths | check) shift ;;
+  paths | check | drift) shift ;;
   -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
-repo="" pr="" head="" worktree="" check_cmd=""
+repo="" pr="" head="" worktree="" check_cmd="" base=""
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
     --pr) pr=$2; shift 2 ;;
+    --base) base=$2; shift 2 ;;
     --head) head=$2; shift 2 ;;
     --worktree) worktree=$2; shift 2 ;;
     --check-cmd) check_cmd=$2; shift 2 ;;
     *) echo "merge-sensitive.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ "$pr" =~ ^[0-9]+$ ]] || usage
-[[ "$cmd" == paths || ${#head} -ge 7 ]] || usage
-[[ -z "$worktree" && -z "$check_cmd" || -n "$worktree" && -n "$check_cmd" ]] ||
-  { echo "merge-sensitive.sh: --worktree and --check-cmd go together" >&2; exit 2; }
+if [[ "$cmd" == drift ]]; then
+  [[ -n "$worktree" && -n "$base" && -z "$pr$head$check_cmd" ]] || usage
+else
+  [[ "$pr" =~ ^[0-9]+$ && -z "$base" ]] || usage
+  [[ "$cmd" == paths || ${#head} -ge 7 ]] || usage
+  [[ -z "$worktree" && -z "$check_cmd" || -n "$worktree" && -n "$check_cmd" ]] ||
+    { echo "merge-sensitive.sh: --worktree and --check-cmd go together" >&2; exit 2; }
+fi
 
-# The configured patterns, without comments, blanks or surrounding space.
+# clean: stdin without comments, blanks, surrounding space or repeats.
+clean() { sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | awk 'NF && !seen[$0]++'; }
+
+# The configured patterns.
 patterns() {
   local cfg
   cfg="$(orch_state_dir "$repo")/merge-sensitive"
   {
     [[ ! -f "$cfg" ]] || cat "$cfg"
     printf '%s\n' "${ORCHESTRATE_MERGE_SENSITIVE:-}" | tr ',' '\n'
-  } | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | awk 'NF && !seen[$0]++'
+  } | clean
+}
+
+# The shared manifests: the configured list, or the default one when none is configured.
+default_manifests="package.json package-lock.json yarn.lock pnpm-lock.yaml Cargo.lock go.sum
+  Gemfile.lock poetry.lock uv.lock libs.versions.toml schema.graphql schema.prisma"
+manifests() {
+  local cfg m
+  cfg="$(orch_state_dir "$repo")/merge-manifests"
+  if [[ -f "$cfg" || -n "${ORCHESTRATE_MERGE_MANIFESTS+set}" ]]; then
+    {
+      [[ ! -f "$cfg" ]] || cat "$cfg"
+      printf '%s\n' "${ORCHESTRATE_MERGE_MANIFESTS:-}" | tr ',' '\n'
+    } | clean
+    return 0
+  fi
+  for m in $default_manifests; do printf '%s\n*/%s\n' "$m" "$m"; done
+  printf '%s\n' '*.schema.json'
+}
+
+# protected_hits FILES -> each protected pattern (merge-sensitive or manifest) one of FILES matches.
+# A `*` line (a file list cut short) counts as a hit: `300+ files`.
+protected_hits() {
+  local p f
+  if grep -Fxq -- '*' <<<"$1"; then echo "300+ files"; return 0; fi
+  while IFS= read -r p; do
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      if matches "$p" "$f"; then printf '%s\n' "$p"; break; fi
+    done <<<"$1"
+  done < <({ patterns; manifests; } | awk '!seen[$0]++')
 }
 
 # matches PATTERN FILE
@@ -70,6 +119,14 @@ matches() {
 }
 
 repo=$(orch_repo "$repo")
+if [[ "$cmd" == drift ]]; then
+  # Read from the caller's fetched checkout; nothing is read from GitHub.
+  mb=$(git -C "$worktree" merge-base HEAD "origin/$base" 2>/dev/null) &&
+    dfiles=$(git -C "$worktree" diff --name-only --no-renames "$mb" "origin/$base" 2>/dev/null) ||
+    { echo "unverified: could not diff origin/$base against its merge-base with HEAD in $worktree"; exit 9; }
+  protected_hits "$dfiles"
+  exit 0
+fi
 pats=$(patterns)
 if [[ -z "$pats" ]]; then
   [[ "$cmd" == paths ]] || echo "clear: no merge-sensitive paths configured"
@@ -102,7 +159,16 @@ behind=$(orch_read_retry 3 gh api "repos/$repo/compare/$base...$head" --jq .behi
 if ((behind == 0)); then
   echo "clear: PR $pr touches $list and its head contains $base"; exit 0
 fi
-stale="PR $pr touches merge-sensitive $list and is $behind commit(s) behind $base"
+# Only drift into the protected area makes it stale (#204): the files of the base's newer commits.
+drift=$(orch_read_retry 3 gh api "repos/$repo/compare/$head...$base" \
+  --jq 'if (.files | length) >= 300 then "*" else .files[] | .filename, (.previous_filename // empty) end') ||
+  { echo "unverified: could not read the files $base changed since ${head:0:9}"; exit 9; }
+hits=$(protected_hits "$drift")
+if [[ -z "$hits" ]]; then
+  echo "clear: PR $pr touches $list and is $behind commit(s) behind $base, which touch no protected path"
+  exit 0
+fi
+stale="PR $pr touches merge-sensitive $list and is $behind commit(s) behind $base, which touch $(paste -sd, - <<<"$hits")"
 if [[ -z "$check_cmd" ]]; then
   echo "stale: $stale; merge $base in and wait for a green run, or pass a merge-result check"
   exit 3

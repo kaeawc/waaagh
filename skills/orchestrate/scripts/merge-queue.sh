@@ -25,7 +25,10 @@
 #              after a fresh green run) or because another merge holds that path's lock, a merge
 #              refused for want of a bot review, or a transient read failure. The next run-once
 #              first re-checks the item's known PR (MERGED -> merged, without any new push, PR or
-#              merge), then resumes, skipping the base merge, check and push when nothing moved
+#              merge), then resumes, skipping the base merge, check and push when nothing moved,
+#              or when the base moved only outside the protected paths (merge-sensitive patterns
+#              and shared manifests, `merge-sensitive.sh drift`): unrelated drift is left to the
+#              readiness and merge gates rather than restarting the item's CI every pass (#204)
 #   blocked    readiness found a real blocker (failed check, review thread, conflict, unknown
 #              policy...); parked until `retry`
 #   conflict | checkfail | error   parked until `retry`
@@ -54,6 +57,8 @@
 #                              blockers are failures of those checks goes to pr-merge.sh --admin
 #                              --except-check ...; pr-merge.sh enforces the fast-path, authorization
 #                              and every other gate
+#      MERGE_QUEUE_UPDATE_BEHIND=always  merge every base move into a waiting item, protected or not
+#                              (a repo whose branch protection requires up-to-date branches)
 #      MERGE_QUEUE_MAIN_HEALTH_ARGS  extra main-health.sh flags (e.g. --ignore-workflow Badges)
 #      ORCHESTRATE_DIRECT_MERGE=1    deliberate ungated mode (only on the user's word): no readiness
 #                              gate here or in pr-merge.sh
@@ -261,12 +266,29 @@ case "$cmd" in
       fi
       git -C "$qwt" fetch -q origin >>"$log" 2>&1 || { set_outcome "$qid" error "fetch failed, see $log"; continue; }
       # Resuming a waiting item: the base merge, check and push are already done when the pushed
-      # head still contains the current base and nothing moved since.
+      # head is unchanged and either still contains the current base, or the base moved only
+      # outside the protected paths (merge-sensitive.sh drift, #204): re-validating the front on
+      # unrelated drift restarts its CI on every merge to main and starves it. A stale refusal
+      # (<id>.refresh) or MERGE_QUEUE_UPDATE_BEHIND=always merges any drift in.
       local_head=$(git -C "$qwt" rev-parse HEAD)
+      resume=""
       if [[ ( "$prev" == waiting || "$prev" == held ) && "$(cat "$qdir/$qid.pushed" 2>/dev/null)" == "$local_head" ]] &&
-        [[ "$(git -C "$qwt" rev-parse -q --verify "origin/$qbranch" || true)" == "$local_head" ]] &&
-        git -C "$qwt" merge-base --is-ancestor "origin/$base" HEAD; then
-        echo "$qid: resuming at ${local_head:0:9}" >>"$log"
+        [[ "$(git -C "$qwt" rev-parse -q --verify "origin/$qbranch" || true)" == "$local_head" ]]; then
+        if git -C "$qwt" merge-base --is-ancestor "origin/$base" HEAD; then
+          resume="resuming at ${local_head:0:9}"
+        elif [[ "${MERGE_QUEUE_UPDATE_BEHIND:-protected}" != always && ! -f "$qdir/$qid.refresh" ]]; then
+          drc=0
+          dhits=$("$here/merge-sensitive.sh" drift --repo "$repo" --worktree "$qwt" --base "$base" 2>>"$log") || drc=$?
+          if ((drc == 0)) && [[ -z "$dhits" ]]; then
+            resume="resuming at ${local_head:0:9}: $base moved, but over no protected path"
+          else
+            if ((drc == 0)); then dhits=$(paste -sd, - <<<"$dhits"); else dhits="paths (drift unverified)"; fi
+            echo "$qid: $base moved over protected $dhits; merging it in" >>"$log"
+          fi
+        fi
+      fi
+      if [[ -n "$resume" ]]; then
+        echo "$qid: $resume" >>"$log"
       else
         # Merge the base right before the push; generated-file conflicts are regenerated.
         mrc=0
@@ -289,6 +311,7 @@ case "$cmd" in
         git -C "$qwt" push -q origin "$qbranch" >>"$log" 2>&1 || { set_outcome "$qid" error "push rejected, see $log"; continue; }
         local_head=$(git -C "$qwt" rev-parse HEAD)
         printf '%s\n' "$local_head" >"$qdir/$qid.pushed"
+        rm -f "$qdir/$qid.refresh"
       fi
       list_open() { orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state open --limit 100 --json number,headRefOid; }
       if ! prs=$(list_open); then set_outcome "$qid" waiting "PR lookup failed (transient)"; continue; fi
@@ -355,7 +378,7 @@ case "$cmd" in
         7) set_outcome "$qid" waiting "pr-merge found it not ready, see $log" ;;
         8) set_outcome "$qid" waiting "merge queued on GitHub; will confirm" ;;
         9) set_outcome "$qid" waiting "merge outcome unknown; will reconcile" ;;
-        11) set_outcome "$qid" waiting "base moved past a merge-sensitive path; next pass merges it in again" ;;
+        11) : >"$qdir/$qid.refresh"; set_outcome "$qid" waiting "base moved past a merge-sensitive path; next pass merges it in again" ;;
         12) set_outcome "$qid" waiting "another merge holds a merge-sensitive path lock" ;;
         14) set_outcome "$qid" held "$(held_detail "$pr" || echo "pr-merge refused PR $pr as held, see $log")" ;;
         13) set_outcome "$qid" waiting "waiting for a bot review (review-gate.sh policy): $(review_detail "$qid" "$pr" "$head")" ;;

@@ -220,6 +220,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `FREEZE`, `freeze-disarmed`, `freeze.log` | `freeze.sh` | present during a release freeze: every PR held on every merge path; the auto-merges it disarmed (method, head, who armed it) to re-arm at `end`; every disarm and re-arm (`release-freeze.md`) |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
 | `merge-sensitive` | you | merge-sensitive path globs (optional): PRs touching one merge serially and only up to date |
+| `merge-manifests` | you | shared manifests whose drift on main re-validates a merge-sensitive PR or the queue front (optional; replaces the default package.json, lockfiles, schemas) |
 | `locks/` | `pr-merge.sh` | one lock per merge-sensitive path while a merge over it is in flight |
 | `holds`, `holds.log` | `hold.sh` | merge-loop holds, one `<pr> until:<event> since:<iso> <reason>` line each (skipped by `pr-ready.sh`, refused by `pr-merge.sh` exit 14, parked `held` by `merge-queue.sh`, aged by the tick); every hold and release, logged in the same step as the file edit |
 | `reviews.tsv` | `review-ledger.sh` | internal review verdicts, one `iso pr verdict head note` row each, appended; a latest verdict other than `ship` holds the PR from merging |
@@ -418,6 +419,12 @@ against its PR's own changes.
   head (`--worktree DIR --merge-check CMD`, e.g. `gradle help` or the budget test). A stale PR goes
   back for a fresh base merge and a green run; the merge queue does that on its next pass.
   `"$SCRIPTS/merge-sensitive.sh" check --pr N --head SHA` answers the same question read-only.
+  **Re-validate the front only on protected drift** (#204): a PR behind main is stale, and a
+  waiting queue item gets main merged in again (fresh CI), only when main's newer commits touch a
+  merge-sensitive glob or a shared manifest (`<state dir>/merge-manifests`; default package.json,
+  lockfiles, schema files). Updating on every unrelated merge restarts the front's CI each time
+  and it never lands. A repo whose branch protection requires up-to-date branches sets
+  `MERGE_QUEUE_UPDATE_BEHIND=always`.
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
   every stacked merge: take the default branch's copy and regenerate it, never hand-merge.
   `"$SCRIPTS/regen-merge.sh"` does this from `<state dir>/generated-files.tsv` and refuses an
