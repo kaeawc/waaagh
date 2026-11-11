@@ -91,7 +91,8 @@ The standard implement and repair briefs live in the target repository as
 `.claude/briefs/implement.md` and `.claude/briefs/repair.md`, so a brief change lands as a reviewed,
 versioned PR and stops drifting between ticks (a repository knob such as a test wall-clock timeout
 goes into the file once, not into every prompt by hand). waaagh's templates (`../briefs/`, first
-line `<!-- waaagh-brief <kind> v<V> -->`) are the default:
+line `<!-- waaagh-brief <kind> v<V> -->`) are the default; a change to one bumps its version and
+appends a row to `versions.tsv` (the bump rule, `../briefs/README.md`):
 
 1. `cloud-dispatch.sh briefs install --dir <checkout> --base <base> --gates "GATES"` writes both
    with the repository, base and gates filled (the per-issue values stay in the one-line prompt);
