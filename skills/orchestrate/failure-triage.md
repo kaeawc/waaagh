@@ -11,6 +11,8 @@ and 8.5 minutes); both passed. The rerun afterwards cost nothing and passed too.
    known-flakes list, reading one job log with `job-log.sh`.
 2. Ask `"$SCRIPTS/failure-triage.sh" decide --pr N --head SHA --check NAME --verdict <first word
    of the classifier's verdict> --log <saved job log>`. It prints one action:
+   - `rerun-full` — the log shows a needs dependency that did not succeed (below): re-run the
+     whole run with `rerun --full`, whatever the verdict.
    - `rerun` — re-run the failed jobs once: the verdict is a known flake or infra; the log
      matches a recorded signature; or the verdict is unknown and the check's domain does not
      intersect the PR's changed paths (TS lint on a TOML-only diff).
@@ -26,6 +28,28 @@ and 8.5 minutes); both passed. The rerun afterwards cost nothing and passed too.
    matches the log line>' --note '<what it is>' --source 'PR N run ID'`. The next occurrence is
    then `rerun known-signature`. If the repository has its own classifier with a known-flakes
    list, also add the signature there in a PR, so CI and other sessions classify it too.
+
+## A needs dependency that did not succeed: rerun in full
+
+Measured once: two PRs failed a gate job whose first step checks `needs.<detect>.result ==
+success`. The detect job was `abandoned` (no runner picked it up). `gh run rerun --failed` re-ran
+only the gate job, which read the same `abandoned` result and failed again: a CI cycle lost.
+
+- `decide --log` recognises this before any verdict: a log line naming `needs.<job>.result` with
+  `abandoned`, `cancelled` or `skipped` (a `!=` comparison is not one), or a recorded signature
+  whose note starts `needs-dependency` (record the repository's own wording, e.g. `test abandoned
+  = success`, that way). It prints `rerun-full needs-not-success needs=<job> result=<result>`,
+  even after a failed-jobs rerun on the same head.
+- Re-run with `failure-triage.sh rerun ... --run ID --full`: `gh run rerun ID` without
+  `--failed`, so the dependency runs again. Once per PR, head and check.
+- Still not successful after the full rerun: `decide` prints `triage runner-pool`. That is not the
+  code; do not reproduce it.
+- **Runner pool.** Each hit is logged to `needs-hits.tsv`. When two or more PRs hit it within the
+  hour, `decide` adds `pool=suspect prs=<N,...>` and `failure-triage.sh pool` prints
+  `runner-pool suspect`. Look at the runner pool before re-running anything else: a repository or
+  organization variable that disables runners, a `runs-on` label switched between hosted and
+  self-hosted on the base branch, self-hosted runners offline (`gh api repos/O/R/actions/runners`),
+  or a hosted-runner outage on githubstatus. Report it once for all the PRs, not once per PR.
 
 A pass after a rerun does not make a check healthy forever: a check that needs reruns on more than
 one PR is a flaky gate, worth an issue. A green that came only from a rerun still counts as a
