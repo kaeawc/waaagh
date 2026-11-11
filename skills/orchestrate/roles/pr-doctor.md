@@ -46,7 +46,11 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    --verdict <v> --log <saved log>` first. `rerun` (the check's domain misses the diff, or a recorded
    signature): `failure-triage.sh rerun ... --run <id>` once and wait; spend no reproduction until
    it says `reproduce` (the same check failed again on the same head); then record the signature
-   with `failure-triage.sh record` (`{{SCRIPTS}}/../failure-triage.md`). Never fix a
+   with `failure-triage.sh record` (`{{SCRIPTS}}/../failure-triage.md`). Before any rerun, pass
+   the saved log to `decide` even when the classifier placed it: `rerun-full` (a `needs.<job>.result`
+   abandoned, cancelled or skipped) means `failure-triage.sh rerun --full ...` (a failed-jobs-only
+   rerun reads the same dependency result and fails again); `pool=suspect` or `triage runner-pool`
+   means report the runner pool, not the code. Never fix a
    failure by weakening or skipping a test, raising a budget or growing a baseline.
 5. **Fix pass — at most ONE consolidated fix pass per PR**, combining every class-(a) item (when
    the policy is `fix-pass`) and every diff-caused CI failure. With the `follow-ups` policy, do not

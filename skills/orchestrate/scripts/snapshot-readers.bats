@@ -59,7 +59,7 @@ calls() { grep -c "$1" "$FX/calls" || true; }
 @test "triage-tick: the last review of every open PR comes from one snapshot call" {
   run snap
   [ "$status" -eq 0 ]
-  [ "${lines[2]}" = "prs open=3 reviews=head:1,stale:1,none:1 changes-requested=#71" ]
+  [ "$(snap_line prs)" = "prs open=3 reviews=head:1,stale:1,none:1 changes-requested=#71" ]
   [ "$(calls 'pullRequests(states: OPEN')" -eq 1 ]
   [ "$(calls '^pr list')" -eq 1 ]
   # it refreshed the per-head cache review-gate.sh reads
@@ -70,20 +70,20 @@ calls() { grep -c "$1" "$FX/calls" || true; }
   touch "$FX/snap-bad"   # gh-snapshot.sh exits 3 on a page without pullRequests
   run snap
   [ "$status" -eq 0 ]
-  [ "${lines[2]}" = "prs open=3 reviews=unknown" ]
+  [ "$(snap_line prs)" = "prs open=3 reviews=unknown" ]
 }
 
 @test "triage-tick: where GraphQL is refused, the open count comes from the snapshot over REST" {
   touch "$FX/rest"
   run snap
   [ "$status" -eq 0 ]
-  [ "${lines[2]}" = "prs open=3 reviews=head:1,stale:1,none:1 changes-requested=#71" ]
+  [ "$(snap_line prs)" = "prs open=3 reviews=head:1,stale:1,none:1 changes-requested=#71" ]
   [[ "$output" == *$'\n'"dispatch unknown next=-"$'\n'* ]]
   [ "$(calls '/pulls/[0-9]*/reviews')" -eq 3 ]
   # ORCHESTRATE_GH_API=rest skips both GraphQL attempts and the PR list
   : >"$FX/calls"
   ORCHESTRATE_GH_API=rest run snap
-  [ "${lines[2]}" = "prs open=3 reviews=head:1,stale:1,none:1 changes-requested=#71" ]
+  [ "$(snap_line prs)" = "prs open=3 reviews=head:1,stale:1,none:1 changes-requested=#71" ]
   [ "$(calls 'pullRequests(states: OPEN')" -eq 0 ]
   [ "$(calls '^pr list')" -eq 0 ]
 }

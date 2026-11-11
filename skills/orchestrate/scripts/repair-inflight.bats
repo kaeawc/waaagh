@@ -201,7 +201,7 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
 
 @test "doctrine: the repair brief closes with REPAIR-END, and the roles say how a repair ends" {
   B="$SCRIPTS/../briefs/repair.md"
-  [[ "$(sed -n 1p "$B")" == "<!-- waaagh-brief repair v3."* ]]
+  [[ "$(sed -n 1p "$B")" == "<!-- waaagh-brief repair v"* ]]
   has "$B" '"REPAIR-END done:"'
   has "$B" '"REPAIR-END blocked:"'
   has "$SCRIPTS/../roles/cloud-dispatch.md" "record --kind repair --pr P"

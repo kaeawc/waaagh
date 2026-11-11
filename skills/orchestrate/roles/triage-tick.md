@@ -13,9 +13,11 @@ from memory (advisory workflows, ready label, device slot types).
    [--classifier "<command>"] [--ready-label L] [--device-slots android=2,ios=2,xcode=2]`
    The classifier command comes from {{CI_CLASSIFIER}}; it is called as `<command> --repo R --run ID`
    and the first word it prints is the verdict. Without one, no red run is treated as a flake.
-   Nine lines, then `holds n=<k> stale=<m>` and one `hold-stale` line per stale hold when the
-   merge loop holds any PR (`hold.sh`). The first is the verdict: `verdict ok`, or
-   `verdict act <reason>,...`. It refreshes main health (sets or clears `MAIN_RED`) in the same
+   One line per part, each named by its first word: `verdict`, `main`, `prs`, `merge_loop`,
+   `dispatch`, `slots`, `cron`, `threads`, `host`, then `holds n=<k> stale=<m>` and one
+   `hold-stale` line per stale hold when the merge loop holds any PR (`hold.sh`). `triage-tick.sh
+   -h` is the source of truth for the lines and their order; find a line by its name, not its
+   position or the count. The first is the verdict: `verdict ok`, or `verdict act <reason>,...`. It refreshes main health (sets or clears `MAIN_RED`) in the same
    call. Work only from these lines.
 2. Act on each reason:
    - `flake-rerun` (main is red only because of runs the classifier calls a known flake or infra):
