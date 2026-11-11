@@ -136,7 +136,7 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
 @test "doctrine: one blocking wait per gate, device ownership, ready PRs, blockers before dispatch" {
   HYG="$ROOT/skills/orchestrate/subagent-hygiene.md"
   COMMON="$ROOT/skills/orchestrate/roles/_common.md"
-  has "$HYG" "## Lane drivers"
+  has "$HYG" "## Lanes on gates and devices"
   has "$HYG" "**One blocking wait per gate.**"
   has "$HYG" "until grep -q EXIT= <log>; do sleep 30; done"
   has "$HYG" "Never arm a repeating monitor"
@@ -146,7 +146,7 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$HYG" "**Check blockers before dispatch.**"
   has "$COMMON" "device-lock.sh check"
   has "$COMMON" "one blocking command"
-  has "$ROOT/skills/orchestrate/SKILL.md" "**Lane drivers wait once and own their devices**"
+  has "$ROOT/skills/orchestrate/SKILL.md" "**Lanes wait once and own their devices**"
   has "$ROOT/skills/orchestrate/SKILL.md" "Missing device evidence is no reason for a draft"
   has "$ROOT/skills/orchestrate/roles/verify-batch.md" "--device <serial or UDID>"
   has "$ROOT/skills/orchestrate/roles/verification.md" "--device <serial or UDID>"

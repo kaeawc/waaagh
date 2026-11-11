@@ -11,8 +11,8 @@ setup() {
 
 has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1; }; }
 
-@test "lane drivers are fresh and small per task, never resumed for new work (#21)" {
-  has "$SKILL" "One fresh, small driver per task."
+@test "lanes are fresh and small per task, never resumed for new work (#21)" {
+  has "$SKILL" "One fresh, small lane per task."
   has "$SKILL" "never hand a long-lived lane new work with \`SendMessage\`"
   has "$SKILL" "only to ask about the work it just returned"
   has "$SKILL" "never transcripts or full"

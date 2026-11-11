@@ -152,7 +152,7 @@ JSON
   echo '[{"number":45,"title":"Fix login crash (#12)","body":"","closingIssuesReferences":[],"files":[{"path":"src/auth/login.ts"}]},
          {"number":46,"title":"Docs","body":"Fixes #30","closingIssuesReferences":[{"number":31}],"files":[{"path":"docs/a.md"}]}]' >"$FX/prs.json"
   lc() { run "$SCRIPTS/lane-claim.sh" "$@" --repo o/r; }
-  lc add --worktree wt-a --branch lane/a --issues 20 --files src/cart/,lib/x.ts --agent sol
+  lc add --worktree wt-a --branch lane/a --issues 20 --files src/cart/,lib/x.ts --agent opus
   [ "$status" -eq 0 ]
   # Same issue as an active lane; a file under a lane's directory; an issue an open PR covers
   # (closing reference, or "#N" in title or body); a file an open PR touches.
@@ -501,7 +501,7 @@ JSON
 }
 
 @test "self-reported, partial, stale and tree-changing receipts need a fresh run" {
-  val run --cmd "true" --runner codex >/dev/null
+  val run --cmd "true" --runner implementer >/dev/null
   run val check --cmd "true"
   [ "$status" -eq 1 ]
   [[ "$output" == *"self-reported"* ]]

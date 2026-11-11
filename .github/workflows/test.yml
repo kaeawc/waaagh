@@ -27,7 +27,7 @@ jobs:
           sudo "$RUNNER_TEMP/bats/install.sh" /usr/local >/dev/null
           bats --version
       - name: ShellCheck
-        run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh bin/*.sh dev/*.sh
+        run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh dev/*.sh
       - name: Validate manifests
         run: jq -e . .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json >/dev/null
       - name: Hostile git config (the suites must not depend on it)

@@ -262,7 +262,7 @@ priority_lint() {
 }
 
 @test "scripts avoid gh commands that make hidden extra requests (run list, run watch, workflow list/view)" {
-  hits=$(cat "$SCRIPTS"/*.sh "$ROOT"/bin/*.sh | grep -vE '^[[:space:]]*#|hidden-requests-ok' |
+  hits=$(cat "$SCRIPTS"/*.sh | grep -vE '^[[:space:]]*#|hidden-requests-ok' |
     grep -nE '(^|[[:space:](])(gh|--|ghr|gh-read\.sh)[[:space:]]+(run (list|watch)|workflow (list|view)|pr checks[^#]*--watch)' || true)
   [ -z "$hits" ] || { echo "hidden-request gh commands: $hits"; false; }
 }
