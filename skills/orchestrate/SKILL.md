@@ -509,7 +509,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   known-flakes list before retrying or changing code. **Rerun first, reproduce second**: a red check the
   classifier cannot place, in a domain the PR's diff does not touch, is re-run once before any
   lane reproduces it; a reproduction is spent only when it fails again on the same head, and the
-  signature is then recorded (`"$SCRIPTS/failure-triage.sh"`, `failure-triage.md`, which also
+  signature is then recorded. A check that failed only because a job it needs was abandoned,
+  cancelled or skipped is re-run in full (`rerun --full`), never `--failed`, and several PRs
+  hitting that within the hour is a runner-pool problem (`"$SCRIPTS/failure-triage.sh"`,
+  `failure-triage.md`, which also
   covers what to put in cloud briefs: container knobs and never killing by pattern).
 - GitHub reads in the scripts go through `"$SCRIPTS/gh-read.sh"`: bounded retries for network and
   5xx failures, typed outcomes (`not-found`, `auth`, `forbidden`, `rate-limited` with `retry-at`,
