@@ -364,8 +364,9 @@ author you did not list, and any merge while `MAIN_RED` is set (except `--main-f
 
 **Bot-review requirement** is the owner's policy (`review-gate.sh policy`: off, review-at-head,
 reviewed-once, green-only); when set, `pr-merge.sh` refuses a merge it does not allow (exit 13).
-When a review bot runs out of quota, ask the owner once with the ladder, ledger unreviewed merges,
-and send review requests through the per-bot throttle: [review-quota.md](review-quota.md).
+The one review bot is Claude Code Review (`claude[bot]`, asked with `@claude review`). When it
+runs out of budget, ask the owner once with the ladder, ledger unreviewed merges, and send review
+requests through the throttle: [review-quota.md](review-quota.md).
 
 **Direct (ungated or admin) merging** is a deliberate mode, never a default; ungated merging is
 `ORCHESTRATE_DIRECT_MERGE=1`, set only on the user's word. Pair it with a
@@ -540,8 +541,8 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
 - **Monitor events that need nothing.** A bot's summary comment with no findings (a clean review
   summary, a "no issues found", a coverage or size report within budget) needs no fix pass and no
   reply; note it and move on. Only actionable findings start work.
-- **Review-bot quota notices need no turn.** Pipe a review bot's new comment to
-  `review-gate.sh notice --author <login> --pr N`; `quota <bot> known` needs nothing, `quota <bot>
+- **Review-bot quota notices need no turn.** Pipe a new `claude[bot]` comment to
+  `review-gate.sh notice --author <login> --pr N`; `quota claude known` needs nothing, `quota claude
   new` means one owner question (`review-gate.sh outage ask`). Never re-request per PR on a timer.
 - Do not create scheduled automation (cron, `/loop`, wakeups) unless the user asked for ongoing
   monitoring. Never spawn a continuous polling agent.

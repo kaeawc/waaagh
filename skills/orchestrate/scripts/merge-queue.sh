@@ -41,7 +41,8 @@
 # head; the gate's throttle decides whether a request is posted and never asks an out-of-quota bot.
 # The answer is in the outcome detail: `review requested from <bot>`, `review throttled until
 # <iso>` (later passes only drain that bot's queue, so the PR keeps its place), or `no review
-# requested: every review bot is out of quota` (asked again next pass). <id>.review records it.
+# requested: the review bot is out of quota` (asked again next pass), or `waiting for an automatic
+# review from <bot>` (no request phrase is set). <id>.review records it.
 # The merge is never attempted for an item that is not READY on a fresh pr-ready.sh row for the
 # exact pushed head, whatever the server's branch protection would allow; pr-merge.sh re-checks.
 # Logs of the check and of errors are under <state dir>/merge-queue/logs/.
@@ -112,7 +113,7 @@ set_outcome() { printf '%s\n%s\n' "$2" "${3:-}" >"$qdir/$1.outcome"; echo "$1: $
 
 # review_detail ID PR HEAD -> the outcome detail for a PR waiting on a bot review. Asks
 # review-gate.sh once per head (a throttled ask only drains its bot's queue on later passes) and
-# records "head<TAB>bot<TAB>state" in <id>.review (state: requested | throttled | quota | failed).
+# records "head<TAB>bot<TAB>state" in <id>.review (state: requested|throttled|waiting|quota|failed).
 review_detail() {
   local rpr=$2 rhead=$3 rec="$qdir/$1.review" rlog="$qdir/logs/$1.log" phead="" pbot="" pstate="" line rrc=0
   local -a rargs
@@ -121,6 +122,7 @@ review_detail() {
     [[ "$phead" == "$rhead" ]] || { pbot=""; pstate=""; }
   fi
   if [[ "$pstate" == requested ]]; then echo "review requested from $pbot"; return 0; fi
+  if [[ "$pstate" == waiting ]]; then echo "waiting for an automatic review from $pbot"; return 0; fi
   if [[ "$pstate" == throttled ]]; then rargs=(--bot "$pbot"); else rargs=(--pr "$rpr"); fi
   line=$("$here/review-gate.sh" request --repo "$repo" "${rargs[@]}" 2>>"$rlog") || rrc=$?
   echo "review-gate.sh request ${rargs[*]}: ${line:-exit $rrc}" >>"$rlog"
@@ -143,9 +145,13 @@ review_detail() {
       local next=${line#*next=}; next=${next%% *}
       printf '%s\t%s\tthrottled\n' "$rhead" "$tbot" >"$rec"
       echo "review throttled until $next ($tbot)" ;;
-    "out-of-quota all"*)
+    "not-requested "*) # No request phrase is set: wait for an automatic review of this head.
+      local wbot=${line#not-requested }; wbot=${wbot%% *}
+      printf '%s\t%s\twaiting\n' "$rhead" "$wbot" >"$rec"
+      echo "waiting for an automatic review from $wbot" ;;
+    "out-of-quota "*)
       printf '%s\t-\tquota\n' "$rhead" >"$rec"
-      echo "no review requested: every review bot is out of quota" ;;
+      echo "no review requested: the review bot is out of quota" ;;
     *)
       printf '%s\t%s\tfailed\n' "$rhead" "${pbot:--}" >"$rec"
       echo "review request failed (exit $rrc), see $rlog" ;;

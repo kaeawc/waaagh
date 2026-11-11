@@ -15,7 +15,7 @@ setup() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1790510400 ORCHESTRATE_READ_SLEEP=0
-  unset ORCHESTRATE_REVIEW_BOTS ORCHESTRATE_REVIEW_EVERY ORCHESTRATE_REVIEW_PROBE_EVERY MERGE_QUEUE_CHECK_CMD MERGE_QUEUE_ADMIN_EVIDENCE MERGE_QUEUE_ADMIN_CHECKS ORCHESTRATE_DIRECT_MERGE \
+  unset ORCHESTRATE_REVIEW_BOT_LOGIN ORCHESTRATE_REVIEW_TRIGGER ORCHESTRATE_REVIEW_CHECK ORCHESTRATE_REVIEW_QUOTA_RE ORCHESTRATE_REVIEW_EVERY ORCHESTRATE_REVIEW_PROBE_EVERY MERGE_QUEUE_CHECK_CMD MERGE_QUEUE_ADMIN_EVIDENCE MERGE_QUEUE_ADMIN_CHECKS ORCHESTRATE_DIRECT_MERGE \
     ORCHESTRATE_MERGE_SENSITIVE ORCHESTRATE_GENERATED_FILES ORCHESTRATE_FAST_PATH_OVER ORCHESTRATE_ADMIN_MERGE
   seed_origin_copy
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
@@ -45,6 +45,7 @@ case "$all" in
   "api --paginate repos/o/r/pulls/5/files"*) [ ! -f "$FX/files-fail" ] || { echo "HTTP 404" >&2; exit 1; }; printf 'f.txt\n' ;;
   "api repos/o/r/pulls/5/reviews"*) cat "$FX/reviews.json" ;;
   "api repos/o/r/issues/5/comments"*) echo '[]' ;;
+  "api repos/o/r/commits/"*"/check-runs"*) echo '{"check_runs":[]}' ;;
   "api repos/o/r/pulls/5 "*) echo main ;;
   "api repos/o/r/compare/"*) cat "$FX/behind" 2>/dev/null || echo 1 ;;
   "pr list"*"--state merged"*) [ ! -f "$FX/merged-list-fails" ] || { echo "HTTP 502" >&2; exit 1; }; echo '[]' ;;
@@ -279,56 +280,62 @@ WHY="waiting for a bot review (review-gate.sh policy)"
   run mq run-once
   [ "$status" -eq 0 ]
   [ "$(outcome a)" = waiting ]
-  [ "$(reason a)" = "$WHY: review requested from codex" ]
+  [ "$(reason a)" = "$WHY: review requested from claude" ]
   [ "$(review_comments)" -eq 1 ]
-  grep -q '^pr comment 5 --repo o/r --body @codex review$' "$FX/calls"
+  grep -q '^pr comment 5 --repo o/r --body @claude review$' "$FX/calls"
   # Two more passes at the same head: no second request, even once the window has reopened.
   run mq run-once
   ORCHESTRATE_NOW=1790520000 run mq run-once
   [ "$status" -eq 0 ]
   [ "$(review_comments)" -eq 1 ]
-  [ "$(reason a)" = "$WHY: review requested from codex" ]
+  [ "$(reason a)" = "$WHY: review requested from claude" ]
   # A new head asks again, but the bot's window (last request at 12:00, every 1200 s) is shut.
   echo more >"$BATS_TEST_TMPDIR/a/a.txt"
   git -C "$BATS_TEST_TMPDIR/a" commit -qam more
   ORCHESTRATE_NOW=1790510500 run mq run-once
   [ "$status" -eq 0 ]
-  [ "$(reason a)" = "$WHY: review throttled until 2026-09-27T12:20:00Z (codex)" ]
+  [ "$(reason a)" = "$WHY: review throttled until 2026-09-27T12:20:00Z (claude)" ]
   [ "$(review_comments)" -eq 1 ]
   # Still shut: the next pass only drains, so the PR is not re-queued behind itself.
   ORCHESTRATE_NOW=1790510600 run mq run-once
   [ "$(review_comments)" -eq 1 ]
-  [ "$(wc -l <"$ORCHESTRATE_STATE_DIR/o__r/review-queue/codex.tsv" | tr -d ' ')" -eq 1 ]
+  [ "$(wc -l <"$ORCHESTRATE_STATE_DIR/o__r/review-queue/claude.tsv" | tr -d ' ')" -eq 1 ]
   [ "$(grep -c 'review-gate.sh request --pr 5:' "$Q/logs/a.log" || true)" -eq 2 ]  # first head, new head
-  [ "$(grep -c 'review-gate.sh request --bot codex:' "$Q/logs/a.log" || true)" -eq 1 ]
+  [ "$(grep -c 'review-gate.sh request --bot claude:' "$Q/logs/a.log" || true)" -eq 1 ]
   # Window open: the queued request is posted once, and only once.
   ORCHESTRATE_NOW=1790511600 run mq run-once
-  [ "$(reason a)" = "$WHY: review requested from codex" ]
+  [ "$(reason a)" = "$WHY: review requested from claude" ]
   ORCHESTRATE_NOW=1790520000 run mq run-once
   [ "$(review_comments)" -eq 2 ]
 }
 
-@test "exit 13 never asks an out-of-quota bot; with every bot out, nothing is posted" {
+@test "exit 13 never asks an out-of-quota bot: nothing is posted or queued" {
   review_policy
-  "$SCRIPTS/review-gate.sh" notice --repo o/r --author chatgpt-codex-connector <<<"You have reached your Codex usage limits" >/dev/null
+  "$SCRIPTS/review-gate.sh" notice --repo o/r --author "claude[bot]" <<<"⚠️ Code review skipped: o has reached its monthly code review spending cap" >/dev/null
   wt a
   enqueue a
   run mq run-once
   [ "$status" -eq 0 ]
-  [ "$(reason a)" = "$WHY: review requested from coderabbit" ]
-  [ "$(grep -c '^pr comment.*@codex' "$FX/calls" || true)" -eq 0 ]
-  [ "$(review_comments)" -eq 1 ]
-  export ORCHESTRATE_REVIEW_BOTS=codex
-  wt b
-  enqueue b
-  : >"$FX/calls"
+  [ "$(outcome a)" = waiting ]
+  [ "$(reason a)" = "$WHY: no review requested: the review bot is out of quota" ]
+  [ "$(review_comments)" -eq 0 ]
+  run test -e "$ORCHESTRATE_STATE_DIR/o__r/review-queue/claude.tsv"
+  [ "$status" -ne 0 ]
+}
+
+@test "exit 13 with no request phrase waits for an automatic review, once per head" {
+  review_policy
+  export ORCHESTRATE_REVIEW_TRIGGER=
+  wt a
+  enqueue a
   run mq run-once
   [ "$status" -eq 0 ]
-  [ "$(outcome b)" = waiting ]
-  [ "$(reason b)" = "$WHY: no review requested: every review bot is out of quota" ]
+  [ "$(outcome a)" = waiting ]
+  [ "$(reason a)" = "$WHY: waiting for an automatic review from claude" ]
+  run mq run-once
+  [ "$(reason a)" = "$WHY: waiting for an automatic review from claude" ]
   [ "$(review_comments)" -eq 0 ]
-  run test -e "$ORCHESTRATE_STATE_DIR/o__r/review-queue/codex.tsv"
-  [ "$status" -ne 0 ]
+  [ "$(grep -c 'review-gate.sh request' "$Q/logs/a.log" || true)" -eq 1 ]
 }
 
 @test "exit 13 with a failed review request stays waiting and asks again next pass" {
@@ -342,6 +349,6 @@ WHY="waiting for a bot review (review-gate.sh policy)"
   [[ "$(reason a)" == "$WHY: review request failed (exit 5), see "* ]]
   rm "$FX/comment-fails"
   run mq run-once
-  [ "$(reason a)" = "$WHY: review requested from codex" ]
+  [ "$(reason a)" = "$WHY: review requested from claude" ]
   [ "$(review_comments)" -eq 2 ]
 }
