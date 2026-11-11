@@ -48,6 +48,68 @@ red_runs() { # newest Test run 11 failed
 }
 snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
 
+# Tests name the snapshot lines they check instead of counting or indexing them (#201), so a new
+# snapshot line needs no edit here. The order is the one triage-tick.sh's header documents (the
+# source of truth); the required lines are the ones it always prints. Optional lines (holds,
+# hold-stale) and any line added later may follow.
+REQUIRED_SNAPSHOT_LINES="verdict main prs merge_loop dispatch slots cron threads host"
+
+# snap_line NAME: the one line of $output whose first word is NAME. Prints nothing and fails when
+# there is none or more than one, so `[ "$(snap_line x)" = ... ]` fails either way.
+snap_line() {
+  awk -v k="$1" '$1 == k { n++; l = $0 }
+    END { if (n == 1) { print l; exit 0 }
+          printf "snapshot line %s: found %d times, want once\n", k, n > "/dev/stderr"; exit 1 }' <<<"$output"
+}
+
+# required_snapshot_lines: every required line is in $output exactly once, in the documented order,
+# with the verdict first.
+required_snapshot_lines() {
+  awk -v want="$REQUIRED_SNAPSHOT_LINES" '
+    BEGIN { n = split(want, w, " "); for (i = 1; i <= n; i++) idx[w[i]] = i }
+    ($1 in idx) { seen[$1]++; at[$1] = NR }
+    END {
+      bad = 0
+      for (i = 1; i <= n; i++) if (seen[w[i]] != 1) { printf "%s: %d times, want once\n", w[i], seen[w[i]]; bad = 1 }
+      if (!bad && at["verdict"] != 1) { print "verdict is line " at["verdict"] ", want 1"; bad = 1 }
+      for (i = 2; !bad && i <= n; i++) if (at[w[i]] <= at[w[i-1]]) { printf "%s (line %d) before %s (line %d)\n", w[i], at[w[i]], w[i-1], at[w[i-1]]; bad = 1 }
+      exit bad
+    }' <<<"$output"
+}
+
+@test "the required snapshot lines are each present exactly once, in the documented order (#201)" {
+  run snap
+  [ "$status" -eq 0 ]
+  required_snapshot_lines
+  # holds present: the optional lines do not disturb the required ones
+  printf '70 until:main-green since:2026-09-26T03:00:00Z needs green main\n' >"$ST/holds"
+  run snap --hold-hours 1
+  [ "$status" -eq 0 ]
+  [ "$(snap_line holds)" = "holds n=1 stale=1" ]
+  [[ "$(snap_line hold-stale)" == "hold-stale #70 "* ]]
+  required_snapshot_lines
+  # the checker itself: a missing, repeated or misplaced line fails it
+  output=$'verdict ok\nmain green x\nprs open=0\nmerge_loop absent\ndispatch 0 next=-\nslots none\ncron none\nthreads none'
+  run required_snapshot_lines
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"host: 0 times"* ]]
+  output=$'verdict ok\nmain green x\nprs open=0\nmerge_loop absent\ndispatch 0 next=-\nslots none\ncron none\nthreads none\nhost unknown\nhost unknown'
+  run required_snapshot_lines
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"host: 2 times"* ]]
+  output=$'verdict ok\nprs open=0\nmain green x\nmerge_loop absent\ndispatch 0 next=-\nslots none\ncron none\nthreads none\nhost unknown'
+  run required_snapshot_lines
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"prs (line 2) before main (line 3)"* ]]
+  output=$'main green x\nverdict ok\nprs open=0\nmerge_loop absent\ndispatch 0 next=-\nslots none\ncron none\nthreads none\nhost unknown\nextra line'
+  run required_snapshot_lines
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verdict is line 2"* ]]
+  # an extra line anywhere is fine
+  output=$'verdict ok\nmain green x\nnew-part 1\nprs open=0\nmerge_loop absent\ndispatch 0 next=-\nslots none\ncron none\nthreads none\nhost unknown\nholds n=1 stale=0'
+  required_snapshot_lines
+}
+
 @test "a quiet campaign is one ok verdict with every part present" {
   echo "beat=$((ORCHESTRATE_NOW - 60)) deadline=$((ORCHESTRATE_NOW + 3600)) pid=0" >"$ST/merge-loop.beat"
   printf '2026-09-25T10:00:00Z\tpr=50\thead=abc\tmerged x\n2026-09-27T10:00:00Z\tpr=60\thead=abc\tmerged deadbeef method=squash admin=no\n2026-09-27T11:00:00Z\tpr=61\thead=abc\trefused not ready\n' >"$ST/merges.log"
@@ -55,15 +117,15 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   run snap --device-slots android=1,ios=2
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "verdict ok" ]
-  [ "${lines[1]}" = "main green aaaaaaaaa Test@aaaaaaaaa" ]
-  [ "${lines[2]}" = "prs open=2" ]
-  [[ "${lines[3]}" == "merge_loop alive beat_age=60 deadline=2026-09-27T13:00:00Z last_merge=2026-09-27T10:00:00Z pr=60 merges_24h=1" ]]
-  [ "${lines[4]}" = "dispatch 0 next=-" ]
-  [ "${lines[5]}" = "slots android=1/1,ios=1/2" ]
-  [ "${lines[6]}" = "cron none" ]
-  [ "${#lines[@]}" -eq 9 ]
-  [ "${lines[7]}" = "threads unresolved=0 answered=0 resolve-now=- repair=-" ]
-  [[ "${lines[8]}" == "host ADMIT cause="*" free_gb=32.0 load=0.50 limit=12.00" ]]
+  [ "$(snap_line main)" = "main green aaaaaaaaa Test@aaaaaaaaa" ]
+  [ "$(snap_line prs)" = "prs open=2" ]
+  [[ "$(snap_line merge_loop)" == "merge_loop alive beat_age=60 deadline=2026-09-27T13:00:00Z last_merge=2026-09-27T10:00:00Z pr=60 merges_24h=1" ]]
+  [ "$(snap_line dispatch)" = "dispatch 0 next=-" ]
+  [ "$(snap_line slots)" = "slots android=1/1,ios=1/2" ]
+  [ "$(snap_line cron)" = "cron none" ]
+  required_snapshot_lines
+  [ "$(snap_line threads)" = "threads unresolved=0 answered=0 resolve-now=- repair=-" ]
+  [[ "$(snap_line host)" == "host ADMIT cause="*" free_gb=32.0 load=0.50 limit=12.00" ]]
 }
 
 @test "the dispatch queue skips issues in an open PR, in an active lane, or excluded" {
@@ -99,7 +161,7 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   [ "$status" -eq 0 ]
   run snap
   [ "${lines[0]}" = "verdict act merge-loop-ended" ]
-  [[ "${lines[3]}" == "merge_loop ended:bound beat_age=0 "* ]]
+  [[ "$(snap_line merge_loop)" == "merge_loop ended:bound beat_age=0 "* ]]
   # no open PRs: an idle merge loop is not a problem
   echo '[]' >"$FX/prs.json"
   run snap
@@ -113,7 +175,7 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   echo '[]' >"$FX/issues.json"
   run snap
   [ "${lines[0]}" = "verdict ok" ]
-  [[ "${lines[3]}" == "merge_loop alive beat_age=0 deadline=2026-09-27T20:00:00Z"* ]]
+  [[ "$(snap_line merge_loop)" == "merge_loop alive beat_age=0 deadline=2026-09-27T20:00:00Z"* ]]
   run "$SCRIPTS/triage-tick.sh" beat --repo o/r
   [ "$status" -eq 2 ]
 }
@@ -124,15 +186,15 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   echo "flake: known BATS timing flake" >"$FX/class-11"
   run snap --classifier classify
   [ "${lines[0]}" = "verdict act flake-rerun" ]
-  [ "${lines[1]}" = "main red bbbbbbbbb runs=11:flake action=rerun" ]
+  [ "$(snap_line main)" = "main red bbbbbbbbb runs=11:flake action=rerun" ]
   [ -f "$ST/MAIN_RED" ]
   echo "INVESTIGATE new failure" >"$FX/class-11"
   run snap --classifier classify
   [ "${lines[0]}" = "verdict act main-red" ]
-  [ "${lines[1]}" = "main red bbbbbbbbb runs=11:investigate action=fix-lane" ]
+  [ "$(snap_line main)" = "main red bbbbbbbbb runs=11:investigate action=fix-lane" ]
   # no classifier configured: never assumed to be a flake
   run snap
-  [ "${lines[1]}" = "main red bbbbbbbbb runs=11:unclassified action=fix-lane" ]
+  [ "$(snap_line main)" = "main red bbbbbbbbb runs=11:unclassified action=fix-lane" ]
 }
 
 @test "rerun re-runs once, notes the tracking issue and holds merges until green" {
@@ -153,7 +215,7 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   echo '{"status":"in_progress"}' >"$FX/run-11.json"
   run snap
   [ "${lines[0]}" = "verdict act rerun-pending" ]
-  [ "${lines[1]}" = "main held rerun-pending runs=11" ]
+  [ "$(snap_line main)" = "main held rerun-pending runs=11" ]
   [ -f "$ST/MAIN_RED" ]
   # rerun green: the hold clears
   echo '{"status":"completed"}' >"$FX/run-11.json"
@@ -164,7 +226,7 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   red_runs
   echo "flake" >"$FX/class-11"
   run snap --classifier classify
-  [ "${lines[1]}" = "main red bbbbbbbbb runs=11:rerun-failed action=fix-lane" ]
+  [ "$(snap_line main)" = "main red bbbbbbbbb runs=11:rerun-failed action=fix-lane" ]
 }
 
 @test "a refused rerun is logged and can be tried again; a failed note is its own exit" {
@@ -187,9 +249,9 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   run snap
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "verdict act main-unknown" ]
-  [[ "${lines[1]}" == "main unknown no completed run"* ]]
-  [ "${lines[2]}" = "prs open=unknown" ]
-  [ "${lines[4]}" = "dispatch unknown next=-" ]
+  [[ "$(snap_line main)" == "main unknown no completed run"* ]]
+  [ "$(snap_line prs)" = "prs open=unknown" ]
+  [ "$(snap_line dispatch)" = "dispatch unknown next=-" ]
 }
 
 @test "cron records its creation and warns in the last day of its 7-day life" {
@@ -199,11 +261,11 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   [ "$status" -eq 0 ]
   run snap
   [ "${lines[0]}" = "verdict ok" ]
-  [ "${lines[6]}" = "cron age=48h expires_in=120h" ]
+  [ "$(snap_line cron)" = "cron age=48h expires_in=120h" ]
   run "$SCRIPTS/triage-tick.sh" cron --repo o/r --created $((ORCHESTRATE_NOW - 6 * 86400 - 3600))
   run snap
   [ "${lines[0]}" = "verdict act cron-expiring" ]
-  [ "${lines[6]}" = "cron age=145h expires_in=23h" ]
+  [ "$(snap_line cron)" = "cron age=145h expires_in=23h" ]
 }
 
 # host_stub RC [OUTPUT]: ORCHESTRATE_HOST_LOAD prints OUTPUT (TSV, as host-load.sh does) and exits RC.
@@ -219,9 +281,9 @@ host_stub() {
   run snap
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "verdict act dispatch=3" ]
-  [ "${lines[4]}" = "dispatch 3 next=#6,#8,#9" ]
-  [[ "${lines[8]}" == "host ADMIT cause="* ]]
-  [ "${#lines[@]}" -eq 9 ]
+  [ "$(snap_line dispatch)" = "dispatch 3 next=#6,#8,#9" ]
+  [[ "$(snap_line host)" == "host ADMIT cause="* ]]
+  required_snapshot_lines
 }
 
 @test "host HOLD or BACKOFF with a cause turns dispatch into host-hold; the queue is still listed (#114)" {
@@ -230,18 +292,18 @@ host_stub() {
   run snap
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "verdict act host-hold" ]
-  [ "${lines[4]}" = "dispatch 3 next=#6,#8,#9" ]
-  [ "${lines[8]}" = "host HOLD cause=indexing free_gb=20.0 load=30.1 limit=12.00" ]
+  [ "$(snap_line dispatch)" = "dispatch 3 next=#6,#8,#9" ]
+  [ "$(snap_line host)" = "host HOLD cause=indexing free_gb=20.0 load=30.1 limit=12.00" ]
   [ "$(cat "$FX/host-load.args")" = "--top 3" ]
   host_stub 4 "$(printf 'verdict\tBACKOFF\tfree memory 2.0 GB < 4 GB\nload\t1.0\t8 CPUs, limit 12.00\nmemory\t2.0\tmin 8, backoff 4\ncause\tlanes\tjava 300%%')"
   run snap
   [ "${lines[0]}" = "verdict act host-hold" ]
-  [ "${lines[8]}" = "host BACKOFF cause=lanes free_gb=2.0 load=1.0 limit=12.00" ]
+  [ "$(snap_line host)" = "host BACKOFF cause=lanes free_gb=2.0 load=1.0 limit=12.00" ]
   # nothing to dispatch: a held host adds no reason
   echo '[]' >"$FX/issues.json"
   run snap
   [ "${lines[0]}" = "verdict ok" ]
-  [[ "${lines[8]}" == "host BACKOFF "* ]]
+  [[ "$(snap_line host)" == "host BACKOFF "* ]]
 }
 
 @test "the real host-load.sh over a loaded host holds dispatch (#114)" {
@@ -249,7 +311,7 @@ host_stub() {
   ORCHESTRATE_HOST_LOAD1=99 run snap
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "verdict act host-hold" ]
-  [[ "${lines[8]}" == "host HOLD cause="*" free_gb=32.0 load=99 limit=12.00" ]]
+  [[ "$(snap_line host)" == "host HOLD cause="*" free_gb=32.0 load=99 limit=12.00" ]]
 }
 
 @test "a host-load failure says host unknown and blocks nothing (#114)" {
@@ -259,12 +321,12 @@ host_stub() {
     run snap
     [ "$status" -eq 0 ]
     [ "${lines[0]}" = "verdict act dispatch=3" ]
-    [ "${lines[8]}" = "host unknown" ]
-    [ "${#lines[@]}" -eq 9 ]
+    [ "$(snap_line host)" = "host unknown" ]
+    required_snapshot_lines
   done
   ORCHESTRATE_HOST_LOAD="$BATS_TEST_TMPDIR/no-such-command" run snap
   [ "$status" -eq 0 ]
-  [ "${lines[8]}" = "host unknown" ]
+  [ "$(snap_line host)" = "host unknown" ]
 }
 
 @test "an issue row without labels, or with labels null, is unlabelled, not a failed snapshot (#130)" {
@@ -272,13 +334,13 @@ host_stub() {
   echo '[{"number":6},{"number":7,"labels":null},{"number":8,"labels":[{"name":"blocked"}]},{"number":9,"labels":[{"name":"cloud-ready"}]}]' >"$FX/issues.json"
   run snap
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 9 ]
+  required_snapshot_lines
   [ "${lines[0]}" = "verdict act dispatch=3" ]
-  [ "${lines[4]}" = "dispatch 3 next=#6,#7,#9" ]
+  [ "$(snap_line dispatch)" = "dispatch 3 next=#6,#7,#9" ]
   # unlabelled: never matches a ready label
   run snap --ready-label cloud-ready
   [ "$status" -eq 0 ]
-  [ "${lines[4]}" = "dispatch 1 next=#9" ]
+  [ "$(snap_line dispatch)" = "dispatch 1 next=#9" ]
 }
 
 @test "the header is the -h text exactly" {
