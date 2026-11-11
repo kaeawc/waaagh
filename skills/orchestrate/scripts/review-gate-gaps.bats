@@ -1,14 +1,14 @@
 #!/usr/bin/env bats
 # review-gate.sh paths review-gate.bats does not reach: an unknown policy in the state file, a
-# review request that fails (exit 5), every green-only / reviewed-once verdict, an unknown bot id
-# in ORCHESTRATE_REVIEW_BOTS, the empty outage listing and unknown subcommands. Stubbed gh.
+# review request that fails (exit 5), every green-only / reviewed-once verdict, a review from a login
+# other than ORCHESTRATE_REVIEW_BOT_LOGIN, the empty outage listing and unknown subcommands. Stubbed gh.
 # Run: bats scripts/review-gate-gaps.bats
 
 setup() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1793880000
-  unset ORCHESTRATE_REVIEW_BOTS ORCHESTRATE_REVIEW_EVERY ORCHESTRATE_REVIEW_PROBE_EVERY
+  unset ORCHESTRATE_REVIEW_BOT_LOGIN ORCHESTRATE_REVIEW_TRIGGER ORCHESTRATE_REVIEW_CHECK ORCHESTRATE_REVIEW_QUOTA_RE ORCHESTRATE_REVIEW_EVERY ORCHESTRATE_REVIEW_PROBE_EVERY
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   STATE="$ORCHESTRATE_STATE_DIR/o__r"; mkdir -p "$STATE"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
@@ -21,6 +21,7 @@ echo "$*" >>"$FX/calls"
 case "$*" in
   "api repos/o/r/pulls/"*"/reviews"*) cat "$FX/reviews.json" ;;
   "api repos/o/r/issues/"*"/comments"*) echo '[]' ;;
+  "api repos/o/r/commits/"*"/check-runs"*) echo '{"check_runs":[]}' ;;
   "pr comment"*) [ ! -f "$FX/comment-fails" ] || { echo "HTTP 403" >&2; exit 4; }; echo "$*" >>"$FX/writes" ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
@@ -47,7 +48,7 @@ review() { # LOGIN COMMIT
   while IFS='|' read -r policy commit want_rc want; do
     echo "$policy" >"$STATE/review-policy"
     echo '[]' >"$FX/reviews.json"
-    case "$commit" in old) review coderabbitai "$OLD" ;; head) review "chatgpt-codex-connector[bot]" "$HEAD" ;; esac
+    case "$commit" in old) review claude "$OLD" ;; head) review "claude[bot]" "$HEAD" ;; esac
     run rg check --pr 5 --head "$HEAD"
     [ "$status" -eq "$want_rc" ] && [ "$output" = "$want" ] ||
       { echo "$policy/$commit: exit $status output '$output'"; return 1; }
@@ -61,30 +62,30 @@ reviewed-once|head|0|ok reviewed at-head
 CASES
 }
 
-@test "check: a bot id with no known login in ORCHESTRATE_REVIEW_BOTS never counts anyone's review" {
+@test "check: only a review from ORCHESTRATE_REVIEW_BOT_LOGIN counts; another login never does" {
   echo review-at-head >"$STATE/review-policy"
-  review coderabbitai "$HEAD"
-  ORCHESTRATE_REVIEW_BOTS="mystery" run rg check --pr 5 --head "$HEAD"
+  review "claude[bot]" "$HEAD"
+  ORCHESTRATE_REVIEW_BOT_LOGIN="mystery[bot]" run rg check --pr 5 --head "$HEAD"
   [ "$status" -eq 3 ]
   [ "$output" = "wait never-reviewed" ]
-  ORCHESTRATE_REVIEW_BOTS="mystery coderabbit" run rg check --pr 5 --head "$HEAD"
+  run rg check --pr 5 --head "$HEAD"
   [ "$status" -eq 0 ]
   [ "$output" = "ok reviewed at-head" ]
-  ORCHESTRATE_REVIEW_BOTS="mystery" run rg notice --author mystery <<<"usage limits reached"
+  ORCHESTRATE_REVIEW_BOT_LOGIN="mystery" run rg notice --author claude <<<"spending cap reached"
   [ "$output" = other ]
 }
 
 @test "request: a failed comment is exit 5, logged, kept queued, and does not start the window" {
   touch "$FX/comment-fails"
-  run rg request --bot codex --pr 7
+  run rg request --bot claude --pr 7
   [ "$status" -eq 5 ]
-  [ "$output" = "request to codex on PR 7 failed (exit 4); still queued" ]
-  grep -q $'\tcodex\tpr=7\tfailed exit=4$' "$STATE/review-requests.log"
-  [ "$(cut -f1 "$STATE/review-queue/codex.tsv")" = 7 ]
-  [ ! -f "$STATE/review-queue/codex.last" ]
+  [ "$output" = "request to claude on PR 7 failed (exit 4); still queued" ]
+  grep -q $'\tclaude\tpr=7\tfailed exit=4$' "$STATE/review-requests.log"
+  [ "$(cut -f1 "$STATE/review-queue/claude.tsv")" = 7 ]
+  [ ! -f "$STATE/review-queue/claude.last" ]
   rm "$FX/comment-fails"
-  run rg request --bot codex
-  [ "$status" -eq 0 ] && [ "$output" = "requested codex pr=7 queued=0" ]
+  run rg request --bot claude
+  [ "$status" -eq 0 ] && [ "$output" = "requested claude pr=7 queued=0" ]
 }
 
 @test "outage with no flags says so; unknown outage and ledger subcommands and commands are usage errors" {

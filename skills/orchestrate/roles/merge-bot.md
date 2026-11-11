@@ -54,11 +54,12 @@ until a newer `ship` row. Never record a verdict yourself: report the PR as held
    '<cmd>'`. Exit 12 (`busy:` another merge holds that path's lock): skip it this pass.
    Exit 13 (`needs review:` the owner's bot-review policy is not met): ask for the review once for
    that head through the throttle, `{{SCRIPTS}}/review-gate.sh request --repo {{REPO}} --pr <n>`
-   (it picks a bot that is not out of quota and posts only when that bot's window is open), and
-   record the PR as waiting with its line: `review requested from <bot>`, `review throttled until
-   <next>` or `no review requested: every review bot is out of quota`. Never ask again for the
-   same head (a throttled request stays queued; on a later pass at most drain it with
-   `review-gate.sh request --repo {{REPO}} --bot <bot>`), and never post `@<bot> review` yourself.
+   (it never asks an out-of-quota bot and posts `@claude review` only when the window is open), and
+   record the PR as waiting with its line: `review requested from claude`, `review throttled until
+   <next>`, `waiting for an automatic review from claude` or `no review requested: the review bot
+   is out of quota`. Never ask again for the same head (a throttled request stays queued; on a
+   later pass at most drain it with
+   `review-gate.sh request --repo {{REPO}} --bot claude`), and never post `@claude review` yourself.
    After each successful merge re-run step 2 with `--delta` added, because mergeability of the
    others changes: it fetches everything fresh but prints only rows that changed (or `no-change`),
    so work from the rows you already hold plus the delta. Always pass the head from the newest row
