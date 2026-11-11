@@ -76,9 +76,10 @@ seed_origin_copy() {
 #   gh_route PATTERN FILE   the route table $FX/routes.tsv: the first PATTERN, a bash glob over a
 #                           ("api repos/o/r/pulls/5", "pr list*"), that matches prints FILE
 #                           (relative to $FX unless absolute) and exits 0
-#   gh_routes <<'R' ... R   a `case "$a" in ... esac` body ($FX/routes.sh, replaced on each call)
-#                           for answers a file cannot give (computed, an error, an exit status);
-#                           an arm must exit, or the call falls through
+#   gh_routes <<'R' ... R   a whole `case "$a" in ... esac` statement, `case` and `esac` included
+#                           ($FX/routes.sh, replaced on each call, sourced as is) for answers a
+#                           file cannot give (computed, an error, an exit status); an arm must
+#                           exit, or the call falls through
 # and anything unmatched prints "unexpected gh call: <a>" on stderr and exits 9.
 #
 # gh_stub_args ARGS...: the argument handling every gh stub here shares (stub_gh_routes,

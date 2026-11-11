@@ -7,7 +7,7 @@
 # full: a failed-jobs-only rerun reads the same dependency result and fails again (#207).
 # Doctrine: failure-triage.md.
 #
-# Usage: failure-triage.sh <decide|rerun|record|match|list|pool> [--repo OWNER/REPO] [options]
+# Usage: failure-triage.sh <decide|rerun|needs|record|match|list|pool> [--repo OWNER/REPO] [options]
 #   decide --pr N --head SHA --check NAME [--verdict V] [--log FILE] [--file PATH]...
 #             print one line: `<action> <reason> [key=value]...`, action one of
 #               rerun-full the log shows a needs dependency that did not succeed (whatever the
@@ -32,6 +32,10 @@
 #             re-run run ID's failed jobs (`gh run rerun --failed`) once per PR, head and check, after
 #             checking the PR's head is still SHA; logged to pr-reruns.tsv. --full re-runs every job
 #             (`gh run rerun ID`), once per PR, head and check, even after a failed-jobs rerun
+#   needs --check NAME --log FILE
+#             the needs signature alone, for a run with no PR (triage-tick.sh rerun on the default
+#             branch, #230): print `needs <job> <result>` (`needs ? ?` from a recorded signature)
+#             and exit 0, or `none` and exit 1. Nothing is logged.
 #   pool [--window SECONDS] [--min N]
 #             print `runner-pool suspect prs=<N,...> hits=<n> window=<s>` when needs-dependency hits
 #             came from at least N (default 2) PRs in the last SECONDS (default 3600), else
@@ -49,7 +53,7 @@
 # (id, check glob, pattern, note, source, ISO time), pr-reruns.tsv (ISO time, pr=, head=, check=,
 # run=, outcome; a --full rerun's outcomes start `full-`), needs-hits.tsv (epoch, ISO time, pr=,
 # head=, check=, needs=, result=).
-# Exit: 0 ok (match: found) | 1 match: none | 2 usage | 3 refused (already re-run on this head;
+# Exit: 0 ok (match, needs: found) | 1 match, needs: none | 2 usage | 3 refused (already re-run on this head;
 #       signature already recorded) | 4 stale (the PR's head is no longer SHA) | 5 GitHub refused the
 #       rerun | 9 unverified (changed paths or head unreadable)
 set -euo pipefail
@@ -61,7 +65,7 @@ if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 usage() { orch_usage; }
 cmd=${1:-}
 case "$cmd" in
-  decide | rerun | record | match | list | pool) shift ;;
+  decide | rerun | needs | record | match | list | pool) shift ;;
   -h | --help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -103,7 +107,7 @@ case "$cmd" in
     [[ "$check$pattern$note$src" != *$'\t'* && "$check$pattern$note$src" != *$'\n'* ]] || bad "no tabs or newlines in fields"
     rc=0; grep -Eq -e "$pattern" </dev/null || rc=$?
     ((rc != 2)) || bad "--pattern is not a valid extended regex" ;;
-  match)
+  match | needs)
     [[ -n "$check" && -r "$log" ]] || bad "--check NAME and a readable --log FILE are required" ;;
   pool)
     [[ "$window" =~ ^[0-9]+$ && "$min_prs" =~ ^[1-9][0-9]*$ ]] || bad "--window SECONDS and --min N must be numbers" ;;
@@ -196,6 +200,10 @@ case "$cmd" in
     exit 0 ;;
   match)
     find_sig "$check" "$log" || exit 1
+    exit 0 ;;
+  needs)
+    dep=$(needs_sig "$check" "$log") || { echo none; exit 1; }
+    echo "needs ${dep%%$'\t'*} ${dep#*$'\t'}"
     exit 0 ;;
   pool)
     IFS=$'\t' read -r prs n <<<"$(pool_prs)"

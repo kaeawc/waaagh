@@ -42,6 +42,9 @@ only the gate job, which read the same `abandoned` result and failed again: a CI
   even after a failed-jobs rerun on the same head.
 - Re-run with `failure-triage.sh rerun ... --run ID --full`: `gh run rerun ID` without
   `--failed`, so the dependency runs again. Once per PR, head and check.
+- On the default branch there is no PR: `triage-tick.sh rerun` reads the run's failed-job log
+  through `failure-triage.sh needs` and re-runs the whole run on a hit, once per head SHA
+  (`--needs-only` for a run the classifier did not call a flake; roles/triage-tick.md).
 - Still not successful after the full rerun: `decide` prints `triage runner-pool`. That is not the
   code; do not reproduce it.
 - **Runner pool.** Each hit is logged to `needs-hits.tsv`. When two or more PRs hit it within the
