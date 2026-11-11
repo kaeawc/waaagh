@@ -8,6 +8,14 @@
 # Output (TSV): number  verdict  head  mergeable  passed  detail
 #   READY  mergeable, no pending check, no failed check, every required check passed, and no
 #          unresolved review thread
+#   BEHIND would be READY, but the base branch requires branches to be up to date (strict
+#          protection) and GitHub's mergeStateStatus is BEHIND: merge the base in first. Detail
+#          "behind". Over REST the state is pulls/<n> mergeable_state ("behind"). Strict is read from
+#          rulesets (strict_required_status_checks_policy) and, for a protected branch, classic
+#          protection (branches/<base>/protection/required_status_checks .strict, which needs admin
+#          and may answer 404): an unreadable setting counts as not strict, so the row stays READY
+#          and GitHub has the last word (#251). A WAIT or BLOCK row that is behind under strict
+#          protection carries the token "behind" in its detail too.
 #   WAIT   checks still pending (detail lists them)
 #   BLOCK  detail gives EVERY reason, space separated: conflict | fail:<checks>
 #          | missing-required:<checks> | few-checks=<n> | pending:<checks> | mergeable=<state>
@@ -52,7 +60,7 @@
 # PR_READY_EXTRA="<n> <n>..." (and the --pr number) name PRs that must be classified even when a
 # full page left them out, e.g. an old PR at the front of a serialized merge line: each one
 # missing from a full page is read with `gh pr view` and classified like the rest.
-# Last line on stderr: "open=<n> ready=<n>" (+ " ready-but-skipped=<n> skipped-by=<reason>:<n>,..."
+# Last line on stderr: "open=<n> ready=<n>" (+ " behind=<n>" when a row is BEHIND, + " ready-but-skipped=<n> skipped-by=<reason>:<n>,..."
 # when a skipped PR is otherwise READY, + " changed=<n>" with --delta, + " truncated=yes"
 # when the PR list hit its row limit, + " page=<limit>" when a smaller page was used,
 # + " extra-unreadable=<n,...>", + " policy=unknown", + " api=rest", + " diagnostics=<path>").
@@ -122,12 +130,18 @@ note() { # record a read problem in a diagnostics file; the verdicts carry only 
 # Required check names from both protection mechanisms: repository rulesets and classic branch
 # protection (the branch endpoint shows it to anyone with read access). A read that fails or
 # returns something malformed is "unknown", never "none": the PR cannot be judged READY.
-policy=known required='[]'
+# Strict protection ("require branches to be up to date", #251) comes from the same two places:
+# a ruleset's strict_required_status_checks_policy, or classic protection's
+# required_status_checks.strict. That classic endpoint needs admin rights and may answer 404:
+# unknown counts as not strict, so BEHIND is then reported as READY and GitHub has the last word.
+policy=known required='[]' strict=no
 ghr() { "$here/gh-read.sh" --json -- "$@"; }   # bounded, typed, read-only
 if out=$(ghr api "repos/$repo/rules/branches/$base" 2>>"$diag") &&
   r=$(jq -ce 'if type == "array" then [.[] | select(.type == "required_status_checks")
               | .parameters.required_status_checks[].context] else error("not an array") end' <<<"$out" 2>/dev/null); then
   required=$r
+  [[ "$(jq -r 'any(.[]; .type == "required_status_checks"
+    and .parameters.strict_required_status_checks_policy == true)' <<<"$out" 2>/dev/null)" != true ]] || strict=yes
 else
   policy=unknown; note "rulesets read failed for $base: ${out:0:500}"
 fi
@@ -137,11 +151,16 @@ if out=$(ghr api "repos/$repo/branches/$base" 2>>"$diag") &&
                 | unique
               else error("no protected field") end' <<<"$out" 2>/dev/null); then
   required=$r
+  if [[ "$strict" == no && "$(jq -r '.protected == true' <<<"$out" 2>/dev/null)" == true ]] &&
+    out=$(ghr api "repos/$repo/branches/$base/protection/required_status_checks" 2>/dev/null) &&
+    [[ "$(jq -r 'type == "object" and .strict == true' <<<"$out" 2>/dev/null)" == true ]]; then
+    strict=yes
+  fi
 else
   policy=unknown; note "branch protection read failed for $base: ${out:0:500}"
 fi
 
-fields=number,author,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,mergeable,labels,statusCheckRollup
+fields=number,author,isDraft,isCrossRepository,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,labels,statusCheckRollup
 # Large pages of statusCheckRollup time out (HTTP 502/504) on busy repositories; smaller pages
 # usually succeed. Only a transient (7) or malformed (8) read falls back; anything else is final.
 limits=(300 120 60 30)
@@ -231,7 +250,7 @@ fi
 rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" --argjson holds "$holds_json" \
     --argjson reviews "$reviews_json" --argjson required "$required" --arg base "$base" --arg hold_label "$hold_label" \
     --argjson excludes "$excludes_json" --arg head_match "$head_match" \
-    --argjson min_pass "$min_pass" --arg only_pr "$only_pr" '
+    --argjson min_pass "$min_pass" --arg only_pr "$only_pr" --arg strict "$strict" '
     def norm: . as $c | (($c.conclusion // "") | if . == "" then ($c.state // $c.status // "") else . end) | ascii_upcase;
     def kind: if IN("SUCCESS", "SKIPPED", "NEUTRAL") then "pass"
               elif IN("", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED") then "pending"
@@ -276,6 +295,8 @@ rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" 
            "label:" + ([$l[] | select(. as $x | $excludes | index($x))] | first)
          elif $head_match != "" and ((.headRefName // "") | test($head_match) | not) then "branch"
          else null end) as $skip
+    # Behind its base under strict protection: GitHub refuses the merge until the base is merged in.
+    | ($strict == "yes" and ((.mergeStateStatus // "") | ascii_upcase) == "BEHIND") as $behind
     | (([ (if .mergeable == "CONFLICTING" then "conflict" else empty end),
             (if ($fail | length) > 0 then "fail:" + ($fail | join(",")) else empty end),
             (if ($missing | length) > 0 and ($pend | length) == 0 then "missing-required:" + ($missing | join(",")) else empty end),
@@ -284,10 +305,13 @@ rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" 
          | if ($block | length) > 0 then
              # Keep the other dimensions next to the blockers instead of hiding them.
              ["BLOCK", ($block + [(if ($pend | length) > 0 then "pending:" + ($pend | join(",")) else empty end),
-                                   (if IN(.mergeable; "MERGEABLE", "CONFLICTING") then empty else "mergeable=" + .mergeable end)]
+                                   (if IN(.mergeable; "MERGEABLE", "CONFLICTING") then empty else "mergeable=" + .mergeable end),
+                                   (if $behind then "behind" else empty end)]
                        | join(" "))]
            elif ($pend | length) > 0 or .mergeable != "MERGEABLE" then
-             ["WAIT", (if ($pend | length) > 0 then "pending:" + ($pend | join(",")) else "mergeable=" + .mergeable end)]
+             ["WAIT", ([(if ($pend | length) > 0 then "pending:" + ($pend | join(",")) else "mergeable=" + .mergeable end),
+                        (if $behind then "behind" else empty end)] | join(" "))]
+           elif $behind then ["BEHIND", "behind"]
            else ["READY", "-"] end) as $judged
     | (if .isDraft then ["SKIP", "draft", "-"]
        elif .isCrossRepository then ["SKIP", "fork", "-"]
@@ -346,7 +370,7 @@ more_threads() {
 tcounts=""
 if [[ "$threads" == yes ]]; then
   ready_nums=()
-  while IFS= read -r n; do ready_nums+=("$n"); done < <(awk -F'\t' '$2 == "READY" || $2 == "BLOCK" || $7 == "READY" { print $1 }' <<<"$rows")
+  while IFS= read -r n; do ready_nums+=("$n"); done < <(awk -F'\t' '$2 == "READY" || $2 == "BEHIND" || $2 == "BLOCK" || $7 == "READY" { print $1 }' <<<"$rows")
   if [[ "$api" == rest ]]; then
     rest_each threads ${ready_nums[@]+"${ready_nums[@]}"}
     for n in ${ready_nums[@]+"${ready_nums[@]}"}; do
@@ -368,7 +392,7 @@ if [[ "$threads" == yes ]]; then
   done
 fi
 
-open=0 ready=0 skipped_ready=0 skipped_by=""
+open=0 ready=0 behind=0 skipped_ready=0 skipped_by=""
 out=""
 # Each row gains its review-thread count (column 8, empty when not read) in one awk pass, so the
 # loop below starts no process per PR.
@@ -386,7 +410,7 @@ while IFS=$'\t' read -r num verdict head mergeable passed detail inner tcount; d
       reason=${detail%% *}; skipped_by+="${reason%%:*}"$'\n'
     fi
   fi
-  if [[ "$verdict" == READY || "$verdict" == BLOCK ]]; then
+  if [[ "$verdict" == READY || "$verdict" == BEHIND || "$verdict" == BLOCK ]]; then
     extra=""
     [[ "$policy" == known ]] || extra+=" policy=unknown"
     if [[ "$threads" == yes ]]; then
@@ -399,11 +423,13 @@ while IFS=$'\t' read -r num verdict head mergeable passed detail inner tcount; d
     fi
   fi
   [[ "$verdict" == READY ]] && ready=$((ready + 1))
+  [[ "$verdict" != BEHIND ]] || behind=$((behind + 1))
   printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$num" "$verdict" "$head" "$mergeable" "$passed" "$detail"
   out+=$line$'\n'
 done <<<"$rows"
 
 summary="open=$open ready=$ready"
+((behind == 0)) || summary+=" behind=$behind"
 if ((skipped_ready)); then
   by=$(printf '%s' "$skipped_by" | sort | uniq -c | awk '{ printf "%s%s:%s", (NR > 1 ? "," : ""), $2, $1 }')
   summary+=" ready-but-skipped=$skipped_ready skipped-by=$by"

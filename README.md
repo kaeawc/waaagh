@@ -38,7 +38,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 
 | Script | Purpose |
 |---|---|
-| `pr-ready.sh` | One verdict per open PR: `READY`, `WAIT`, `BLOCK` (with reasons) or `SKIP`; falls back to smaller pages when the list times out (`PR_READY_EXTRA` names PRs to classify anyway); reads over REST when GraphQL is refused |
+| `pr-ready.sh` | One verdict per open PR: `READY`, `BEHIND` (green but behind a base that requires up-to-date branches), `WAIT`, `BLOCK` (with reasons) or `SKIP`; falls back to smaller pages when the list times out (`PR_READY_EXTRA` names PRs to classify anyway); reads over REST when GraphQL is refused |
 | `pr-merge.sh` | Merge one PR after re-checking head, author, draft and fork state; honours the red-main hold; refuses a PR in the hold file (exit 14); `--admin` only in the fast path and only with evidence |
 | `merge-queue.sh` | Serial local merge queue (`add`, `run-once`, `status`, `retry`): merge base in, run the check command, hand off to `pr-merge.sh`; records a per-item outcome (a held PR parks as `held` and resumes on release) and only `merged` satisfies dependents |
 | `merge-sensitive.sh` | Which merge-sensitive paths a PR touches, and whether it may merge: its head contains the base, the base moved only outside the protected paths, or a merge-result check passes on base + head; `drift` lists the protected paths main moved over (#204) |
