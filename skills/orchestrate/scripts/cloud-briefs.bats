@@ -141,9 +141,9 @@ ver() { # ver K: the version on the first line of waaagh's K brief, so a bump ne
   jq -e '.name == "r #5 cloud repair of PR #31" and .run_once_at == "2026-09-27T12:01:20Z"
     and .job_config.ccr.events[0].data.message == "Follow .claude/briefs/repair.md for PR #31 (issue #5, branch work/5-auto)."' <<<"$output"
   [ ! -s "$FX/calls" ]
-  run cd_ record --issue 5 --kind repair --trigger trig_r --run-at 2026-09-27T12:01:20Z
-  [ "$output" = "recorded 5 trig_r 2026-09-27T12:01:20Z repair" ]
-  cd_ record --issue 6 --kind repair --trigger trig_s --run-at 2026-09-27T12:01:40Z
+  run cd_ record --issue 5 --kind repair --pr 31 --trigger trig_r --run-at 2026-09-27T12:01:20Z
+  [ "${lines[0]}" = "recorded 5 trig_r 2026-09-27T12:01:20Z repair" ]
+  cd_ record --issue 6 --kind repair --pr 32 --trigger trig_s --run-at 2026-09-27T12:01:40Z
   run cd_ next
   [ "$output" = "6" ]
   run cd_ status

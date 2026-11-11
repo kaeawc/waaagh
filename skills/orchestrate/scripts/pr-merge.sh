@@ -52,9 +52,10 @@
 #       end` lifts it). Checked before the gates and again right before the merge.
 #       Also when the PR's latest internal review verdict (review-ledger.sh) is not ship
 #       (`held: ... latest internal review`); only a newer ship verdict clears that
-# Holds: a PR in <state dir>/holds, or whose latest review-ledger.sh verdict is fix-first, rethink
-# or fixing, is never merged, in any mode (--admin, --main-fix and ORCHESTRATE_DIRECT_MERGE
-# included); a hold file or review ledger that cannot be read refuses with exit 9.
+# Holds: a PR in <state dir>/holds, or whose latest review-ledger.sh verdict is fix-first, rethink,
+# fixing, repairing or repaired (#212), is never merged, in any mode (--admin, --main-fix and
+# ORCHESTRATE_DIRECT_MERGE included); a hold file or review ledger that cannot be read refuses
+# with exit 9.
 # Review policy: when <state dir>/review-policy is set and not off, review-gate.sh check must say
 # ok for the head; a merge it allowed without a review is added to the unreviewed-merges ledger.
 # GitHub outages: success is read from the PR state, never from the merge's exit code. A 5xx or

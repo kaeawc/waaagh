@@ -15,7 +15,9 @@ from memory (advisory workflows, ready label, device slot types).
    and the first word it prints is the verdict. Without one, no red run is treated as a flake.
    One line per part, each named by its first word: `verdict`, `main`, `prs`, `merge_loop`,
    `dispatch`, `slots`, `cron`, `threads`, `host`, then `holds n=<k> stale=<m>` and one
-   `hold-stale` line per stale hold when the merge loop holds any PR (`hold.sh`). `triage-tick.sh
+   `hold-stale` line per stale hold when the merge loop holds any PR (`hold.sh`), then `repairs
+   inflight=… settled=… unknown=…` and one `repair-stale` line per long repair when a repair
+   session is in flight (`review-ledger.sh settle`). `triage-tick.sh
    -h` is the source of truth for the lines and their order; find a line by its name, not its
    position or the count. The first is the verdict: `verdict ok`, or `verdict act <reason>,...`. It refreshes main health (sets or clears `MAIN_RED`) in the same
    call. Work only from these lines.
@@ -68,6 +70,13 @@ from memory (advisory workflows, ready label, device slot types).
      Report the rest with age, condition and reason; `manual` (owner, or an old line with no
      condition) needs the owner or a re-add with `hold.sh add --until <event>`. Never report a hold
      as released unless `hold.sh` printed `released:`.
+   - `repaired=<n>`: the `repairs` line's `settled=` PRs had a repair session in flight that has
+     now posted its closing comment (`review-ledger.sh settle` recorded `repaired`). Report them:
+     each needs a review of its final head before a `ship` verdict lets it merge (#212).
+   - `repair-stale=<m>`: each `repair-stale #<pr> session:<id> since:<iso>` line is a repair in
+     flight longer than `--hold-hours` with no closing comment. Report it; the orchestrator checks
+     the session and, if its run ended, records `review-ledger.sh repaired --pr <pr> --session
+     <id>`. Never record `repaired` or `ship` for a repair yourself.
 3. Re-run the snapshot only if you wrote something in step 2, and report its verdict line.
 
 ## Report (under 150 words)

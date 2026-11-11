@@ -186,6 +186,12 @@ holds the PR on every merge path (`pr-ready.sh` SKIP `review:<verdict>`, `pr-mer
 it. Starting a fix pass on a PR, for any reason, is `"$SCRIPTS/review-ledger.sh" fix --pr N` before
 the lane starts: it holds the PR the same way, so the merge loop never merges a branch a fix lane
 is still writing. Every lane confirms the PR is still open before each push (`roles/_common.md`).
+A repair session dispatched to a PR is in flight until it ends (#212): `cloud-dispatch.sh record
+--kind repair --pr N` marks it `repairing`, which holds the PR and refuses a `ship` verdict, so a
+review of its first pushed commit never lets the merge loop strand the rest of the repair. The
+session's closing comment (`review-ledger.sh settle`, run by every triage tick) or
+`review-ledger.sh repaired` when its run ended records `repaired`; then review the final head
+(`roles/cloud-dispatch.md`, "A repair is in flight until it ends").
 
 **Concept brief** (Fable): the decision, constraints, options considered, what would change the
 answer. Ask for a verdict (ship / fix-first / rethink) with the deciding risk, under 300 words.
@@ -229,7 +235,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `merge-manifests` | you | shared manifests whose drift on main re-validates a merge-sensitive PR or the queue front (optional; replaces the default package.json, lockfiles, schemas) |
 | `locks/` | `pr-merge.sh` | one lock per merge-sensitive path while a merge over it is in flight |
 | `holds`, `holds.log` | `hold.sh` | merge-loop holds, one `<pr> until:<event> since:<iso> <reason>` line each (skipped by `pr-ready.sh`, refused by `pr-merge.sh` exit 14, parked `held` by `merge-queue.sh`, aged by the tick); every hold and release, logged in the same step as the file edit |
-| `reviews.tsv` | `review-ledger.sh` | internal review verdicts, one `iso pr verdict head note` row each, appended; a latest verdict other than `ship` holds the PR from merging |
+| `reviews.tsv` | `review-ledger.sh` | internal review verdicts, one `iso pr verdict head note [session]` row each, appended; a latest verdict other than `ship` holds the PR from merging, and a repair in flight (`repairing`) refuses `ship` |
 | `reruns.log`, `merge-loop.beat`, `triage-cron` | `triage-tick.sh` | known-flake reruns of default-branch runs (one per run; a full rerun once per head SHA for a needs dependency that did not succeed); the merge loop's heartbeat and why it ended; when the session cron was created |
 | `bin/`, `loops/` | `loops.sh` | long-lived loop scripts (merge loop, tick, review snapshot), never in a session scratchpad; one `<name>.heartbeat` per loop, beaten every pass |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
