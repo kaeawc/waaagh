@@ -173,8 +173,14 @@ while validation runs.
 
 **Review brief** (`roles/review.md`): goal, acceptance criteria, risk surface, and the diff as a
 path — never pasted inline. Verified findings only, with `file:line` and a failure scenario.
+When a PR changes what an input means (units, coordinate space, encoding, default), the verdict
+must carry a written-out "Callers of changed functions" section listing every caller, internal
+ones included, and whether each still passes the right meaning; a focused brief never waives it
+(#211). Where a repo uses Claude Code Review, put the same rule in the repo's review instructions.
 Record every verdict the moment it comes back: `"$SCRIPTS/review-ledger.sh" record --pr N --verdict
-ship|fix-first|rethink --head <sha>`. The latest verdict is a merge gate (#206): anything but `ship`
+ship|fix-first|rethink --head <sha> --findings <file>`: a ship whose findings lack the
+`input-meaning:` line, or the callers section when it says `changed`, is recorded `incomplete`
+(exit 6) and holds the PR. The latest verdict is a merge gate (#206): anything but `ship`
 holds the PR on every merge path (`pr-ready.sh` SKIP `review:<verdict>`, `pr-merge.sh` exit 14,
 `merge-queue.sh` `held`) and adds a `hold.sh` hold until `review-ship`; a newer `ship` row releases
 it. Starting a fix pass on a PR, for any reason, is `"$SCRIPTS/review-ledger.sh" fix --pr N` before
@@ -226,6 +232,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `FREEZE`, `freeze-disarmed`, `freeze.log` | `freeze.sh` | present during a release freeze: every PR held on every merge path; the auto-merges it disarmed (method, head, who armed it) to re-arm at `end`; every disarm and re-arm (`release-freeze.md`) |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
 | `merge-sensitive` | you | merge-sensitive path globs (optional): PRs touching one merge serially and only up to date |
+| `merge-manifests` | you | shared manifests whose drift on main re-validates a merge-sensitive PR or the queue front (optional; replaces the default package.json, lockfiles, schemas) |
 | `locks/` | `pr-merge.sh` | one lock per merge-sensitive path while a merge over it is in flight |
 | `holds`, `holds.log` | `hold.sh` | merge-loop holds, one `<pr> until:<event> since:<iso> <reason>` line each (skipped by `pr-ready.sh`, refused by `pr-merge.sh` exit 14, parked `held` by `merge-queue.sh`, aged by the tick); every hold and release, logged in the same step as the file edit |
 | `reviews.tsv` | `review-ledger.sh` | internal review verdicts, one `iso pr verdict head note [session]` row each, appended; a latest verdict other than `ship` holds the PR from merging, and a repair in flight (`repairing`) refuses `ship` |
@@ -424,6 +431,12 @@ against its PR's own changes.
   head (`--worktree DIR --merge-check CMD`, e.g. `gradle help` or the budget test). A stale PR goes
   back for a fresh base merge and a green run; the merge queue does that on its next pass.
   `"$SCRIPTS/merge-sensitive.sh" check --pr N --head SHA` answers the same question read-only.
+  **Re-validate the front only on protected drift** (#204): a PR behind main is stale, and a
+  waiting queue item gets main merged in again (fresh CI), only when main's newer commits touch a
+  merge-sensitive glob or a shared manifest (`<state dir>/merge-manifests`; default package.json,
+  lockfiles, schema files). Updating on every unrelated merge restarts the front's CI each time
+  and it never lands. A repo whose branch protection requires up-to-date branches sets
+  `MERGE_QUEUE_UPDATE_BEHIND=always`.
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
   every stacked merge: take the default branch's copy and regenerate it, never hand-merge.
   `"$SCRIPTS/regen-merge.sh"` does this from `<state dir>/generated-files.tsv` and refuses an

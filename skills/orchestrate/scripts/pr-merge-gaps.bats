@@ -28,6 +28,7 @@ case "$*" in
   "api repos/o/r/pulls/1/reviews"*) [ ! -f "$FX/reviews-fail" ] || { echo "HTTP 404" >&2; exit 1; }; echo '[]' ;;
   "api repos/o/r/issues/1/comments"*) echo '[]' ;;
   "api repos/o/r/pulls/1 "*) [ ! -f "$FX/base-fail" ] || { echo "HTTP 404" >&2; exit 1; }; echo main ;;
+  "api repos/o/r/compare/"*"...main "*) printf 'gradle/libs.versions.toml\n' ;; # the base's drift
   "api repos/o/r/compare/"*) cat "$FX/behind" 2>/dev/null || echo 0 ;;
   "pr list"*) [ ! -f "$FX/list-forbidden" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
     jq -n --arg h "$(cat "$FX/list-head" 2>/dev/null || echo "$HEAD")" '[{number: 1, author: {login: "me"}, isDraft: false,

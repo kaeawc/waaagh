@@ -23,6 +23,8 @@ case "$all" in
   "api --paginate repos/o/r/pulls/5/files"*) [ ! -f "$FX/files-fail" ] || { echo "HTTP 404" >&2; exit 1; }; cat "$FX/files" ;;
   "api repos/o/r/pulls/5 "*) echo main ;;
   "api repos/o/r/compare/main..."*) cat "$FX/behind" ;;
+  "api repos/o/r/compare/"*"...main "*) [ ! -f "$FX/drift-fail" ] || { echo "HTTP 502" >&2; exit 1; }
+    cat "$FX/drift" 2>/dev/null || cat "$FX/files" ;; # the base's drift (default: the PR's files)
   "pr view"*) if [ -f "$FX/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}';
     else jq -n --arg h "$(cat "$FX/head")" '{state: "OPEN", isDraft: false, isCrossRepository: false,
       headRefOid: $h, author: {login: "me"}, mergeable: "MERGEABLE", autoMergeRequest: null}'; fi ;;
@@ -77,7 +79,7 @@ merge() { ORCHESTRATE_DIRECT_MERGE=1 "$SCRIPTS/pr-merge.sh" --repo o/r --pr 5 --
   echo 2 >"$FX/behind"
   run ms check --head "$HEAD"
   [ "$status" -eq 3 ]
-  [[ "$output" == "stale: PR 5 touches merge-sensitive src/ and is 2 commit(s) behind main; merge main in"* ]]
+  [[ "$output" == "stale: PR 5 touches merge-sensitive src/ and is 2 commit(s) behind main, which touch src/; merge main in"* ]]
 }
 
 @test "check: an unreadable file list is unverified, never clear" {
@@ -192,7 +194,7 @@ DUPCHECK='! sed -n "s/ =.*//p" libs.toml | sort | uniq -d | grep .'
 @test "merge-queue: a stale refusal leaves the item waiting; the next pass merges main in and pushes again" {
   # The real merge-queue.sh beside a pr-merge.sh that answers with the exit code in $FX/pm-rc.
   S="$BATS_TEST_TMPDIR/s"; mkdir -p "$S"
-  cp "$SCRIPTS/merge-queue.sh" "$SCRIPTS/_lib.sh" "$SCRIPTS/gh-read.sh" "$SCRIPTS/regen-merge.sh" "$SCRIPTS/hold.sh" "$SCRIPTS/review-ledger.sh" "$S/"
+  cp "$SCRIPTS/merge-queue.sh" "$SCRIPTS/_lib.sh" "$SCRIPTS/gh-read.sh" "$SCRIPTS/regen-merge.sh" "$SCRIPTS/hold.sh" "$SCRIPTS/review-ledger.sh" "$SCRIPTS/merge-sensitive.sh" "$S/"
   printf '#!/usr/bin/env bash\necho "$*" >>"$FX/pm-calls"\nexit "$(cat "$FX/pm-rc")"\n' >"$S/pr-merge.sh"
   chmod +x "$S/pr-merge.sh"
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'

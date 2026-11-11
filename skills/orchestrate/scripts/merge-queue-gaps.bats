@@ -47,6 +47,7 @@ case "$all" in
   "api repos/o/r/issues/5/comments"*) echo '[]' ;;
   "api repos/o/r/commits/"*"/check-runs"*) echo '{"check_runs":[]}' ;;
   "api repos/o/r/pulls/5 "*) echo main ;;
+  "api repos/o/r/compare/"*"...main "*) printf 'f.txt\n' ;; # the base's drift
   "api repos/o/r/compare/"*) cat "$FX/behind" 2>/dev/null || echo 1 ;;
   "pr list"*"--state merged"*) [ ! -f "$FX/merged-list-fails" ] || { echo "HTTP 502" >&2; exit 1; }; echo '[]' ;;
   "pr list"*--head*) b=$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/'); echo "$b" >"$FX/branch"
@@ -351,4 +352,29 @@ WHY="waiting for a bot review (review-gate.sh policy)"
   run mq run-once
   [ "$(reason a)" = "$WHY: review requested from claude" ]
   [ "$(review_comments)" -eq 2 ]
+}
+
+@test "a waiting front resumes over unrelated drift; a manifest move or MERGE_QUEUE_UPDATE_BEHIND=always merges main in (#204)" {
+  echo '[{"name":"build","status":"IN_PROGRESS"}]' >"$FX/checks.json"
+  wt a
+  enqueue a
+  run mq run-once
+  [ "$(outcome a)" = waiting ]
+  first=$(git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/a)
+  main_moves docs.txt x
+  run mq run-once
+  [ "$(outcome a)" = waiting ]
+  [ "$(git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/a)" = "$first" ]
+  grep -q "a: resuming at ${first:0:9}: main moved, but over no protected path" "$Q/logs/a.log"
+  main_moves package.json '{}'
+  run mq run-once
+  second=$(git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/a)
+  [ "$second" != "$first" ]
+  grep -q "a: main moved over protected package.json; merging it in" "$Q/logs/a.log"
+  main_moves docs.txt y
+  MERGE_QUEUE_UPDATE_BEHIND=always run mq run-once
+  [ "$(git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/a)" != "$second" ]
+  echo '[{"name":"build","conclusion":"SUCCESS"}]' >"$FX/checks.json"
+  run mq run-once
+  [ "$(outcome a)" = merged ]
 }
