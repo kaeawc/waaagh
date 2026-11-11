@@ -82,8 +82,8 @@ Lane briefs and role templates state them; `roles/_common.md` rules 1 and 6 carr
    brief.
 3. **Open PRs ready for review.** Once the CI-verifiable work is complete, the PR opens ready for
    review, and its body lists the device evidence still missing (what to exercise, on which
-   platform). A draft opened while device evidence is pending skips bot review (CodeRabbit does
-   not review drafts), so findings arrive late.
+   platform). A draft opened while device evidence is pending skips bot review (Claude Code Review
+   does not review drafts automatically), so findings arrive late.
 4. **Check blockers before dispatch.** Before launching a lane, run `open-blockers.sh <n>...`:
    it reads the issue's native `blocked by` links and any "Blocked by #N" in its body, looks up
    each one's state, and prints `<n> BLOCKED by #a #b` or `<n> clear` (exit 3 when any is

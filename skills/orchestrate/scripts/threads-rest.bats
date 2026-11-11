@@ -64,14 +64,14 @@ th() {
 # outdated one. PR 71: nothing usable. PR 72: no threads. Issues: #5 (closed by PR 70), #6, #7
 # (blocked), #8.
 write_fixtures() {
-  jq -n --argjson a "$(th PRRT_iss codex-bot me 'Filed as follow-up #101.')" \
-    --argjson b "$(th PRRT_fix codex-bot me 'Fixed in ABC1234 (pushed).')" \
+  jq -n --argjson a "$(th PRRT_iss claude me 'Filed as follow-up #101.')" \
+    --argjson b "$(th PRRT_fix claude me 'Fixed in ABC1234 (pushed).')" \
     --argjson c "$(th PRRT_done bot me 'follow-up #9' | jq -c '.isResolved = true')" \
     --argjson d "$(th PRRT_old bot me 'follow-up #9' | jq -c '.isOutdated = true')" \
-    --argjson e "$(th PRRT_none codex-bot)" \
-    --argjson f "$(th PRRT_badsha codex-bot me 'fixed in 1234567')" \
-    --argjson g "$(th PRRT_back codex-bot me 'follow-up #5' codex-bot 'that issue is about something else')" \
-    --argjson h "$(th PRRT_self codex-bot me 'see #71 and https://github.com/o/r/pull/71#discussion_r2')" '
+    --argjson e "$(th PRRT_none claude)" \
+    --argjson f "$(th PRRT_badsha claude me 'fixed in 1234567')" \
+    --argjson g "$(th PRRT_back claude me 'follow-up #5' claude 'that issue is about something else')" \
+    --argjson h "$(th PRRT_self claude me 'see #71 and https://github.com/o/r/pull/71#discussion_r2')" '
     def pr($n; $oids; $t): {number: $n, commits: {nodes: [$oids[] | {commit: {oid: .}}]},
       reviewThreads: {pageInfo: {hasNextPage: false}, nodes: $t}};
     [pr(70; ["abc1234def5678900000000000000000000000000"]; [$a, $b, $c, $d]),

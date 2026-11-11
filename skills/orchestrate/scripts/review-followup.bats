@@ -20,7 +20,7 @@ thread_view() {
   jq -n --arg pr "$(cat "$FX/thread-pr")" --argjson r "$([ -f "$FX/resolved" ] && echo true || echo false)" \
     --slurpfile rep "$FX/replies.json" '{data: {node: {__typename: "PullRequestReviewThread", isResolved: $r,
       path: "src/a.sh", line: 12, originalLine: 12, pullRequest: {number: ($pr | tonumber), title: "Add a"},
-      comments: {nodes: ([{author: {login: "codex-bot"}, url: "https://github.com/o/r/pull/7#discussion_r1",
+      comments: {nodes: ([{author: {login: "claude"}, url: "https://github.com/o/r/pull/7#discussion_r1",
         body: "P2: the loop drops the last page\nsecond line"}] + [$rep[0][] | {body: .}])}}}}'
 }
 issue_view() {
@@ -80,19 +80,19 @@ write_threads() {
   cat >"$FX/threads.json" <<'JSON'
 {"data":{"repository":{"pullRequest":{"author":{"login":"me"},
  "reviews":{"nodes":[{"author":{"login":"me"},"state":"COMMENTED","submittedAt":"2026-11-04T09:00:00Z"},
-                     {"author":{"login":"codex-bot"},"state":"COMMENTED","submittedAt":"2026-11-04T10:00:00Z"},
-                     {"author":{"login":"codex-bot"},"state":"COMMENTED","submittedAt":"2026-11-04T15:00:00Z"}]},
+                     {"author":{"login":"claude"},"state":"COMMENTED","submittedAt":"2026-11-04T10:00:00Z"},
+                     {"author":{"login":"claude"},"state":"COMMENTED","submittedAt":"2026-11-04T15:00:00Z"}]},
  "reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
   {"id":"PRRT_first","isResolved":false,"isOutdated":false,"path":"a.sh","line":3,"originalLine":3,
-   "comments":{"nodes":[{"author":{"login":"codex-bot"},"createdAt":"2026-11-04T09:59:58Z","url":"u1","body":"**<sub><sub>![P1 Badge](https://img)</sub></sub>  Off by one**\n\ndetail"}]}},
+   "comments":{"nodes":[{"author":{"login":"claude"},"createdAt":"2026-11-04T09:59:58Z","url":"u1","body":"**Off by one** <!-- severity: important -->\n\n<details><summary>Why this was flagged</summary>detail</details>"}]}},
   {"id":"PRRT_later","isResolved":false,"isOutdated":false,"path":"b.sh","line":null,"originalLine":9,
-   "comments":{"nodes":[{"author":{"login":"codex-bot"},"createdAt":"2026-11-04T15:00:00Z","url":"u2","body":"P2: page dropped"}]}},
+   "comments":{"nodes":[{"author":{"login":"claude"},"createdAt":"2026-11-04T15:00:00Z","url":"u2","body":"Nit: page dropped"}]}},
   {"id":"PRRT_own","isResolved":false,"isOutdated":false,"path":"c.sh","line":1,"originalLine":1,
    "comments":{"nodes":[{"author":{"login":"me"},"createdAt":"2026-11-04T16:00:00Z","url":"u3","body":"note to self"}]}},
   {"id":"PRRT_done","isResolved":true,"isOutdated":false,"path":"d.sh","line":1,"originalLine":1,
-   "comments":{"nodes":[{"author":{"login":"codex-bot"},"createdAt":"2026-11-04T15:00:00Z","url":"u4","body":"x"}]}},
+   "comments":{"nodes":[{"author":{"login":"claude"},"createdAt":"2026-11-04T15:00:00Z","url":"u4","body":"x"}]}},
   {"id":"PRRT_old","isResolved":false,"isOutdated":true,"path":"e.sh","line":null,"originalLine":1,
-   "comments":{"nodes":[{"author":{"login":"codex-bot"},"createdAt":"2026-11-04T15:00:00Z","url":"u5","body":"y"}]}}]}}}}}
+   "comments":{"nodes":[{"author":{"login":"claude"},"createdAt":"2026-11-04T15:00:00Z","url":"u5","body":"y"}]}}]}}}}}
 JSON
 }
 
@@ -102,8 +102,8 @@ JSON
   [ "$status" -eq 0 ]
   stderr=$(cat "$FX/err")
   [ "${#lines[@]}" -eq 3 ]
-  [ "${lines[0]}" = "$(printf 'first\tPRRT_first\ta.sh:3\tcodex-bot\tu1\tOff by one')" ]
-  [ "${lines[1]}" = "$(printf 'later\tPRRT_later\tb.sh:9\tcodex-bot\tu2\tP2: page dropped')" ]
+  [ "${lines[0]}" = "$(printf 'first\tPRRT_first\ta.sh:3\tclaude\tu1\tOff by one')" ]
+  [ "${lines[1]}" = "$(printf 'later\tPRRT_later\tb.sh:9\tclaude\tu2\tNit: page dropped')" ]
   [[ "${lines[2]}" == own$'\t'PRRT_own* ]]
   [ "$stderr" = "pr=7 unresolved=3 first=1 later=1 own=1 round-end=2026-11-04T10:00:00Z" ]
 }
