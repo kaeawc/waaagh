@@ -121,6 +121,20 @@ orch_hold_of() {
   printf '%s\n' "$rows"
 }
 
+# orch_review_hold_of OWNER/REPO PR: does PR's latest internal review verdict hold it? Read through
+# review-ledger.sh latest. Prints `#N review:<verdict> since:<iso> head:<sha> <note>` and returns 0
+# when the latest verdict is not ship (fix-first, rethink, fixing), 1 when it is ship or there is
+# none, 2 when the ledger could not be read. The merge paths ask it next to orch_hold_of (#206).
+orch_review_hold_of() {
+  local row rc=0 t p v h n
+  row=$("$_orch_lib_dir/review-ledger.sh" latest --repo "$1" --pr "${2#\#}" 2>/dev/null) || rc=$?
+  ((rc != 3)) || return 1
+  ((rc == 0)) || return 2
+  IFS=$'\t' read -r t p v h n <<<"$row"
+  [[ "$v" != ship ]] || return 1
+  printf '#%s review:%s since:%s head:%s %s\n' "$p" "$v" "$t" "$h" "$n"
+}
+
 # orch_iso EPOCH -> 2026-01-02T03:04:05Z
 orch_iso() { jq -rn --argjson t "$1" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")'; }
 

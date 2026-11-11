@@ -9,7 +9,7 @@ Your prompt gives: the merge mode (`conservative` or `fast`) and any PR that fix
 
 **Holds** live in one file, `{{STATE}}/holds`, kept only by `{{SCRIPTS}}/hold.sh` (#196). Each line is
 `<pr> until:<event> since:<iso> <reason>`, where the event is machine-checkable: `device-recheck`,
-`main-green`, `merged:N`, `closed:N`, `at:<iso>` or `owner`. `pr-ready.sh` skips every held PR by
+`main-green`, `review-ship`, `merged:N`, `closed:N`, `at:<iso>` or `owner`. `pr-ready.sh` skips every held PR by
 itself; pass `--hold N` only for a PR your prompt names that is not in the file yet, and add it:
 `hold.sh add --repo {{REPO}} --pr N --until <event> --reason "<why>"`. Release a hold only with
 `hold.sh release --repo {{REPO}} --pr N --note "<evidence>"`: it removes the line and writes the
@@ -17,7 +17,10 @@ itself; pass `--hold N` only for a PR your prompt names that is not in the file 
 The file binds every merge path, not only selection: `pr-merge.sh` refuses a held PR with exit 14
 (`held:`) in every mode, `--admin`, `--main-fix` and direct mode included, and `merge-queue.sh`
 parks a held item as `held` until the hold is released (#202). Report exit 14 as held; never work
-around it.
+around it. The latest internal review verdict (`{{STATE}}/reviews.tsv`, kept only by
+`{{SCRIPTS}}/review-ledger.sh`) holds the same way (#206): a PR whose newest verdict is `fix-first`,
+`rethink` or `fixing` shows `SKIP review:<verdict>`, and `pr-merge.sh` refuses it with exit 14,
+until a newer `ship` row. Never record a verdict yourself: report the PR as held by its review.
 
 ## Steps
 1. `{{SCRIPTS}}/main-health.sh --repo {{REPO}}` — if it prints `red`, merge only the PRs your

@@ -192,7 +192,7 @@ DUPCHECK='! sed -n "s/ =.*//p" libs.toml | sort | uniq -d | grep .'
 @test "merge-queue: a stale refusal leaves the item waiting; the next pass merges main in and pushes again" {
   # The real merge-queue.sh beside a pr-merge.sh that answers with the exit code in $FX/pm-rc.
   S="$BATS_TEST_TMPDIR/s"; mkdir -p "$S"
-  cp "$SCRIPTS/merge-queue.sh" "$SCRIPTS/_lib.sh" "$SCRIPTS/gh-read.sh" "$SCRIPTS/regen-merge.sh" "$SCRIPTS/hold.sh" "$S/"
+  cp "$SCRIPTS/merge-queue.sh" "$SCRIPTS/_lib.sh" "$SCRIPTS/gh-read.sh" "$SCRIPTS/regen-merge.sh" "$SCRIPTS/hold.sh" "$SCRIPTS/review-ledger.sh" "$S/"
   printf '#!/usr/bin/env bash\necho "$*" >>"$FX/pm-calls"\nexit "$(cat "$FX/pm-rc")"\n' >"$S/pr-merge.sh"
   chmod +x "$S/pr-merge.sh"
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'

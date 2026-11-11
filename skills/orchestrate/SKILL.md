@@ -173,6 +173,13 @@ while validation runs.
 
 **Review brief** (`roles/review.md`): goal, acceptance criteria, risk surface, and the diff as a
 path — never pasted inline. Verified findings only, with `file:line` and a failure scenario.
+Record every verdict the moment it comes back: `"$SCRIPTS/review-ledger.sh" record --pr N --verdict
+ship|fix-first|rethink --head <sha>`. The latest verdict is a merge gate (#206): anything but `ship`
+holds the PR on every merge path (`pr-ready.sh` SKIP `review:<verdict>`, `pr-merge.sh` exit 14,
+`merge-queue.sh` `held`) and adds a `hold.sh` hold until `review-ship`; a newer `ship` row releases
+it. Starting a fix pass on a PR, for any reason, is `"$SCRIPTS/review-ledger.sh" fix --pr N` before
+the lane starts: it holds the PR the same way, so the merge loop never merges a branch a fix lane
+is still writing. Every lane confirms the PR is still open before each push (`roles/_common.md`).
 
 **Concept brief** (Fable): the decision, constraints, options considered, what would change the
 answer. Ask for a verdict (ship / fix-first / rethink) with the deciding risk, under 300 words.
@@ -214,6 +221,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `merge-sensitive` | you | merge-sensitive path globs (optional): PRs touching one merge serially and only up to date |
 | `locks/` | `pr-merge.sh` | one lock per merge-sensitive path while a merge over it is in flight |
 | `holds`, `holds.log` | `hold.sh` | merge-loop holds, one `<pr> until:<event> since:<iso> <reason>` line each (skipped by `pr-ready.sh`, refused by `pr-merge.sh` exit 14, parked `held` by `merge-queue.sh`, aged by the tick); every hold and release, logged in the same step as the file edit |
+| `reviews.tsv` | `review-ledger.sh` | internal review verdicts, one `iso pr verdict head note` row each, appended; a latest verdict other than `ship` holds the PR from merging |
 | `reruns.log`, `merge-loop.beat`, `triage-cron` | `triage-tick.sh` | known-flake reruns of default-branch runs (one per run); the merge loop's heartbeat and why it ended; when the session cron was created |
 | `bin/`, `loops/` | `loops.sh` | long-lived loop scripts (merge loop, tick, review snapshot), never in a session scratchpad; one `<name>.heartbeat` per loop, beaten every pass |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
@@ -555,7 +563,7 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
    reviews, inline comments and review threads (use `github-pr-feedback` if present). Triage the
    actionable items together.
 3. **One consolidated fix pass** (the PR doctor, an Opus lane) for every actionable item
-   at once. An empty snapshot does not consume the pass. In the fast path, see the policy table.
+   at once, held from merging while it runs (`review-ledger.sh fix`; released by the next `ship`). An empty snapshot does not consume the pass. In the fast path, see the policy table.
 4. **Checkpoint** each PR in `$("$SCRIPTS/pr-claim.sh" path --repo <o/r> --pr <n>)/state.json`:
    ```json
    {"pr": 123, "head_sha": "…", "fingerprint": "…",
