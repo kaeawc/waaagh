@@ -15,8 +15,9 @@
 #   --changed B  measure only what a branch changed (#194): the scripts that differ from the merge
 #                base with B (default origin/main; committed, staged, unstaged or untracked), the
 #                suites that name one of them outside a comment, directly or through a *.bash helper
-#                they load (gh-shim/gh: suites that name gh-shim), then --check dev/coverage-floor.tsv
-#                for those scripts only. Partial numbers as with FILE; the changed scripts are listed
+#                they load (gh-shim/gh: suites that name gh-shim), or that name a script sourcing one
+#                (`source`/`.`, transitively: _slots.sh picks wt-cleanup.sh's suites, #245), then
+#                --check dev/coverage-floor.tsv for those scripts only. Partial numbers as with FILE; the changed scripts are listed
 #                in coverage/changed.txt. No changed script: nothing runs, exit 0. A changed script
 #                no suite names is reported and not judged (CI's full run still measures it).
 #   --check F    run no suites: compare an existing resultset to the floors in F (script<TAB>min%,
@@ -215,19 +216,38 @@ if [[ -n "$changed" ]]; then
   sdir=$root/skills/orchestrate/scripts
   # names FILE PATTERN: FILE has a non-comment line matching PATTERN (awk reads to the end: no early-exit pipe).
   names() { awk -v p="$2" '!/^[[:space:]]*#/ && $0 ~ p { hit = 1 } END { exit !hit }' "$1"; }
-  unnamed="" picked=""
-  while IFS= read -r f; do
-    b=${f##*/}
-    if [[ "$f" == */gh-shim/gh ]]; then pat='gh-shim'; else pat="(^|[^A-Za-z0-9_.-])${b//./[.]}([^A-Za-z0-9_-]|\$)"; fi
-    found=""
-    for s in "$sdir"/*.bats; do if names "$s" "$pat"; then found+="$s"$'\n'; fi; done
+  # naming PATH: the suites that name PATH outside a comment, directly or through a *.bash helper.
+  naming() {
+    local b=${1##*/} pat s h hb
+    if [[ "$1" == */gh-shim/gh ]]; then pat='gh-shim'; else pat="(^|[^A-Za-z0-9_.-])${b//./[.]}([^A-Za-z0-9_-]|\$)"; fi
+    for s in "$sdir"/*.bats; do if names "$s" "$pat"; then echo "$s"; fi; done
     # A helper that names it counts for every suite that loads the helper.
     for h in "$sdir"/*.bash; do
       names "$h" "$pat" || continue
       hb=${h##*/}; hb=${hb%.bash}
-      for s in "$sdir"/*.bats; do if names "$s" "(^|[[:space:];])load[[:space:]]+[\"']?$hb([\"'.;[:space:]]|\$)"; then found+="$s"$'\n'; fi; done
+      for s in "$sdir"/*.bats; do if names "$s" "(^|[[:space:];])load[[:space:]]+[\"']?$hb([\"'.;[:space:]]|\$)"; then echo "$s"; fi; done
     done
-    if [[ -z "$found" ]]; then unnamed+="$f"$'\n'; else picked+="$found"; fi
+  }
+  # sourcers PATH: the scripts that source PATH (`source` or `.`), transitively (#245): a suite
+  # reaches a sourced helper such as _slots.sh through them without naming it.
+  sourcers() {
+    local todo=$1 seen=$'\n'"$1"$'\n' cur b sp
+    while [[ -n "$todo" ]]; do
+      cur=${todo%%$'\n'*}
+      if [[ "$todo" == *$'\n'* ]]; then todo=${todo#*$'\n'}; else todo=""; fi
+      b=${cur##*/}
+      for sp in "$sdir"/*.sh "$root"/bin/*.sh; do
+        [[ -f "$sp" && "$seen" != *$'\n'"${sp#"$root"/}"$'\n'* ]] || continue
+        names "$sp" "(^|[[:space:];&|(])(source|[.])[[:space:]]+[^;&|]*[/\"'[:space:]]${b//./[.]}([\"';)[:space:]]|\$)" || continue
+        seen+="${sp#"$root"/}"$'\n'; todo+="${todo:+$'\n'}${sp#"$root"/}"
+        echo "${sp#"$root"/}"
+      done
+    done
+  }
+  unnamed="" picked=""
+  while IFS= read -r f; do
+    found=$(naming "$f"; while IFS= read -r p; do [[ -z "$p" ]] || naming "$p"; done < <(sourcers "$f"))
+    if [[ -z "$found" ]]; then unnamed+="$f"$'\n'; else picked+="$found"$'\n'; fi
   done <<<"$only"
   # cli-contract.bats runs every script's -h and unknown-flag lines without naming the script.
   [[ -z "$picked" || ! -f "$sdir/cli-contract.bats" ]] || picked+="$sdir/cli-contract.bats"$'\n'
