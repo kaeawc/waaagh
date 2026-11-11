@@ -10,14 +10,21 @@
 #            open PR, or on PR N:   pr  thread-id  answer  ref  url
 #            answer: issue  the last reply links an issue (`#N` or an issues/N URL; not the PR itself)
 #                  | fix    the last reply names a commit of the PR (a 7-40 hex sha or a commit URL)
+#                  | stalled  our own account replied last, after the PR's head commit, and the
+#                           reply names neither: an "agreed, proposed fix" reply with no push (#209).
+#                           A reply that starts "Disagree" is a stated disagreement and stays open.
+#                           Our account is ORCHESTRATE_SELF_LOGIN, else `gh api user`, read only
+#                           when such a reply exists (a failed read leaves the thread open)
 #                  | open   no reply yet, the thread's starter spoke last, or the reply names neither
 #            Last line, on stderr (with --summary, the only line, on stdout):
-#              threads unresolved=<n> answered=<n> resolve-now=#a,#b|- repair=#c|-
+#              threads unresolved=<n> answered=<n> resolve-now=#a,#b|- repair=#c|- [stalled=#d,...]
 #            resolve-now: every unresolved thread on the PR is answered, so resolving them is all it
-#            needs (not a repair target). repair: at least one thread is open. Over GraphQL a PR
-#            with more than 100 review threads is never resolve-now.
+#            needs (not a repair target). repair: at least one thread is open or stalled. stalled
+#            (only when there is one): PRs with a stalled thread, which no session is still working
+#            on: send a repair, do not wait. Over GraphQL a PR with more than 100 review threads is
+#            never resolve-now.
 #   resolve  resolve each answered thread on PR N with thread-resolve.sh (no new reply: the answer
-#            is already on the thread); open threads are left alone. Prints thread-resolve.sh's
+#            is already on the thread); open and stalled threads are left alone. Prints thread-resolve.sh's
 #            lines, then "pr=<n> resolved=<n> open=<n> failed=<n>".
 # GraphQL first; where GitHub refuses it (Claude Code cloud sessions) the same scan runs over REST
 # (orch_gh_api / orch_gh_refused in _lib.sh, ORCHESTRATE_GH_API=auto|rest|graphql): the open PRs
@@ -58,10 +65,10 @@ repo=$(orch_repo "$repo")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-fields='number commits(last:100){nodes{commit{oid}}}
+fields='number commits(last:100){nodes{commit{oid committedDate}}}
   reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated
     starter: comments(first:1){nodes{author{login} url}}
-    latest: comments(last:1){totalCount nodes{author{login} body}}}}'
+    latest: comments(last:1){totalCount nodes{author{login} body createdAt}}}}'
 # prs_graphql -> a JSON array of pull request nodes (every open PR, or PR $pr). A failed read
 # returns gh-read.sh's exit code, with its stderr in $work/err.
 prs_graphql() {
@@ -117,10 +124,32 @@ prs=$(prs_json) || {
   exit 4
 }
 
+# The jq definitions both passes below share. epoch: an ISO time as epoch seconds, null when absent
+# or unparsable. head: the epoch of the PR's last commit (0 without one). late: the thread's last
+# reply is not its starter's and came after the head commit, so whoever wrote it pushed nothing since.
+defs='
+  def epoch: if type == "string" then (try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null) else null end;
+  def head: ((.commits.nodes // []) | last | .commit.committedDate // null | epoch) // 0;
+  def late($h): (.latest.nodes[0] // {}) as $l
+    | (.latest.totalCount // 0) >= 2 and (($l.author.login // "") != (.starter.nodes[0].author.login // ""))
+      and (($l.createdAt | epoch) // -1) > $h;
+  def current: .reviewThreads.nodes[] | select((.isResolved | not) and (.isOutdated | not));'
+
+# Our own login, read only when some current thread has a late reply: an agreed but unpushed reply
+# is ours, and a reply from anyone else is not a stalled session of ours.
+self=""
+if jq -e "$defs"' any(.[]; head as $h | any(current; late($h)))' >/dev/null 2>&1 <<<"$prs"; then
+  self=${ORCHESTRATE_SELF_LOGIN:-}
+  if [[ -z "$self" ]]; then
+    self=$("$here/gh-read.sh" --json --tries 3 -- api user 2>/dev/null | jq -r '.login // empty' 2>/dev/null) || self=""
+  fi
+  self=${self%\[bot\]}
+fi
+
 # One TSV row per unresolved, current thread, then a "TRUNC<TAB>n" row per PR whose threads did
 # not fit in one page.
-rows=$(jq -r '
-  def answer($n; $oids):
+rows=$(jq -r --arg self "$self" "$defs"'
+  def answer($n; $oids; $h):
     (.latest.nodes[0] // {}) as $l
     | if (.latest.totalCount // 0) < 2 or (($l.author.login // "") == (.starter.nodes[0].author.login // "")) then ["open", "-"]
       else ($l.body // "") as $b
@@ -128,24 +157,27 @@ rows=$(jq -r '
           | select(. != ($n | tostring))] | first) as $iss
       | ([$b | scan("\\b[0-9a-fA-F]{7,40}\\b") | ascii_downcase | . as $s
           | select(any($oids[]; startswith($s)))] | first) as $sha
-      | if $iss then ["issue", "#\($iss)"] elif $sha then ["fix", $sha[0:12]] else ["open", "-"] end
+      | if $iss then ["issue", "#\($iss)"] elif $sha then ["fix", $sha[0:12]]
+        elif $self != "" and ($l.author.login // "") == $self and late($h)
+          and ($b | test("^[\\s*_>]*disagree"; "i") | not) then ["stalled", "-"]
+        else ["open", "-"] end
       end;
-  .[] | .number as $n | [(.commits.nodes // [])[] | .commit.oid] as $oids
-  | ((.reviewThreads.nodes[] | select((.isResolved | not) and (.isOutdated | not))
-      | [$n, .id] + answer($n; $oids) + [.starter.nodes[0].url // "-"] | @tsv),
+  .[] | .number as $n | [(.commits.nodes // [])[] | .commit.oid] as $oids | head as $h
+  | ((current | [$n, .id] + answer($n; $oids; $h) + [.starter.nodes[0].url // "-"] | @tsv),
      (select(.reviewThreads.pageInfo.hasNextPage) | "TRUNC\t\($n)"))' <<<"$prs")
 
 summary_line=$(awk -F'\t' '
   $1 == "TRUNC" { trunc[$2] = 1; next }
   NF >= 5 { u++; if (!($1 in seen)) { seen[$1] = 1; order[++k] = $1 }
-            if ($3 == "open") open[$1]++; else a++ }
+            if ($3 == "open" || $3 == "stalled") open[$1]++; else a++
+            if ($3 == "stalled" && !($1 in st)) { st[$1] = 1; sl = sl (sl == "" ? "" : ",") "#" $1 } }
   END {
     now = ""; rep = ""
     for (i = 1; i <= k; i++) { p = order[i]
       if (open[p] > 0 || (p in trunc)) rep = rep (rep == "" ? "" : ",") "#" p
       else now = now (now == "" ? "" : ",") "#" p }
     for (p in trunc) if (!(p in seen)) rep = rep (rep == "" ? "" : ",") "#" p
-    printf "threads unresolved=%d answered=%d resolve-now=%s repair=%s\n", u, a, (now == "" ? "-" : now), (rep == "" ? "-" : rep)
+    printf "threads unresolved=%d answered=%d resolve-now=%s repair=%s%s\n", u, a, (now == "" ? "-" : now), (rep == "" ? "-" : rep), (sl == "" ? "" : " stalled=" sl)
   }' <<<"$rows")
 
 if [[ "$cmd" == scan ]]; then
@@ -159,7 +191,7 @@ fi
 resolved=0 open=0 failed=0 rc=0
 while IFS=$'\t' read -r n id answer _ref _url; do
   [[ "$n" != TRUNC && -n "$id" ]] || continue
-  if [[ "$answer" == open ]]; then open=$((open + 1)); continue; fi
+  if [[ "$answer" == open || "$answer" == stalled ]]; then open=$((open + 1)); continue; fi
   args=(--repo "$repo" --pr "$pr" --thread "$id")
   [[ "$dry" == no ]] || args+=(--dry-run)
   r=0

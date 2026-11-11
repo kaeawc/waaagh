@@ -51,6 +51,9 @@ from memory (advisory workflows, ready label, device slot types).
      thread answered (an issue link or a pushed fix in the last reply). They are not repair
      targets: for each, `"{{SCRIPTS}}/thread-sweep.sh" resolve --repo {{REPO}} --pr <n>` (exit 5
      or 9: rerun once). Only `repair=` PRs need a lane. See `{{SCRIPTS}}/../thread-resolution.md`.
+   - `stalled=<n>`: the `threads` line's `stalled=` PRs have a thread our own account answered
+     after the head commit without naming a commit or an issue (agreed, nothing pushed). The
+     session that wrote it has ended: dispatch a repair for each now, do not wait for it (#209).
    - `reviewed-draft=<n>`: each `reviewed-draft #<pr> review=<v> rollup=<r>: <what>` line is a
      draft with a ship verdict or green checks. The merge loop skips drafts, so it sits unmerged
      until someone marks it ready (#205). Report each as "reviewed draft: mark ready?" with its
