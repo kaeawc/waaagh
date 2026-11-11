@@ -3,10 +3,10 @@
 # (<state dir> = ~/.claude/orchestrate/<owner>__<repo>/) holds campaign.json, MAIN_RED,
 # merges.log, filled briefs and role reports.
 #
-# Usage: campaign.sh <path|status|lanes|verified|wrap-up|close-policy> [--repo OWNER/REPO] [options]
+# Usage: campaign.sh <path|status|lanes|verified|wrap-up|close-policy|mode> [--repo OWNER/REPO] [options]
 #   path      print the state directory
 #   status    [--bots idle|working] [--verify idle|running]  one key=value per line:
-#             paused, wrap_up (on|off), close_policy, open_prs, merge_mode (conservative|fast), main (ok|red, as
+#             paused, wrap_up (on|off), close_policy, mode, open_prs, merge_mode (conservative|fast), main (ok|red, as
 #             last written by main-health.sh), merged_since_verification, verification_due (yes|no),
 #             lanes, and with wrap-up on: active_lanes, decisions_open, drained (yes|no)
 #   lanes     --bots idle|working --verify idle|running      print the implementation-lane cap
@@ -19,6 +19,10 @@
 #             (issue-close.sh --as completed; owner-decisions.md). owner-only (the default): only
 #             with an owner decision recorded on the issue. verified: also with a merged PR plus
 #             device evidence for every platform the change touches.
+#   mode [attended|autonomous]  print, or set, whether the campaign runs without the owner.
+#             attended (the default): reviewed drafts are reported for the owner to mark ready.
+#             autonomous: triage-tick.sh snapshot also marks a draft ready itself once its latest
+#             internal review verdict is ship and no hold names it (#205).
 # active_lanes counts rows of <state dir>/lanes.tsv whose last column is not done, merged, closed
 # or abandoned; decisions_open counts "- [ ]" lines in <state dir>/decisions.md.
 # Defaults (override per repo from memory, via flag or env):
@@ -50,7 +54,7 @@ while (($#)); do
     --verify-every) every=$2; shift 2 ;;
     --fast-path-over) over=$2; shift 2 ;;
     --pause-label) pause_labels=("$2"); shift 2 ;;
-    on | off | owner-only | verified) wrap_pos=$1; shift ;;
+    on | off | owner-only | verified | attended | autonomous) wrap_pos=$1; shift ;;
     *) echo "campaign.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -73,6 +77,8 @@ case "$cmd" in
     if [[ -z "$repo" ]]; then lane_cap; exit 0; fi ;;
   close-policy)
     [[ "${wrap_pos:-owner-only}" =~ ^(owner-only|verified)$ ]] || { echo "campaign.sh: close-policy is owner-only or verified" >&2; exit 2; } ;;
+  mode)
+    [[ "${wrap_pos:-attended}" =~ ^(attended|autonomous)$ ]] || { echo "campaign.sh: mode is attended or autonomous" >&2; exit 2; } ;;
   path | status | verified | wrap-up) ;;
   *) orch_usage >&2; exit 2 ;;
 esac
@@ -100,6 +106,13 @@ case "$cmd" in
       jq --arg p "$wrap_pos" '.close_policy = $p' "$ledger" >"$tmp" && mv "$tmp" "$ledger"
     fi
     jq -r '.close_policy // "owner-only"' "$ledger"
+    ;;
+  mode)
+    if [[ -n "${wrap_pos:-}" ]]; then
+      tmp=$(mktemp "$ledger.XXXXXX")
+      jq --arg m "$wrap_pos" '.mode = $m' "$ledger" >"$tmp" && mv "$tmp" "$ledger"
+    fi
+    jq -r '.mode // "attended"' "$ledger"
     ;;
   path) echo "$state" ;;
   verified)
@@ -130,6 +143,7 @@ case "$cmd" in
     echo "paused=$paused"
     echo "wrap_up=$wrap_up"
     echo "close_policy=$(jq -r '.close_policy // "owner-only"' "$ledger")"
+    echo "mode=$(jq -r '.mode // "attended"' "$ledger")"
     echo "open_prs=$open"
     echo "merge_mode=$( ((open > over)) && echo fast || echo conservative)"
     echo "main=$main"

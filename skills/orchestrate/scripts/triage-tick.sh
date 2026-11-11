@@ -16,6 +16,14 @@
 #            refreshes the per-head cache review-gate.sh check reads); omitted with no open PR.
 #            The count comes from the open-PR read dispatch needs (gh-issues.sh prs-open, over REST
 #            where GraphQL is refused); should that read fail there, from the snapshot.
+#       reviewed-draft #<pr> review=<verdict|none> rollup=<state>: <mark ready?|held (until:<event>)
+#                  |marked ready|mark-ready failed (why)>
+#                  one line per draft PR whose latest internal review verdict (review-ledger.sh) is
+#                  ship or whose checks are green (#205): pr-ready.sh skips drafts, so nothing else
+#                  merges them. "held" when a hold or the release freeze names it (hold.sh). In
+#                  autonomous mode (campaign.sh mode autonomous) a ship draft that no hold names, its
+#                  verdict on the current head or on none named, is marked ready here (`gh pr ready`,
+#                  or REST where GraphQL is refused; read back) and logged to <state dir>/drafts.log.
 #       merge_loop <absent|alive|stale|dead|expired|ended:REASON> [beat_age=<s>] [deadline=<iso>]
 #                  last_merge=<iso|-> pr=<n|-> merges_24h=<n>
 #       dispatch <n|unknown> next=#a,#b,#c     open issues (any --ready-label; none of
@@ -43,7 +51,8 @@
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
 #     host-hold (in place of dispatch=<n> while the host line is HOLD or BACKOFF; "host unknown"
 #     holds nothing), cron-expiring (under 24h left), resolve-now=<n> (PRs whose threads only need
-#     resolving: the local orchestrator resolves them, they are not repair targets), hold-stale=<m>
+#     resolving: the local orchestrator resolves them, they are not repair targets), reviewed-draft=<n>
+#     (reviewed-draft lines not marked ready: mark them ready, or say why not), hold-stale=<m>
 #     (holds past --hold-hours: check their release condition, `hold.sh check`), repaired=<n>
 #     (repairs that ended: review the final head, then record the verdict), repair-stale=<m>
 #     (check the session; if its run ended, `review-ledger.sh repaired --pr N`). A part that
@@ -314,6 +323,53 @@ if [[ "$open" != unknown && "$open" != 0 ]]; then
     end' <<<"$snap")
 fi
 
+# Drafts that look done (#205): pr-ready.sh skips every draft, so a draft with a ship verdict or
+# green checks would sit unmerged and unreported. In autonomous mode a ship draft no hold names is
+# marked ready: `gh pr ready` (GraphQL), else REST, then read back, since REST may keep the draft.
+mark_ready() { # PR -> what the reviewed-draft line says; one drafts.log line either way
+  local n=$1 out="" rc=0 via=graphql left
+  if [[ "$(orch_gh_api triage-tick.sh)" == graphql ]]; then
+    out=$(gh pr ready "$n" --repo "$repo" 2>&1) || rc=$?
+    if ((rc != 0)) && orch_gh_refused 5 "$out"; then via=rest rc=0; fi
+  else via=rest; fi
+  [[ "$via" != rest ]] || out=$(gh api -X PATCH "repos/$repo/pulls/$n" -F draft=false 2>&1) || rc=$?
+  if ((rc == 0)); then
+    left=$("$here/gh-read.sh" --json -- api "repos/$repo/pulls/$n" 2>/dev/null | jq -r '.draft | if type == "boolean" then tostring else empty end') || left=""
+    case "$left" in
+      false) out="marked ready" ;;
+      true) out="mark-ready failed (still a draft after the $via write: mark it ready elsewhere, e.g. GitHub MCP update_pull_request draft=false)" ;;
+      *) out="mark-ready failed (unverified: the $via write returned, the PR could not be read back)" ;;
+    esac
+  else
+    out=${out//$'\n'/ }
+    out="mark-ready failed ($via: ${out:0:120})"
+  fi
+  printf '%s\tpr=%s\tvia=%s\t%s\n' "$(orch_iso "$now")" "$n" "$via" "$out" >>"$state/drafts.log" || true
+  echo "$out"
+}
+drafts="" ndraft=0
+if [[ -n "$snap" ]]; then
+  mode=$(jq -r '.mode // "attended"' "$state/campaign.json" 2>/dev/null) || mode=attended
+  while IFS=$'\t' read -r n head roll; do
+    [[ -n "$n" ]] || continue
+    row=$("$here/review-ledger.sh" latest --repo "$repo" --pr "$n" 2>/dev/null) || row=""
+    IFS=$'\t' read -r _ _ v vhead _ <<<"$row" || true
+    [[ "$v" == ship || "$roll" == SUCCESS ]] || continue
+    what="mark ready?" hrc=0
+    held=$(orch_hold_of "$repo" "$n") || hrc=$?
+    if ((hrc == 2)); then what="held (the hold file could not be read)"
+    elif ((hrc == 0)); then what="held ($(awk 'NR == 1 { print $2 }' <<<"$held"))"
+    elif [[ "$v" == ship && "${vhead:--}" != - && "$head" != "$vhead"* && "$vhead" != "$head"* ]]; then
+      what="mark ready? (the ship verdict is for ${vhead:0:9}, not the head)"
+    elif [[ "$mode" == autonomous && "$v" == ship ]]; then
+      what=$(mark_ready "$n")
+    fi
+    [[ "$what" == "marked ready" ]] || ndraft=$((ndraft + 1))
+    drafts+="reviewed-draft #$n review=${v:-none} rollup=$roll: $what"$'\n'
+  done < <(jq -r '.[] | select(.draft == true) | [.number, .head, .rollup] | @tsv' <<<"$snap")
+fi
+((ndraft == 0)) || reasons+=("reviewed-draft=$ndraft")
+
 # Merge-loop liveness and the last merges.
 loop=absent loop_extra=""
 if [[ -f "$beatf" ]]; then
@@ -413,6 +469,7 @@ fi
 if ((${#reasons[@]})); then echo "verdict act $(IFS=,; echo "${reasons[*]}")"; else echo "verdict ok"; fi
 echo "$main_line"
 echo "prs open=$open${reviews:+ $reviews}"
+[[ -z "$drafts" ]] || printf '%s' "$drafts"
 echo "merge_loop $loop$loop_extra $last"
 echo "dispatch $dispatch next=$next"
 echo "slots $slots"
