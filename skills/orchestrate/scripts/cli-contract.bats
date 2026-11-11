@@ -22,7 +22,7 @@ setup() {
 # the checks holds for them trivially.
 scripts() {
   local f
-  for f in "$SCRIPTS"/*.sh "$ROOT"/bin/*.sh "$ROOT"/dev/*.sh; do
+  for f in "$SCRIPTS"/*.sh "$ROOT"/dev/*.sh; do
     [[ "$(header "$f")" == *"Source, do not execute"* ]] && continue
     echo "$f"
   done

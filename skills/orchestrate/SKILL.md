@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: "Run a repository's delivery loop with parallel agents: plan from the issue tracker, implement in isolated lanes, review, merge, and verify what merged. Codex lanes (GPT-6 Luna for routine work, GPT-6.1 Sol for judgment work) write all implementation code; Sonnet drives each lane (Haiku for mechanical ones), Haiku scouts and validates, Opus is the one independent reviewer per lane, Fable judges concepts. Claude usage is treated as a budget. Standing single-pass roles — merge bot, rebase bot, issue-hygiene bot, post-merge verification — run from brief templates and tested scripts, with a lane-count policy (16/12/4), a conservative merge policy that switches to a fast path above 20 open PRs, and durable campaign state under ~/.claude/orchestrate/<owner>__<repo>/. Also covers one writer per branch, jj vs Git isolation, fingerprint-keyed results, excerpted logs, bounded CI polling, and claim-based takeover of the user's own open PRs. USE WHEN delegating nontrivial or parallel work, running a multi-lane campaign over issues and PRs, choosing a lane/model/effort, validating or reviewing delegated work, driving PRs through feedback, CI and merge, triaging or deduplicating issues for planning, scheduling post-merge verification, or controlling session cost."
+description: "Run a repository's delivery loop with parallel agents: plan from the issue tracker, implement in isolated lanes, review, merge, and verify what merged. Claude subagents do all of it: a Sonnet lane implements routine, fully specified work and an Opus lane implements judgment work, each writing its code and tests in its own worktree; Haiku scouts and validates independently, Opus is the one independent reviewer per lane, Fable judges concepts, and the orchestrator commits and pushes. Standing single-pass roles — merge bot, rebase bot, issue-hygiene bot, post-merge verification — run from brief templates and tested scripts, with a lane-count policy (16/12/4), a conservative merge policy that switches to a fast path above 20 open PRs, and durable campaign state under ~/.claude/orchestrate/<owner>__<repo>/. Also covers one writer per branch, jj vs Git isolation, fingerprint-keyed results, excerpted logs, bounded CI polling, and claim-based takeover of the user's own open PRs. USE WHEN delegating nontrivial or parallel work, running a multi-lane campaign over issues and PRs, choosing a lane/model/effort, validating or reviewing delegated work, driving PRs through feedback, CI and merge, triaging or deduplicating issues for planning, scheduling post-merge verification, or controlling session cost."
 ---
 
 # Orchestrate — plan, implement, review, merge, verify
@@ -22,15 +22,15 @@ Two ways to use this skill:
 
 Scripts are in `${CLAUDE_SKILL_DIR}/scripts/` (`SCRIPTS` below; self-test:
 `bats "$SCRIPTS"/*.bats`). Role brief templates are in `${CLAUDE_SKILL_DIR}/roles/`. They need
-`gh` (authenticated), `jq` and `git`; implementation lanes need the `codex` CLI.
+`gh` (authenticated), `jq` and `git`.
 
 ## Roles and routing
 
-| Role | Agent (`subagent_type`) | Model / effort | Writes? |
+| Role | Agent (`subagent_type`) | Model | Writes? |
 |---|---|---|---|
-| Lane driver — scopes the issue, writes the spec, supervises the implementer, checks the result | `general-purpose` | `model: "haiku"` for a single-issue lane or premise check; `"sonnet"` for multi-issue, conflict or static-analysis (Detekt, lint) fixes (`subagent-hygiene.md`) | no |
-| Implement — routine, fully specified work | `waaagh:codex-implementer` | GPT-6 Luna, `REASONING: medium` | yes (via codex) |
-| Implement — judgment work (PR doctor, conflict lane, anything the spec cannot fully settle) | `waaagh:sol-implementer` | GPT-6.1 Sol, `REASONING: medium` or `high`, fast tier | yes (via codex) |
+| Implementation lane — routine, fully specified work (the spec settles the outcome; static-analysis fixes such as Detekt or lint) | `general-purpose` | `model: "sonnet"` | yes: code and tests in its worktree, uncommitted |
+| Implementation lane — judgment work (PR doctor, conflict lane, supersede evidence, anything the spec cannot settle) | `general-purpose` | `model: "opus"` | yes: code and tests in its worktree |
+| Premise check before a lane — is the issue still real, is a PR already open | `general-purpose` | `model: "haiku"` (`subagent-hygiene.md`) | no |
 | Scouting / exploration / log grep | `Explore` | `model: "haiku"` | no |
 | Validation — run commands, compact result | `general-purpose` | `model: "haiku"` | no* |
 | Merge bot | `general-purpose` | `model: "haiku"` | merges only |
@@ -40,30 +40,25 @@ Scripts are in `${CLAUDE_SKILL_DIR}/scripts/` (`SCRIPTS` below; self-test:
 
 \* A validator may run a writing formatter/linter only under an explicit write-ownership transfer.
 
-**Codex implements.** Only Codex lanes write code or tests, as a mix: Luna for routine work whose
-spec fully determines the outcome, Sol when the outcome depends on judgment. Claude subagents —
-including the driver and wrapper inside each lane — scope, validate, review and advise. Every implementation spec says: *"If codex
-fails or falls short, STOP and report — do not implement it yourself."* Mechanical tool runs (a
-pinned formatter, reverting a lane's own edits) are not implementation. Luna runs at `medium`; Sol at `medium`, or `high` when the outcome needs judgment. No other effort,
-and no other codex model, unless the user names one.
+**The lane implements, and someone else checks it.** One implementation lane is one Claude
+subagent in its own worktree: it checks the premise, writes the code and the tests, runs the
+targeted verification inline, and reports. Sonnet takes work whose spec fully determines the
+outcome; Opus takes work whose outcome depends on judgment. The lane leaves its diff uncommitted;
+you read it, commit and push. Its report is a claim: a Haiku validator re-runs the verification
+(`validate.sh --independent`) and one fresh Opus reviewer reads the diff before the PR is called
+ready. A lane never validates or reviews its own work into evidence.
 
-**Claude usage is a budget.** The expensive part of a campaign is not the implementer; it is the
-Claude drivers, reviewers and device-verification batches around it. So:
+**Spend.** Every role is a Claude subagent, so every lane, reviewer and batch is usage:
 
-- **No Claude implementer fallback** unless the user opts in. If codex is out of quota or
-  unauthenticated, the lane stops and reports `implementer-unavailable`; a Claude model silently
-  taking over implementation is the costly failure this rule prevents. A transient capacity error
-  (overloaded or rate-limited) gets one retry after 60 seconds, then `STATUS: implementer-capacity`.
-- **Smoke-test before the first spawn.** Before a lane's first implementer, run one cheap
-  `codex exec` per model in use (Luna and Sol each). "Usage limit" and "401 / sign in again" are
-  different interrupts: report each to the user with its exact text; neither is retried.
-- **Device-verification batches driven by Claude need the user's go-ahead** each time.
-- Opus is spent once per lane, as the single reviewer; scouting and validation stay on Haiku.
-- Fewer lanes means proportionally less Claude usage. When the user asks about cost, say so and
-  offer a lower lane cap rather than a cheaper reviewer.
+- Match the model to the work: Sonnet for routine lanes, Opus only where judgment decides the
+  outcome and once per lane as the single reviewer; scouting, premise checks and validation stay
+  on Haiku.
+- **Device-verification batches need the user's go-ahead** each time.
+- Fewer lanes means proportionally less usage. When the user asks about cost, say so and offer a
+  lower lane cap rather than a cheaper reviewer.
 
-**Escalation.** A lane that fails its spec once gets a corrected spec; twice, raise the effort to
-`high` or split the task, as a stated decision.
+**Escalation.** A lane that fails its spec once gets a corrected spec; twice, move it from Sonnet
+to Opus or split the task, as a stated decision.
 
 **Mechanics.**
 - Always pass `model` when delegating a Claude role. Never use `subagent_type: "fork"` for a role:
@@ -71,21 +66,18 @@ Claude drivers, reviewers and device-verification batches around it. So:
 - If a requested model or effort is unavailable, say so and use the nearest lower-cost option;
   never silently upgrade.
 - No role delegates further unless its brief authorizes it.
-- **One fresh, small driver per task.** A lane driver wraps one implementer run: spec path, file
-  list and short excerpts in, a short report out. When the next task comes, launch a new driver;
-  never hand a long-lived lane new work with `SendMessage`, because every resume re-sends its
-  whole accumulated context, and that, not the implementer, dominates the bill. Resume a driver
+- **One fresh, small lane per task.** A lane takes one task: spec path, file list and short
+  excerpts in, a short report out. When the next task comes, launch a new lane;
+  never hand a long-lived lane new work with `SendMessage`, because every resume re-sends its whole
+  accumulated context, and that context dominates the bill. Resume a lane
   only to ask about the work it just returned. Pass paths and excerpts, never transcripts or full
   diffs. Ask for replies of about 15 lines (the report format, no narration). No babysitting
   loops: a PR gets one event watch (the host's PR monitor or one bounded `pr-ready.sh --delta`
   check per tick), not an agent that keeps polling it.
 - Launch independent lanes in one message. Agents that poll in the background stall: every role
   is single-pass, and you relaunch it when its inputs change.
-- Route codex work only through `waaagh:codex-implementer` and `waaagh:sol-implementer`, which run
-  `${CLAUDE_PLUGIN_ROOT}/bin/codex-lane-run.sh`; never call `codex` for implementation directly (the smoke test above is the one exception), because the runner
-  carries the cross-lane guard and the timeouts. Spec line 1 must be `LANE-WORKTREE: <realpath>`;
-  the lane waits on its own run with `bin/codex-lane-wait.sh`, which wakes only on completion or a
-  semantic change, instead of reading progress files every poll.
+- Every lane brief names its worktree as an absolute path, and the lane works only there (the
+  lane-safety hook refuses deletions and shell writes outside it).
 
 **Choosing the reviewer.** One independent Opus reviewer per lane. Tiny or mechanical diff: review
 it yourself. Add a second lens only for a risk surface one reviewer cannot cover (concurrency,
@@ -101,7 +93,8 @@ review on every poll or push.
   `git worktree` a jj checkout.
 - **One writer per branch or overlapping file set.** Parallel lanes get disjoint file scopes and
   separate worktrees. Every brief names its scope and the files other lanes own.
-- Codex lanes leave changes uncommitted and run no mutating VCS commands; you commit and push.
+- Implementation lanes leave changes uncommitted and run no mutating VCS commands; you commit and
+  push. (The PR doctor and supersede-evidence roles commit on their own branches, per their briefs.)
 - **A device belongs to one agent at a time.** Anything that drives an emulator, simulator or
   attached hardware first claims `"$SCRIPTS/device-lock.sh"` (memory may name a lock path shared
   with scheduled routines). `claim` prints a token; release with `--token` (or `--name` once the
@@ -125,8 +118,8 @@ review on every poll or push.
 - **Never edit a running shell script in place.** Bash reads scripts incrementally, so an in-place
   edit corrupts the live run. Write the new version beside it and `mv` it into place.
 - **Check lane identity and artifacts, not the word "completed".** The lane's worktree must show
-  changes only in its own files, and codex's final message must be about its own task. An empty
-  diff with a clean exit, or a mismatched topic, is a refusal: re-run the lane.
+  changes only in its own files, and its report must be about its own task. An empty diff with a
+  "complete" report, or a mismatched topic, is a refusal: re-run the lane.
 - **An interim stop is not a result.** A notification that says the agent is waiting on its own
   background work (a gate still running), or whose result is only a status line, is interim: take
   no action on it (no merge, no relaunch, no verdict, no new lane in its files) and wait for the
@@ -137,10 +130,10 @@ review on every poll or push.
   first, stop all monitors before finishing, report in N lines. A lane whose issue closed elsewhere
   gets a stop message; one that holds nothing but noise (no answer, or its only notifications come
   from stale monitors it armed) gets `TaskStop`, never a resume.
-- **Lane drivers wait once and own their devices** (`subagent-hygiene.md`, "Lane drivers"). A
-  backgrounded gate gets one blocking wait, never a repeating monitor; a driver is not resumed on
-  a monitor expiry alone. Before any `adb` or `simctl` command a driver runs `device-lock.sh
-  check` against the serial or UDID its claim recorded. Check blockers before dispatch:
+- **Lanes wait once and own their devices** (`subagent-hygiene.md`, "Lanes on gates and
+  devices"). A backgrounded gate gets one blocking wait, never a repeating monitor; a lane is not
+  resumed on a monitor expiry alone. Before any `adb` or `simctl` command a lane runs
+  `device-lock.sh check` against the serial or UDID its claim recorded. Check blockers before dispatch:
   `open-blockers.sh <n>...` (planners: `issues-ranked.sh --drop-blocked`).
 - With many lanes the host saturates and whole-suite gates hit their wall caps. Lanes run targeted
   suites; CI's clean runners carry the full suite. Say so in the PR.
@@ -152,16 +145,19 @@ templates in `roles/` (see `roles/README.md`): fill the placeholders once into
 `<state dir>/briefs/`, keep repository-specific rules in `<state dir>/lane-rules.md`, and pass each
 pass's inputs in a short prompt.
 
-**Implementation spec** (to a Sol lane; `roles/implementation-lane.md` wraps it):
+**Implementation spec** (to a lane; `roles/implementation-lane.md` wraps it). The model is the
+Agent call's `model` (Sonnet or Opus, per the routing table), not a line in the spec:
 1. **Objective** — one paragraph.
 2. **Files** — exact paths; everything else is out of scope.
 3. **Interfaces** — signatures, types, shapes to match.
 4. **Constraints** — repo conventions, other lanes' files, no mutating VCS.
-5. **Verification** — the suites for the touched area, inline and synchronous, by explicit file
+5. **Tests** — the cases that fail before the change and pass after, plus one pin for
+   neighbouring behaviour that must not change.
+6. **Verification** — the suites for the touched area, inline and synchronous, by explicit file
    list (shared fakes and source-scan tests fail far from the edit), then the repo's gates.
-6. `REASONING: <medium|high>` — literal line (Luna: `medium`).
 
-Plus the expected artifact and the stop-and-report sentence. **Merge authority:** a subagent
+Plus the expected artifact and the stop sentence: *"If the premise is wrong or the spec needs a
+decision it does not settle, STOP and report."* **Merge authority:** a subagent
 refuses to push or merge on a coordinator's say-so. A brief that grants it must quote the user's
 grant verbatim; otherwise the role's contract is to hand back ready-to-run commands. A spec you cannot finish writing means
 the decision is not made — that is your work, not the lane's.
@@ -192,8 +188,9 @@ Act on it or surface the disagreement to the user.
   state (network, services, caches, devices) is not eligible for reuse.
 - Reuse goes through receipts: `validate.sh check` accepts only a complete, passing, independent
   receipt for the exact current key within `--max-age` (default 24 h); anything missing, partial,
-  failed, self-reported or stale means a fresh `validate.sh run`. An implementer's own report is
-  never a receipt: only a runner that did not write the change passes `--independent`.
+  failed, self-reported or stale means a fresh `validate.sh run`. A lane's own report, or its own
+  run of the suites, is never an independent receipt: only a runner that did not write the change
+  (the Haiku validator) passes `--independent`.
 - Never hand full logs, complete diffs or validation transcripts to yourself or a costly model.
   Save them, excerpt with `"$SCRIPTS/excerpt.sh" <log> [context] [max-lines] [max-bytes]` (bounded: per-line and total byte caps, first and last failures kept, repeats folded), and pass the path.
 - Label results `verified-local` or `verified-ci`. While CI is backlogged, "fixed" means
@@ -319,7 +316,7 @@ after 7 days) and a merge-loop wrapper that never stops silently.
 
 A verification batch is due about every 16 merged PRs. These are defaults; memory or the user may
 change the numbers (`ORCHESTRATE_LANES=16,12,4`, `ORCHESTRATE_VERIFY_EVERY=16`), and a host limit
-on concurrent subagents caps them further (a lane driven by several subagents occupies several
+on concurrent subagents caps them further (a lane plus its validator and reviewer occupies several
 slots).
 
 **The cap is the user's.** An explicit number from the user beats these defaults and the policy
@@ -494,11 +491,7 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   session-driven tick until it is answered. When "carry on" is safe, state the default, take it and
   queue the question (`decision.sh default`); block only when no safe default exists, one question
   at a time, after checking the background loops will last overnight (`owner-decisions.md`).
-- **Implementer unavailable.** Codex is missing, unauthenticated or out of quota. The lane stops
-  and reports `implementer-unavailable`; there is no Claude implementer fallback unless the user
-  opted in. Report "usage limit" and "401 / sign in again" separately, with the exact text: one
-  needs time or a plan change, the other a login.
-- **Claude-driven device verification** needs the user's go-ahead for each batch.
+- **Device verification** needs the user's go-ahead for each batch.
 - **Owner-only blockers** (signing, notarization, a device approval, a console registration, a
   secret): surface each as it appears, as "action — where — exact names" (`reporting.md`), not
   batched until the end; keep the lanes that do not need it running.
@@ -562,7 +555,7 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
 2. **Feedback snapshot.** A complete, current snapshot across paginated conversation comments,
    reviews, inline comments and review threads (use `github-pr-feedback` if present). Triage the
    actionable items together.
-3. **One consolidated fix pass** (`waaagh:sol-implementer`, `REASONING: high`) for every actionable item
+3. **One consolidated fix pass** (the PR doctor, an Opus lane) for every actionable item
    at once. An empty snapshot does not consume the pass. In the fast path, see the policy table.
 4. **Checkpoint** each PR in `$("$SCRIPTS/pr-claim.sh" path --repo <o/r> --pr <n>)/state.json`:
    ```json
@@ -662,10 +655,9 @@ separately; tell the owner the state it reports, never "done" for a message that
 
 ## Final report
 
-Per lane: model and effort as run, artifact (diff or PR), validation key and result, review
-verdict, and anything unavailable, substituted, skipped or escalated. Codex usage comes from
-`"$SCRIPTS/usage-report.sh"` (receipts the runner writes from codex's own usage events; unknown
-stays unknown, and no cost is inferred), always next to how many lanes were verified complete. For a campaign add: merged
+Per lane: model as run (and any escalation from Sonnet to Opus), artifact (diff or PR), the
+independent validation key and result, review verdict, and anything unavailable, substituted,
+skipped or escalated, next to how many lanes were verified complete. For a campaign add: merged
 PRs, issues closed by the hygiene bot, verification batches and their findings, admin merges with
 their evidence, the decision queue, and the overrides from memory you applied. Never absorb a lane
 failure, a model substitution or a cost change quietly.

@@ -48,7 +48,7 @@ PROBE
 }
 
 # A suite whose test passes only when a wrapper script it starts inherits errexit, and its own shell
-# has nounset and pipefail: as group.sh did under bashcov in codex-lane-run-pgid.bats (#152, #153).
+# has nounset and pipefail: as a lane-runner suite once did under bashcov (#152, #153).
 shellopts_probe() {
   printf '#!/usr/bin/env bash\nfalse\necho "survived false"\n' >"$P/wrapper.sh"
   chmod +x "$P/wrapper.sh"

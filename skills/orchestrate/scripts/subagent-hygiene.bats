@@ -30,12 +30,14 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$ROOT/skills/orchestrate/owner-decisions.md" "## Stop lanes on close"
 }
 
-@test "model choice by role: Haiku for single-issue lanes, Sonnet for routers, sweeps, batches, fixes" {
-  has "$HYG" "| Single-issue lane driver, premise check"
+@test "model choice by role: Sonnet and Opus lanes implement, Haiku checks, Sonnet for routers, sweeps, batches" {
+  has "$HYG" "| Routine implementation lane (the spec settles the outcome) | \`sonnet\`"
+  has "$HYG" "| Judgment implementation lane: PR doctor, conflict lane, supersede evidence"
+  has "$HYG" "| Premise check, validation batch, merge bot, triage tick | \`haiku\`"
   has "$HYG" "| Router, local sweep, hygiene bot, rebase bot | \`sonnet\`"
   has "$HYG" "| Verify batch over several issues, verification | \`sonnet\`"
-  has "$HYG" "conflict fix or a static-analysis fix (Detekt"
-  has "$SKILL" "\`model: \"haiku\"\` for a single-issue lane or premise check"
+  has "$HYG" "static-analysis fix (Detekt"
+  has "$SKILL" "| Premise check before a lane — is the issue still real, is a PR already open | \`general-purpose\` | \`model: \"haiku\"\`"
 }
 
 @test "the hygiene doc is indexed in the README" {

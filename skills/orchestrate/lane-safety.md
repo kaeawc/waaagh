@@ -1,7 +1,7 @@
 # Lane safety contract
 
 Every lane brief carries these rules, and the plugin enforces most of them with a PreToolUse hook.
-Learned on the auto-mobile campaign (2026-11-05/06): a lane driver deleted the Android SDK during
+Learned on the auto-mobile campaign (2026-11-05/06): a Haiku lane agent deleted the Android SDK during
 cleanup (`rm -rf $HOME/Library/Android/sdk >/dev/null 2>&1 & true`), one lane's pattern kill took
 two other lanes' `xcodebuild` runners, quitting Simulator.app shut down every booted simulator
 (protected CI devices included), and lanes wrote files around the edit hook with `sed`, `python`
@@ -56,6 +56,7 @@ command runs. Rules 1–6 still bind there; the hook is the backstop, not the co
 
 ## Model choice for device lanes
 
-Device setup and cleanup involve improvised destructive commands. A lane that creates or deletes
-emulators, AVDs or simulators gets a stronger driver: **Sonnet over Haiku** (see the model table in
-`subagent-hygiene.md`). Haiku stays fine for lanes that only read or run fixed scripts.
+Device setup and cleanup involve improvised destructive commands. An agent that creates or deletes
+emulators, AVDs or simulators runs on a stronger model: **Sonnet over Haiku** (or Opus; see the
+model table in `subagent-hygiene.md`). Haiku stays fine for roles that only read or run fixed
+scripts.

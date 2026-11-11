@@ -1,7 +1,7 @@
 {
   "name": "waaagh",
   "version": "0.1.0",
-  "description": "Run a repository's delivery loop with parallel agents: plan from the issue tracker, implement in isolated Codex lanes, review with cost-tiered Claude subagents, merge through guarded scripts, and verify what merged.",
+  "description": "Run a repository's delivery loop with parallel agents: plan from the issue tracker, implement in isolated Claude subagent lanes (Sonnet for routine work, Opus for judgment), review with an independent Opus reviewer, merge through guarded scripts, and verify what merged.",
   "author": {
     "name": "Jason Pearson",
     "url": "https://github.com/kaeawc"
@@ -9,5 +9,5 @@
   "homepage": "https://github.com/kaeawc/waaagh",
   "repository": "https://github.com/kaeawc/waaagh",
   "license": "MIT",
-  "keywords": ["orchestration", "agents", "codex", "pull-requests", "merge-queue", "issue-triage", "sdlc"]
+  "keywords": ["orchestration", "agents", "pull-requests", "merge-queue", "issue-triage", "sdlc"]
 }

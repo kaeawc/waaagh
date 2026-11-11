@@ -3,9 +3,11 @@
 A Claude Code plugin that runs a repository's delivery loop with parallel agents: plan from the
 issue tracker, implement in isolated lanes, review, merge, and verify what merged.
 
-Codex lanes write the code (GPT-6 Luna for routine work, GPT-6.1 Sol for judgment work). Claude is a budget: Sonnet drives each lane, Haiku scouts and validates, one Opus reviewer checks each lane. Merging, branch upkeep,
-tracker hygiene and post-merge verification run as single-pass roles built on small, tested `gh`
-scripts, so the expensive model reads verdict lines instead of raw API output.
+Every agent is a Claude subagent. Each implementation lane writes its own code and tests in its own
+worktree, on Sonnet for routine work and Opus for judgment work; Haiku scouts and validates
+independently, one Opus reviewer checks each lane, and the orchestrator commits and pushes.
+Merging, branch upkeep, tracker hygiene and post-merge verification run as single-pass roles built
+on small, tested `gh` scripts, so the expensive model reads verdict lines instead of raw API output.
 
 ## Install
 
@@ -19,7 +21,6 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 ### Requirements
 
 - `gh` (authenticated), `jq`, `git`; `jj` is supported when the checkout is colocated
-- the OpenAI [Codex CLI](https://github.com/openai/codex), authenticated, for implementation lanes
 - `bats` and `shellcheck` only if you want to run the self-tests
 
 ## What is in it
@@ -32,12 +33,6 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `skills/orchestrate/roles/` | Brief templates for the standing roles: merge bot, rebase bot, hygiene bot, local sweep, verify batch, verification, implementation lane, PR doctor, conflict lane, reviewer |
 | `skills/orchestrate/host-load.md` | Host load: lane admission thresholds, acting on the load's cause (Spotlight/`fseventsd`, lanes, other), the worktree budget, never removing a worktree that is a live process's cwd |
 | `skills/orchestrate/scripts/` | The scripts below, with stubbed-`gh` self-tests |
-| `agents/codex-implementer.md` | Routine implementation lane (GPT-6 Luna, `medium`): wraps one supervised `codex exec` run and verifies it |
-| `agents/sol-implementer.md` | Judgment implementation lane (GPT-6.1 Sol, `medium` or `high`): same runner and checks |
-| `bin/codex-lane-run.sh` | Lane runner: spec/worktree identity check, spec snapshot, stall and hard timeouts |
-| `bin/codex-lane-start.sh` | Start one lane run: run directory, spec with the worktree header and preamble, detached runner |
-| `lanes/codex-lane-reference.md` | What the implementer agents read only off the normal path: exit codes, interrupts, fast tier, why the safeguards exist |
-| `bin/codex-lane-wait.sh` | Bounded wait on one run: returns on completion, a semantic progress change, or a small `no-change` |
 
 ### Scripts
 
@@ -84,7 +79,6 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `gh-status.sh` | Read githubstatus.com and name non-operational components; exit 4 while Pull Requests (or a named component) is down, so merges pause instead of failing |
 | `job-log.sh` | One Actions job's log via the job-scoped endpoint (works while the workflow still runs), saved per run/attempt/job and excerpted, with explicit not-available outcomes |
 | `failure-triage.sh` | Rerun first, reproduce second: re-run a failing PR check once when the classifier can't place it and its domain (`check-domains`) misses the diff, refuse a second rerun on the same head, and keep a failure-signature store so the next occurrence is classified |
-| `usage-report.sh` | Codex usage per model and verified lane status, from per-run receipts (`bin/codex-lane-usage.sh`) |
 | `bench.sh`, `budget.bats` | Deterministic output-budget benchmarks (bytes, rows, gh calls) and their ceilings; `--timing` adds seconds and jq process counts per case; `bench.sh CASE...` runs only those cases (and the cases they need) |
 | `fingerprint.sh`, `excerpt.sh` | Key validation results by tree content, command and declared environment; excerpt long logs |
 | `cloud-dispatch.sh` | Cloud dispatch via run-once routines: todo queue and `cloud-sessions.tsv` ledger in the state dir, the short per-issue brief, the `RemoteTrigger create` payload with staggered `run_once_at`, create pacing with 429 backoff, the device-to-cloud fixtures check (`fixtures`, exit 5 when captured fixtures do not travel with the issue), the standard implement/repair briefs kept in the target repo (`briefs install`/`check`, templates in `skills/orchestrate/briefs/`), one-line `--brief-ref` prompts, a blocker check (`payload` exit 8 for a blocked issue, `queue add` warns; `--no-blocker-check`), and `created` to keep only the trigger id from a create response |
@@ -101,9 +95,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | Pause labels | `orchestrate-pause`, `fleet-pause` | `ORCHESTRATE_PAUSE_LABELS` |
 | PR author | the authenticated `gh` user, cached an hour per host in `~/.claude/orchestrate/.author` | `ORCHESTRATE_AUTHOR`, `--author`, `ORCHESTRATE_AUTHOR_TTL` (seconds, 0 = no cache) |
 | State directory | `~/.claude/orchestrate/<owner>__<repo>/` | `ORCHESTRATE_STATE_DIR` |
-| Codex model for the Sol lane | `gpt-6.1-sol` | `CODEX_LANE_SOL_MODEL` |
-| Codex model for the routine lane | `gpt-6-luna` | none (fixed in `agents/codex-implementer.md`) |
-| Claude implementer fallback | none; a lane with no codex reports `implementer-unavailable` | opt in by telling the skill |
+| Implementation lane model | Sonnet for routine, fully specified work; Opus for judgment work | tell the skill |
 
 Repository-specific rules (advisory checks, CI classifier, device rules, forbidden test suites) are
 not configured in this plugin. The skill reads them from your Claude memory for that repository
@@ -126,7 +118,7 @@ and from `<state dir>/lane-rules.md`.
 ## Development
 
 ```
-shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh bin/*.sh dev/*.sh
+shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh dev/*.sh
 dev/test.sh                 # every suite, in parallel (-j N); or dev/test.sh path/to/one.bats
 dev/test.sh --ignore-sigpipe   # the same with SIGPIPE ignored, as on GitHub's runners
 dev/test.sh --bashcov-shellopts   # the same with bashcov's exported errexit/nounset/pipefail (CI runs this)
@@ -143,4 +135,4 @@ prints exactly its header comment, and an unknown flag exits 2 before any GitHub
 
 ## License
 
-MIT. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+MIT. See [LICENSE](LICENSE).

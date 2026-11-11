@@ -51,7 +51,7 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
 @test "a quiet campaign is one ok verdict with every part present" {
   echo "beat=$((ORCHESTRATE_NOW - 60)) deadline=$((ORCHESTRATE_NOW + 3600)) pid=0" >"$ST/merge-loop.beat"
   printf '2026-09-25T10:00:00Z\tpr=50\thead=abc\tmerged x\n2026-09-27T10:00:00Z\tpr=60\thead=abc\tmerged deadbeef method=squash admin=no\n2026-09-27T11:00:00Z\tpr=61\thead=abc\trefused not ready\n' >"$ST/merges.log"
-  printf 'wt1\tb1\t6,8\tsrc/\tandroid:codex\tactive\nwt2\tb2\t9\tios/\tios:codex\tactive\n' >"$ST/lanes.tsv"
+  printf 'wt1\tb1\t6,8\tsrc/\tandroid:sonnet\tactive\nwt2\tb2\t9\tios/\tios:sonnet\tactive\n' >"$ST/lanes.tsv"
   run snap --device-slots android=1,ios=2
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "verdict ok" ]
@@ -67,7 +67,7 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
 }
 
 @test "the dispatch queue skips issues in an open PR, in an active lane, or excluded" {
-  printf 'wt1\tb1\t8\tsrc/\tcodex\tactive\nwt2\tb2\t9\tx/\tcodex\tmerged\n' >"$ST/lanes.tsv"
+  printf 'wt1\tb1\t8\tsrc/\tsonnet\tactive\nwt2\tb2\t9\tx/\tsonnet\tmerged\n' >"$ST/lanes.tsv"
   echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
   run snap
   [ "${lines[0]}" = "verdict act dispatch=2" ]

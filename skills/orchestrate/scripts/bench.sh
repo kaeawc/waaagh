@@ -28,7 +28,6 @@ for arg in "$@"; do
   esac
 done
 here=$(cd "$(dirname "$0")" && pwd)
-waiter="$here/../../../bin/codex-lane-wait.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -224,17 +223,6 @@ case_review_gate_check_snapshot() {
   "$here/review-gate.sh" policy review-at-head --repo o/r >/dev/null
   "$here/gh-snapshot.sh" --repo o/r >/dev/null 2>&1 || true
   measure review-gate-check-snapshot env -u ORCHESTRATE_NOW "$here/review-gate.sh" check --repo o/r --pr 7
-}
-
-# codex-lane-wait.sh (#7): an unchanged run.
-bench_case lane-wait-unchanged
-case_lane_wait_unchanged() {
-  local run="$work/run/codex.jsonl"
-  mkdir -p "${run%/*}"
-  : >"$run.spec"
-  printf 'Codex alive: yes\nChanged entries: 0\n\nMost recent agent message or command:\nworking\n' >"$run.progress.state"
-  echo rev1 >"$run.progress.rev"
-  measure lane-wait-unchanged "$waiter" --log "$run" --since rev1 --timeout 0
 }
 
 # Which cases run: all of them, or the picked ones and (latest first, so needs of needs follow)

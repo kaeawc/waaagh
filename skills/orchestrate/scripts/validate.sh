@@ -8,9 +8,9 @@
 #   ENV          the declared environment, passed to fingerprint.sh --key: --env NAME,
 #                --tool CMD, --input PATH, --env-manifest FILE (see fingerprint.sh)
 #   --runner     who ran it (role or agent name); recorded in the receipt
-#   --independent  the runner is not the author of the change under test (a validator, the lane
-#                wrapper re-running codex's work). Only independent receipts are reusable; a
-#                receipt is never written from an implementer's own report.
+#   --independent  the runner is not the author of the change under test (a validator re-running
+#                a lane's work, never the lane itself). Only independent receipts are reusable; a
+#                receipt is never written from a lane's own report.
 #   --store      receipt store (default $ORCHESTRATE_VALIDATE_DIR, else
 #                $ORCHESTRATE_STATE_DIR/validate, else ~/.claude/orchestrate/validate);
 #                refused if it lies inside the checkout

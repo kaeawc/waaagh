@@ -107,5 +107,5 @@ if an older completed run is green. Each run is re-run at most once; a known fla
 is a real red.
 
 **Device slots.** A device lane records its slot type in `lane-claim.sh add --agent <type>:<agent>`
-(for example `android:codex-implementer`); the snapshot counts active lanes per type against
+(for example `android:sonnet`); the snapshot counts active lanes per type against
 `--device-slots` (or `ORCHESTRATE_DEVICE_SLOTS`).

@@ -239,6 +239,6 @@ R
   # own short lists.
   local hits
   hits=$(grep -nE -- '--argjson [a-z_]+ "\$\{?(prs|items|rows|pages?|all|comments|com|iss|reviews|threads|nodes|out|cr|st|runs|c|f|one)\}?"|--arg [a-z_]+ "\$\{?(rows|checked|lanes_tsv|prs|comments)\}?"' \
-    "$SCRIPTS"/*.sh "$SCRIPTS"/../../../bin/*.sh || true)
+    "$SCRIPTS"/*.sh || true)
   [ -z "$hits" ] || { echo "$hits"; false; }
 }

@@ -11,7 +11,7 @@
     {
       "name": "waaagh",
       "source": "./",
-      "description": "Plan from the issue tracker, implement in isolated Codex lanes, review with Claude subagents, merge through guarded scripts, and verify what merged."
+      "description": "Plan from the issue tracker, implement and review with Claude subagents in isolated lanes, merge through guarded scripts, and verify what merged."
     }
   ]
 }

@@ -27,12 +27,12 @@ setup() {
 }
 
 @test "default is idempotent for an open question and works without an issue" {
-  "$SCRIPTS/decision.sh" default --repo o/r --question "keep the fast route?" --default yes
-  run "$SCRIPTS/decision.sh" default --repo o/r --question "keep the fast route?" --default yes
+  "$SCRIPTS/decision.sh" default --repo o/r --question "keep the cloud route?" --default yes
+  run "$SCRIPTS/decision.sh" default --repo o/r --question "keep the cloud route?" --default yes
   [ "$status" -eq 0 ]
   [[ "$output" == *"already recorded"* ]]
-  [ "$(grep -c 'keep the fast route' "$STATE/decisions.md")" -eq 1 ]
-  [[ "$(cat "$STATE/decisions.md")" == "- [ ] keep the fast route? — default taken (2026-11-08): yes —"* ]]
+  [ "$(grep -c 'keep the cloud route' "$STATE/decisions.md")" -eq 1 ]
+  [[ "$(cat "$STATE/decisions.md")" == "- [ ] keep the cloud route? — default taken (2026-11-08): yes —"* ]]
 }
 
 @test "default refuses missing fields, a bad issue and an em-dash separator" {
