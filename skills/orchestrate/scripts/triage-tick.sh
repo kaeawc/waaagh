@@ -45,17 +45,26 @@
 #     <type> slot. Types and sizes: --device-slots or ORCHESTRATE_DEVICE_SLOTS (e.g.
 #     android=2,ios=2,xcode=2). A rerun that is still running holds merges (MAIN_RED is rewritten),
 #     even when main-health.sh judged an older completed run green.
-#   rerun --run ID [--issue N]
+#   rerun --run ID [--issue N] [--log FILE] [--check NAME] [--needs-only]
 #     Re-runs the failed jobs of red run ID once (`gh run rerun --failed`), notes it on tracking
 #     issue N, writes MAIN_RED (merges stay held until main is green) and logs to reruns.log. A run
 #     already in reruns.log is never re-run again: a known flake that fails twice is a real red.
+#     First it reads the run's failed-job log (FILE, else `gh run view ID --log-failed`) for a needs
+#     dependency that did not succeed (`failure-triage.sh needs`, signatures for NAME, default the
+#     run's workflow name). One found re-runs the whole run (`gh run rerun ID`, outcome `full-...`
+#     in reruns.log) once per head SHA, even after a failed-jobs rerun of it; a second one on that
+#     head is refused (exit 3): look at the runner pool. A log that cannot be read changes nothing.
+#     --needs-only (for a main-red run, not a flake): only that full rerun; any other failure is
+#     not re-run (exit 1) and goes to a fix lane.
 #   beat --deadline EPOCH [--pid PID] | beat --end REASON
 #     The merge-loop wrapper's heartbeat (<state dir>/merge-loop.beat): call it every iteration,
 #     and with --end when the loop stops (e.g. --end bound when its time bound ends).
 #   cron [--created EPOCH]
 #     Record when the session cron for the tick was (re)created (default now); session crons expire
 #     after 7 days (ORCHESTRATE_CRON_DAYS).
-# Exit: 0 ok | 2 usage | 3 rerun refused (already re-run once) | 5 GitHub refused the rerun |
+# Exit: 0 ok | 1 --needs-only and no needs dependency in the log | 2 usage | 3 rerun refused
+#       (already re-run once; or re-run in full once on this head) | 5 GitHub refused the rerun |
+#       9 unverified (a full rerun is due but the run's head SHA could not be read) |
 #       6 rerun requested but the issue note failed
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -71,6 +80,7 @@ if [[ -n "$cmd" ]]; then shift; fi
 case "$cmd" in -h | --help) usage; exit 0 ;; esac
 repo="" branch="" classifier=${ORCHESTRATE_CLASSIFIER_CMD:-} device=${ORCHESTRATE_DEVICE_SLOTS:-}
 loop_stale=1800 hold_hours=${ORCHESTRATE_HOLD_STALE_HOURS:-12} run_id="" issue="" deadline="" pid="" end="" created=""
+log="" check="" needs_only=no
 ignore=() ready=() exclude=()
 while (($#)); do
   case "$1" in
@@ -85,6 +95,9 @@ while (($#)); do
     --hold-hours) hold_hours=$2; shift 2 ;;
     --run) run_id=$2; shift 2 ;;
     --issue) issue=$2; shift 2 ;;
+    --log) log=$2; shift 2 ;;
+    --check) check=$2; shift 2 ;;
+    --needs-only) needs_only=yes; shift ;;
     --deadline) deadline=$2; shift 2 ;;
     --pid) pid=$2; shift 2 ;;
     --end) end=$2; shift 2 ;;
@@ -96,7 +109,9 @@ done
 [[ "$hold_hours" =~ ^[0-9]+$ ]] || { echo "triage-tick.sh: --hold-hours must be a whole number" >&2; exit 2; }
 case "$cmd" in
   snapshot | cron) ;;
-  rerun) [[ "$run_id" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; } ;;
+  rerun)
+    [[ "$run_id" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; }
+    [[ -z "$log" || -r "$log" ]] || { echo "triage-tick.sh: --log $log is not readable" >&2; exit 2; } ;;
   beat) [[ -n "$end" || "$deadline" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; } ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -111,7 +126,13 @@ json_list() { if (($#)); then printf '%s\n' "$@" | jq -R . | jq -sc .; else echo
 
 # rerun_seen ID: the run's latest reruns.log record is anything but a refused rerun. An `intent`
 # with no outcome (the answer was lost) counts as re-run: reconciled by the snapshot, never replayed.
-rerun_seen() { [[ -f "$reruns" ]] && awk -F'\t' -v r="run=$1" '$2 == r { last = $NF } END { exit !(last != "" && last !~ /^failed/) }' "$reruns"; }
+rerun_seen() { [[ -f "$reruns" ]] && awk -F'\t' -v r="run=$1" '$2 == r { last = $NF } END { exit !(last != "" && last !~ /^(full-)?failed/) }' "$reruns"; }
+# full_seen SHA: the latest full rerun on head SHA (either SHA a prefix of the other) was not refused.
+full_seen() {
+  [[ -f "$reruns" ]] && awk -F'\t' -v s="$1" '$NF ~ /^full-/ { for (i = 5; i < NF; i++) if ($i ~ /^head=/) {
+      h = substr($i, 6); if (h != "" && (index(h, s) == 1 || index(s, h) == 1)) last = $NF } }
+    END { exit !(last != "" && last !~ /^full-failed/) }' "$reruns"
+}
 hold() { [[ -f "$state/MAIN_RED" ]] || printf '%s\n%s\n' "$1" "$(orch_iso "$now")" >"$state/MAIN_RED"; }
 
 case "$cmd" in
@@ -131,22 +152,55 @@ case "$cmd" in
     echo "cron created $(orch_iso "${created:-$now}")"
     exit 0 ;;
   rerun)
-    if rerun_seen "$run_id"; then
+    # A needs dependency that did not succeed (failure-triage.sh needs, #230): a failed-jobs rerun
+    # reads the same dependency result and fails again, so the whole run is re-run, once per head.
+    logf=$log dep="" sha=""
+    if [[ -z "$logf" ]]; then
+      logf=$(mktemp "${TMPDIR:-/tmp}/triage-tick-log.XXXXXX")
+      trap 'rm -f "$logf"' EXIT
+      "$here/gh-read.sh" -- run view "$run_id" --repo "$repo" --log-failed >"$logf" 2>/dev/null || : >"$logf"
+    fi
+    if [[ -s "$logf" ]]; then
+      meta=$("$here/gh-read.sh" --json -- run view "$run_id" --repo "$repo" --json headSha,workflowName 2>/dev/null) || meta='{}'
+      sha=$(jq -r '.headSha // empty' <<<"$meta" 2>/dev/null) || sha=""
+      [[ -n "$check" ]] || check=$(jq -r '.workflowName // empty' <<<"$meta" 2>/dev/null) || check=""
+      dep=$("$here/failure-triage.sh" needs --repo "$repo" --check "${check:-*}" --log "$logf" 2>/dev/null) || dep=""
+    fi
+    mode="" args=(--failed) headf=""
+    if [[ -n "$dep" ]]; then
+      dep=${dep#needs }
+      [[ -n "$sha" ]] || { echo "unverified: run $run_id needs a full rerun (needs=${dep% *} result=${dep#* }) but its head SHA could not be read"; exit 9; }
+      if full_seen "$sha"; then
+        echo "refused: head ${sha:0:9} was already re-run in full and needs=${dep% *} still did not succeed (result=${dep#* }): a runner-pool question, not a rerun (failure-triage.md)"
+        exit 3
+      fi
+      mode=full- args=() headf="head=$sha"$'\t'
+    elif [[ "$needs_only" == yes ]]; then
+      if [[ -s "$logf" ]]; then echo "none: run $run_id's failed-job log shows no needs dependency that did not succeed; not re-run"
+      else echo "none: run $run_id's failed-job log could not be read; not re-run"; fi
+      exit 1
+    elif rerun_seen "$run_id"; then
       echo "refused: run $run_id was already re-run once; a second failure is a real red (fix lane)"
       exit 3
     fi
-    rec() { printf '%s\trun=%s\tissue=%s\tat=%s\t%s\n' "$(orch_iso "$now")" "$run_id" "${issue:--}" "$now" "$1" >>"$reruns"; }
+    rec() { printf '%s\trun=%s\tissue=%s\tat=%s\t%s%s\n' "$(orch_iso "$now")" "$run_id" "${issue:--}" "$now" "$headf" "$mode$1" >>"$reruns"; }
     rec intent
-    if ! out=$(gh run rerun "$run_id" --failed --repo "$repo" 2>&1); then
+    if ! out=$(gh run rerun "$run_id" ${args[@]+"${args[@]}"} --repo "$repo" 2>&1); then
       rec "failed: ${out//$'\n'/ }"
       echo "failed: gh run rerun $run_id: ${out:0:200}"
       exit 5
     fi
     rec rerun-requested
     hold "red - rerun-pending run=$run_id"
-    echo "rerun requested: run $run_id; merges held until main is green"
+    what="the failed jobs of run $run_id"
+    if [[ -n "$mode" ]]; then
+      what="every job of run $run_id (needs=${dep% *} result=${dep#* }: a failed-jobs rerun reads the same dependency result)"
+      echo "rerun requested (full): run $run_id head ${sha:0:9}; needs=${dep% *} result=${dep#* }; merges held until main is green"
+    else
+      echo "rerun requested: run $run_id; merges held until main is green"
+    fi
     if [[ -n "$issue" ]]; then
-      body="Triage tick: re-ran the failed jobs of run $run_id (https://github.com/$repo/actions/runs/$run_id), classified as a known flake. Merges stay held until the default branch is green; a second failure of this run is treated as a real red."
+      body="Triage tick: re-ran $what (https://github.com/$repo/actions/runs/$run_id). Merges stay held until the default branch is green; a second failure of this run is treated as a real red."
       if ! out=$(gh issue comment "$issue" --repo "$repo" --body "$body" 2>&1); then
         rec "note-failed issue=$issue"
         echo "note failed on issue $issue: ${out:0:200}"
@@ -175,7 +229,7 @@ if [[ -f "$reruns" ]]; then
     [[ -n "$id" ]] || continue
     st=$("$here/gh-read.sh" --json -- run view "$id" --repo "$repo" --json status 2>/dev/null | jq -r '.status // empty') || st=""
     [[ "$st" == completed ]] || pending+=("$id")
-  done < <(awk -F'\t' -v cut="$((now - 86400))" '$NF == "intent" || $NF == "rerun-requested" || $NF ~ /^note-failed/ {
+  done < <(awk -F'\t' -v cut="$((now - 86400))" '$NF ~ /^(full-)?(intent$|rerun-requested$|note-failed)/ {
       at = $4; sub(/^at=/, "", at); if (at + 0 >= cut + 0) { r = $2; sub(/^run=/, "", r); if (!(r in s)) { s[r] = 1; print r } } }' "$reruns")
 fi
 pend_csv=$(IFS=,; echo "${pending[*]-}")
