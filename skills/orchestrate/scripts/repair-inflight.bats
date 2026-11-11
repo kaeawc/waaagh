@@ -183,7 +183,8 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
 
 @test "triage-tick snapshot settles repairs, names the settled ones and those in flight too long" {
   run "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main
-  [ "$(grep -c '^repairs ' <<<"$output" || true)" -eq 0 ]
+  required_snapshot_lines
+  [ "$(grep -c '^repair' <<<"$output" || true)" -eq 0 ]
   export ORCHESTRATE_NOW=1790460000   # 2026-09-26T22:00:00Z
   rl repair --pr 5 --session trig_a >/dev/null
   rl repair --pr 6 --session trig_b >/dev/null
@@ -193,9 +194,10 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   echo '[]' >"$FX/comments-6.json"
   echo '[]' >"$FX/comments-7.json"
   run "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main --hold-hours 12
-  [[ "${lines[0]}" == "verdict act "*"repaired=1"*"repair-stale=1"* ]]
-  [ "$(grep -x 'repairs inflight=#6,#7 settled=#5 unknown=-' <<<"$output" || true)" != "" ]
-  [ "$(grep -x 'repair-stale #6 session:trig_b since:2026-09-26T22:00:00Z' <<<"$output" || true)" != "" ]
+  required_snapshot_lines
+  [[ "$(snap_line verdict)" == "verdict act "*"repaired=1"*"repair-stale=1"* ]]
+  [ "$(snap_line repairs)" = "repairs inflight=#6,#7 settled=#5 unknown=-" ]
+  [ "$(snap_line repair-stale)" = "repair-stale #6 session:trig_b since:2026-09-26T22:00:00Z" ]
   [ "$(rl latest --pr 5 | cut -f3)" = repaired ]
 }
 

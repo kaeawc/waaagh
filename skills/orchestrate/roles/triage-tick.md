@@ -15,7 +15,9 @@ from memory (advisory workflows, ready label, device slot types).
    and the first word it prints is the verdict. Without one, no red run is treated as a flake.
    One line per part, each named by its first word: `verdict`, `main`, `prs`, `merge_loop`,
    `dispatch`, `slots`, `cron`, `threads`, `host`, then `holds n=<k> stale=<m>` and one
-   `hold-stale` line per stale hold when the merge loop holds any PR (`hold.sh`). `triage-tick.sh
+   `hold-stale` line per stale hold when the merge loop holds any PR (`hold.sh`), then `repairs
+   inflight=… settled=… unknown=…` and one `repair-stale` line per long repair when a repair
+   session is in flight (`review-ledger.sh settle`). `triage-tick.sh
    -h` is the source of truth for the lines and their order; find a line by its name, not its
    position or the count. The first is the verdict: `verdict ok`, or `verdict act <reason>,...`. It refreshes main health (sets or clears `MAIN_RED`) in the same
    call. Work only from these lines.
