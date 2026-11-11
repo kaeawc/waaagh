@@ -32,7 +32,8 @@
 #   superseded a conflict that supersede-check.sh calls a SUPERSEDED-CANDIDATE (later merges ship
 #              the PR's issue another way): taken off the queue front, parked until `retry`, for
 #              an evidence session (roles/supersede-evidence.md), never a re-apply
-#   held       the item's PR is in the hold file (hold.sh; also pr-merge.sh exit 14): set aside so
+#   held       the item's PR is in the hold file (hold.sh; also pr-merge.sh exit 14), or a release
+#              freeze is on (freeze.sh: every PR is held until `freeze.sh end`): set aside so
 #              the rest of the queue runs, nothing pushed or merged for it. Every pass re-checks it
 #              (a known PR before any fetch or push) and resumes it once `hold.sh release` (or
 #              check --release) has cleared the hold; no `retry` needed. A hold file hold.sh cannot
@@ -164,7 +165,7 @@ held_detail() {
   local hrc=0 hold
   hold=$(orch_hold_of "$repo" "$1") || hrc=$?
   ((hrc == 0)) || return "$hrc"
-  echo "PR $1 is held: $hold; hold.sh release clears it"
+  echo "PR $1 is held: $hold; $(orch_hold_hint "$hold")"
 }
 
 # park_if_held ID PR: true (and the outcome written) when the item must not go on this pass.
