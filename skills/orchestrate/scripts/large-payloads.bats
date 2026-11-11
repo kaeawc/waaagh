@@ -14,7 +14,7 @@ setup() {
   stub_gh_routes
   export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export ORCHESTRATE_NOW=1793880000 ORCHESTRATE_AUTHOR=me GH_READ_JITTER=0   # 2026-11-05T10:40:00Z
-  unset ORCHESTRATE_GH_API ORCHESTRATE_REVIEW_BOTS PR_READY_EXTRA
+  unset ORCHESTRATE_GH_API ORCHESTRATE_REVIEW_BOT_LOGIN ORCHESTRATE_REVIEW_CHECK PR_READY_EXTRA
 }
 
 pad() { printf "%${1}s" '' | tr ' ' "${2:-x}"; }   # pad N [CHAR] -> N copies of CHAR
@@ -180,9 +180,9 @@ R
 }
 
 @test "review-gate.sh scan and check: 200 long bot reviews and 200 long comments" {
-  jq -n --arg p "$(pad 800)" '[range(200) | {user: {login: "coderabbitai[bot]"}, commit_id: "old",
+  jq -n --arg p "$(pad 800)" '[range(200) | {user: {login: "claude[bot]"}, commit_id: "old",
     body: $p, state: "COMMENTED", submitted_at: "2026-11-01T00:00:00Z"}]
-    + [{user: {login: "chatgpt-codex-connector[bot]"}, commit_id: "abcdef1234567890", body: "ok", state: "COMMENTED",
+    + [{user: {login: "claude[bot]"}, commit_id: "abcdef1234567890", body: "ok", state: "COMMENTED",
         submitted_at: "2026-11-02T00:00:00Z"}]' >"$FX/reviews.json"
   jq -n --arg p "$(pad 800)" '[range(200) | {user: {login: "someone"}, body: $p, created_at: "2026-11-01T00:00:00Z"}]' >"$FX/comments.json"
   big "$FX/reviews.json"

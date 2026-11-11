@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Bot-review gate: the owner's review policy, quota-outage detection for review bots, the
-# unreviewed-merges ledger, and one global request throttle per bot. Doctrine: review-quota.md.
+# Bot-review gate: the owner's review policy, quota-outage detection for the review bot (Claude
+# Code Review), the unreviewed-merges ledger, and one global request throttle. Doctrine:
+# review-quota.md.
 #
 # Usage: review-gate.sh policy [off|review-at-head|reviewed-once|green-only] [--note TEXT]
 #        review-gate.sh exempt --pr N --reason TEXT | exempt --list
@@ -11,19 +12,26 @@
 #        review-gate.sh ledger [list|pending|requested --pr N | add --pr N --head SHA --note VIA]
 #        review-gate.sh request --bot ID [--pr N [--priority high|normal]] [--dry-run]
 #        review-gate.sh request --pr N [--priority high|normal] [--dry-run]
-#   Every command takes [--repo OWNER/REPO]. Bot ids (ORCHESTRATE_REVIEW_BOTS, default
-#   "codex coderabbit"): codex = chatgpt-codex-connector[bot], coderabbit = coderabbitai[bot].
+#   Every command takes [--repo OWNER/REPO]. The one review bot has the id "claude" (the only
+#   --bot value): Claude Code Review, which posts as ORCHESTRATE_REVIEW_BOT_LOGIN (default
+#   claude[bot]) and is asked with the top-level comment ORCHESTRATE_REVIEW_TRIGGER (default
+#   "@claude review": one review, no subscription to later pushes; set it empty to never post and
+#   only wait for automatic reviews). Its check run is ORCHESTRATE_REVIEW_CHECK (default "Claude
+#   Code Review"); ORCHESTRATE_REVIEW_QUOTA_RE overrides the quota-notice pattern.
 #   policy   print the review policy (default off), or set it and log the change to decisions.log.
 #            off: no review gate | review-at-head: a completed bot review on the current head |
 #            reviewed-once: a completed bot review on any head | green-only: no review needed.
 #   exempt   green checks only for ONE PR (an owner call); the merge is still ledgered.
 #   check    read-only verdict: "ok reviewed <why>", "ok unreviewed <why>" (merge, then ledger it)
-#            or "wait <why>" (exit 3). A review counts when a listed bot submitted it (not pending)
-#            and it is not a quota notice; a bot comment "Reviewed commit: <sha>" counts for that sha.
+#            or "wait <why>" (exit 3). A review counts when the bot submitted it (not pending) and
+#            it is not a quota notice. Without one at the head, the bot's completed check run on
+#            the head counts too (a clean review may post a note and no PR review), unless its
+#            title says the review was skipped, declined, not repeated, failed or timed out; an
+#            unreadable check run counts for nothing.
 #            A fresh gh-snapshot.sh row for the PR (pr-snapshot/<head>.json, written in the last
 #            ORCHESTRATE_SNAPSHOT_TTL seconds, default 300; with --head, for exactly that head)
 #            stands in for the head read, and for the reviews read when it shows no review at all;
-#            otherwise check reads them itself. Comments are always read.
+#            otherwise check reads them itself.
 #   notice   classify one PR comment: "quota <id> new|known" (a quota notice; the outage flag is
 #            set, or its last-seen time moved), "bot <id>" or "other". A quota notice needs no
 #            orchestrator turn; "new" means ask the owner once: `outage ask`.
@@ -36,12 +44,13 @@
 #            was not requested yet; `requested` marks one requested; `add` (pr-merge.sh) records a
 #            merge made without a review and consumes the PR's exemption.
 #   request  queue a review request for PR N, then post the queue's next request (high priority
-#            first, then oldest) when the bot's window is open: one request per bot every
+#            first, then oldest) when the bot's window is open: one request every
 #            ORCHESTRATE_REVIEW_EVERY seconds (default 1200) across all PRs, and while the bot is
 #            out of quota one probe every ORCHESTRATE_REVIEW_PROBE_EVERY (default 3600).
 #            Prints "requested <id> pr=<n>", "throttled <id> next=<iso> queued=<n>" or "empty <id>".
-#            Without --bot: the first listed bot that is not out of quota (merge-queue.sh on exit 13);
-#            an out-of-quota bot is never asked, and when all are out: "out-of-quota all pr=<n>".
+#            Without --bot (merge-queue.sh on exit 13): an out-of-quota bot is never asked, so
+#            "out-of-quota <id> pr=<n>" and nothing is queued. With an empty trigger nothing is
+#            posted or queued: "not-requested <id> pr=<n> ..." (wait for an automatic review).
 # State (<state dir>): review-policy, review-exempt.tsv, reviewer-out-of-quota.tsv,
 #   unreviewed-merges.tsv, review-queue/<id>.tsv and <id>.last, review-requests.log; pr-snapshot/ read.
 # Exit: 0 ok | 2 usage | 3 check: a review is still needed | 4 a read failed | 5 a write failed
@@ -81,28 +90,20 @@ done
 [[ -z "$pr" || "$pr" =~ ^[0-9]+$ ]] || usage
 case "$priority" in high | normal) ;; *) usage ;; esac
 
-bots=${ORCHESTRATE_REVIEW_BOTS:-codex coderabbit}
-bot_login() {
-  case "$1" in
-    codex) echo chatgpt-codex-connector ;;
-    coderabbit) echo coderabbitai ;;
-    *) return 1 ;;
-  esac
-}
-bot_trigger() {
-  case "$1" in codex) echo "@codex review" ;; coderabbit) echo "@coderabbitai review" ;; esac
-}
+# The one review bot: Claude Code Review (code.claude.com/docs/en/code-review). Its id names the
+# state files (review-queue/claude.tsv, the outage flag); the login, trigger and check run name
+# are overridable defaults.
+bid=claude
+blogin=${ORCHESTRATE_REVIEW_BOT_LOGIN:-claude[bot]}
+blogin=${blogin%\[bot\]}
+trigger=${ORCHESTRATE_REVIEW_TRIGGER-@claude review}
+check_name=${ORCHESTRATE_REVIEW_CHECK-Claude Code Review}
 # LOGIN (with or without "[bot]") -> bot id, or nothing.
-bot_of() {
-  local l=${1%\[bot\]} b
-  for b in $bots; do [[ "$(bot_login "$b")" == "$l" ]] && { echo "$b"; return 0; }; done
-  return 0
-}
-known_bot() { local b; for b in $bots; do [[ "$b" == "$1" ]] && return 0; done; return 1; }
-logins_json() { local b; for b in $bots; do bot_login "$b"; done | jq -R . | jq -sc .; }
-# Quota or rate-limit notices from review bots (Codex "usage limits", CodeRabbit "rate limited",
-# "free review limit"), case-insensitive.
-quota_re='usage limits?|rate[- ]?limit|review limits?|quota (exceeded|exhausted|reached)|out of (credits|quota)'
+bot_of() { [[ "${1%\[bot\]}" == "$blogin" ]] && echo "$bid"; return 0; }
+# Claude Code Review's "⚠️ Code review skipped" budget comments ("has reached its monthly code
+# review spending cap", "has no extra usage available to pay for this review", "is too low to
+# start another review") and a "Code review declined" note; case-insensitive.
+quota_re=${ORCHESTRATE_REVIEW_QUOTA_RE:-spending cap|no extra usage|too low to start another review|code review declined}
 
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
@@ -182,9 +183,27 @@ snapshot_row() {
   jq -ce --argjson n "$pr" 'select(.number == $n and (.head | type == "string") and (.review | type == "string"))' "$f" 2>/dev/null || true
 }
 
+# check_run_verdict: "head" when the bot's newest check run on $head completed a review, "earlier"
+# when it kept an earlier review's result (skipped: no new changes, or not repeated), nothing
+# otherwise (queued, in progress, declined, failed, timed out, cancelled, or unreadable).
+check_run_verdict() {
+  local runs enc
+  enc=$(jq -rn --arg n "$check_name" '$n | @uri')
+  runs=$(orch_read_retry 2 gh api "repos/$repo/commits/$head/check-runs?check_name=$enc&per_page=100") || return 0
+  jq -r --arg n "$check_name" '
+    [(.check_runs // [])[] | select(.name == $n and .status == "completed")] | sort_by(.completed_at // "") | last
+    | if . == null then empty
+      else (.output.title // "" | ascii_downcase) as $t
+      | if ($t | test("no new changes|not repeated")) then "earlier"
+        elif .conclusion == "neutral" or .conclusion == "success" then
+          (if ($t | test("skipped|declined|failed|timed out|cancel")) then empty else "head" end)
+        else empty end
+      end' <<<"$runs" 2>/dev/null || true
+}
+
 cmd_check() {
   [[ -n "$pr" ]] || usage
-  local policy reviews comments verdict snap
+  local policy reviews verdict snap
   policy=$(read_policy)
   if [[ -f "$exempts" ]] && awk -F'\t' -v p="$pr" '$1 == p { f = 1 } END { exit !f }' "$exempts"; then
     echo "ok unreviewed exempt"; return 0
@@ -206,20 +225,23 @@ cmd_check() {
   else
     reviews=$(fetch_reviews) || { echo "unverified: reviews of PR $pr could not be read"; exit 4; }
   fi
-  comments=$(fetch_comments) || { echo "unverified: comments of PR $pr could not be read"; exit 4; }
-  # Reviews and comments travel as files, not arguments: one argument is capped at 128 KiB (#121).
-  verdict=$(jq -rn --slurpfile r <(printf '%s\n' "$reviews") --slurpfile c <(printf '%s\n' "$comments") \
-    --argjson bots "$(logins_json)" --arg head "$head" --arg re "$quota_re" '
-    def bot: (.user.login // "" | sub("\\[bot\\]$"; "")) as $l | $bots | index($l) != null;
+  # Reviews travel as a file, not an argument: one argument is capped at 128 KiB (#121).
+  verdict=$(jq -rn --slurpfile r <(printf '%s\n' "$reviews") --arg login "$blogin" --arg head "$head" --arg re "$quota_re" '
+    def bot: (.user.login // "" | sub("\\[bot\\]$"; "")) == $login;
     def quota: (.body // "") | test($re; "i");
-    def sha_ok($s): ($s | length) >= 7 and ($head | startswith($s));
-    $r[0] as $r | $c[0] as $c |
+    $r[0] as $r |
     ([$r[] | select(bot and .state != "PENDING" and (quota | not))]) as $rev
-    | ([$c[] | select(bot and (quota | not)) | (.body // "")
-        | capture("[Rr]eviewed commit:?[ `]*(?<s>[0-9a-f]{7,40})") | .s]) as $csha
-    | if any($rev[]; .commit_id == $head) or any($csha[]; sha_ok(.)) then "head"
-      elif ($rev | length) > 0 or ($csha | length) > 0 then "earlier"
+    | if any($rev[]; .commit_id == $head) then "head"
+      elif ($rev | length) > 0 then "earlier"
       else "never" end')
+  # No review at the head: the bot's completed check run there is a review (a clean one may post
+  # a note and no PR review); one that kept an earlier result counts as an earlier review.
+  if [[ "$verdict" != head && -n "$check_name" ]]; then
+    case "$(check_run_verdict)" in
+      head) verdict="head" ;;
+      earlier) [[ "$verdict" == never ]] && verdict=earlier ;;
+    esac
+  fi
   case "$policy:$verdict" in
     *:head) echo "ok reviewed at-head" ;;
     reviewed-once:earlier) echo "ok reviewed earlier-head (reviewed-once)" ;;
@@ -244,7 +266,7 @@ cmd_notice() {
 
 cmd_scan() {
   [[ -n "$pr" ]] || usage
-  local reviews comments events b line last
+  local reviews comments events line last
   reviews=$(fetch_reviews) || { echo "unverified: reviews of PR $pr could not be read"; exit 4; }
   comments=$(fetch_comments) || { echo "unverified: comments of PR $pr could not be read"; exit 4; }
   # One row per bot item, oldest first: login  kind(quota|review)  time.
@@ -254,21 +276,18 @@ cmd_scan() {
      + [$c[] | {l: .user.login, t: .created_at, b: .body}])
     | map(select(.l != null and .t != null)) | sort_by(.t)[]
     | [.l, (if (.b // "") | test($re; "i") then "quota" else "review" end), .t] | @tsv')
-  for b in $bots; do
-    line=$(awk -F'\t' -v OFS='\t' -v l="$(bot_login "$b")" '{ sub(/\[bot\]$/, "", $1) } $1 == l' <<<"$events")
-    [[ -n "$line" ]] || continue
-    last=$(awk -F'\t' '$2 == "quota" { t = $3 } END { print t }' <<<"$line")
-    if [[ -n "$last" ]]; then
-      if awk -F'\t' -v t="$last" '$2 == "review" && $3 > t { f = 1 } END { exit !f }' <<<"$line"; then
-        if [[ -f "$flags" ]] && awk -F'\t' -v b="$b" '$1 == b { f = 1 } END { exit !f }' "$flags"; then
-          rewrite "$flags" '$1 != b' -v b="$b"
-          echo "recovered $b pr=$pr"
-        fi
-      else
-        echo "quota $b $(record_quota "$b") pr=$pr"
-      fi
+  line=$(awk -F'\t' -v OFS='\t' -v l="$blogin" '{ sub(/\[bot\]$/, "", $1) } $1 == l' <<<"$events")
+  [[ -n "$line" ]] || return 0
+  last=$(awk -F'\t' '$2 == "quota" { t = $3 } END { print t }' <<<"$line")
+  [[ -n "$last" ]] || return 0
+  if awk -F'\t' -v t="$last" '$2 == "review" && $3 > t { f = 1 } END { exit !f }' <<<"$line"; then
+    if out_of_quota "$bid"; then
+      rewrite "$flags" '$1 != b' -v b="$bid"
+      echo "recovered $bid pr=$pr"
     fi
-  done
+  else
+    echo "quota $bid $(record_quota "$bid") pr=$pr"
+  fi
 }
 
 cmd_outage() {
@@ -296,7 +315,7 @@ cmd_outage() {
    findings become follow-up issues
 3. Reviewed once is enough (policy reviewed-once): a PR with a completed bot review on an earlier
    head merges on green checks; never-reviewed PRs still wait for one review
-4. Keep waiting for reviews: requests stay throttled to one per bot per window across all PRs,
+4. Keep waiting for reviews: requests stay throttled to one per window across all PRs,
    gating PRs first
 Q
       rewrite "$flags" '{ $4 = "yes"; print }' ;;
@@ -332,14 +351,14 @@ out_of_quota() { [[ -f "$flags" ]] && awk -F'\t' -v b="$1" '$1 == b { f = 1 } EN
 cmd_request() {
   if [[ -z "$bot" ]]; then
     [[ -n "$pr" ]] || usage
-    local b
-    for b in $bots; do
-      known_bot "$b" && bot_login "$b" >/dev/null || continue
-      out_of_quota "$b" || { bot=$b; break; }
-    done
-    [[ -n "$bot" ]] || { echo "out-of-quota all pr=$pr"; return 0; }
+    out_of_quota "$bid" && { echo "out-of-quota $bid pr=$pr"; return 0; }
+    bot=$bid
   fi
-  known_bot "$bot" || { echo "review-gate.sh: unknown bot id '$bot' (ORCHESTRATE_REVIEW_BOTS: $bots)" >&2; exit 2; }
+  [[ "$bot" == "$bid" ]] || { echo "review-gate.sh: unknown bot id '$bot' (the review bot is '$bid')" >&2; exit 2; }
+  if [[ -z "$trigger" ]]; then
+    echo "not-requested $bid${pr:+ pr=$pr} (ORCHESTRATE_REVIEW_TRIGGER is empty: waiting for an automatic review)"
+    return 0
+  fi
   mkdir -p "$qdir"
   local q="$qdir/$bot.tsv" last=0 every next top tpr n rc=0
   if [[ -n "$pr" ]]; then
@@ -360,8 +379,8 @@ cmd_request() {
   fi
   top=$(awk -F'\t' '{ print ($2 == "high" ? 0 : 1) "\t" $3 "\t" $1 }' "$q" | sort -t$'\t' -k1,1n -k2,2n | awk -F'\t' 'NR == 1 { print $3 }')
   tpr=$top
-  if [[ "$dry" == yes ]]; then echo "would request $bot pr=$tpr ($(bot_trigger "$bot"))"; return 0; fi
-  gh pr comment "$tpr" --repo "$repo" --body "$(bot_trigger "$bot")" >/dev/null 2>&1 || rc=$?
+  if [[ "$dry" == yes ]]; then echo "would request $bot pr=$tpr ($trigger)"; return 0; fi
+  gh pr comment "$tpr" --repo "$repo" --body "$trigger" >/dev/null 2>&1 || rc=$?
   if ((rc)); then
     printf '%s\t%s\tpr=%s\tfailed exit=%s\n' "$iso" "$bot" "$tpr" "$rc" >>"$state/review-requests.log"
     echo "request to $bot on PR $tpr failed (exit $rc); still queued"; exit 5
