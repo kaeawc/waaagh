@@ -210,6 +210,7 @@ Everything a campaign must remember lives in one directory per repository:
 | `campaign.json` | `campaign.sh` | start time, last verification time and SHA, wrap-up, `close_policy` (`owner-decisions.md`) |
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
 | `GITHUB_OUTAGE` | `pr-merge.sh` | present while githubstatus.com reports Pull Requests down; pauses merges |
+| `FREEZE`, `freeze-disarmed`, `freeze.log` | `freeze.sh` | present during a release freeze: every PR held on every merge path; the auto-merges it disarmed (method, head, who armed it) to re-arm at `end`; every disarm and re-arm (`release-freeze.md`) |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
 | `merge-sensitive` | you | merge-sensitive path globs (optional): PRs touching one merge serially and only up to date |
 | `locks/` | `pr-merge.sh` | one lock per merge-sensitive path while a merge over it is in flight |
@@ -395,6 +396,11 @@ against its PR's own changes.
   (`"$SCRIPTS/gh-status.sh"`), re-reads after waits of 60 s or more, and exits 10 if still OPEN.
   While Pull Requests is in an outage it writes `GITHUB_OUTAGE` and every merge pauses (the queue
   stops its pass) until the status is operational, instead of logging a failure each pass.
+- **A release freeze covers every merge source, not only your merge loop** (`release-freeze.md`).
+  Before dispatching a release: `"$SCRIPTS/freeze.sh" start --reason "release X"` holds every PR on
+  every merge path and disarms every armed auto-merge, whoever armed it; `sweep` again before
+  every check of the release run; `end` re-arms the logged PRs and lifts it. Exit 6 means GitHub
+  refused the GraphQL-only mutation: do the listed PRs another way, then rerun.
 - **Merge-sensitive paths: green alone is not green together.** Two PRs that each grow a size
   budget, or each add keys to a version catalog in different places, merge cleanly in git and
   break main. List such shared, append-mostly paths (catalogs, budget tests, generated contracts)

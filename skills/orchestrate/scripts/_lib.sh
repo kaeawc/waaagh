@@ -112,13 +112,24 @@ orch_default_branch() { gh api "repos/$1" | jq -r .default_branch; }
 # by parsing <state dir>/holds again. Prints `#N until:<event> since:<iso> <reason>` and returns 0
 # when held, 1 when not, 2 when hold.sh could not read the file. Every merge path asks this before
 # it merges (pr-merge.sh exit 14, merge-queue.sh outcome `held`; #202), so a hold set at any time,
-# by hand or automatically, stops the merge.
+# by hand or automatically, stops the merge. While a release freeze is on (<state dir>/FREEZE,
+# freeze.sh; #208) every PR is held: `#N until:freeze-end since:<iso> release freeze: <reason>`.
 orch_hold_of() {
-  local rows
+  local rows since why f
   rows=$("$_orch_lib_dir/hold.sh" list --repo "$1" 2>/dev/null) || return 2
   rows=$(awk -F'\t' -v pr="${2#\#}" '$1 == pr { printf "#%s until:%s since:%s %s\n", $1, $2, $3, $5 }' <<<"$rows")
+  f="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/${1//\//__}/FREEZE"
+  if [[ -z "$rows" && -f "$f" ]]; then
+    IFS=$'\t' read -r since why <"$f" || true
+    rows="#${2#\#} until:freeze-end since:${since:-unknown} release freeze: ${why:--}"
+  fi
   [[ -n "$rows" ]] || return 1
   printf '%s\n' "$rows"
+}
+
+# orch_hold_hint HOLD -> what lifts a hold orch_hold_of printed: freeze.sh end, or hold.sh release.
+orch_hold_hint() {
+  if [[ "$1" == *until:freeze-end* ]]; then echo "freeze.sh end lifts it"; else echo "hold.sh release clears it"; fi
 }
 
 # orch_iso EPOCH -> 2026-01-02T03:04:05Z

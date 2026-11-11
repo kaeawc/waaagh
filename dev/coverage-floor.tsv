@@ -17,6 +17,7 @@ skills/orchestrate/scripts/failure-triage.sh	90
 skills/orchestrate/scripts/fingerprint.sh	95
 skills/orchestrate/scripts/gate-slot.sh	96
 skills/orchestrate/scripts/gh-budget.sh	98
+skills/orchestrate/scripts/freeze.sh	97
 skills/orchestrate/scripts/gh-issues.sh	95
 skills/orchestrate/scripts/gh-read.sh	92
 skills/orchestrate/scripts/gh-rest-pr.sh	96
