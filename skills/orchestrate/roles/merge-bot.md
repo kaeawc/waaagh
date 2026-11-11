@@ -19,7 +19,8 @@ The file binds every merge path, not only selection: `pr-merge.sh` refuses a hel
 parks a held item as `held` until the hold is released (#202). Report exit 14 as held; never work
 around it. The latest internal review verdict (`{{STATE}}/reviews.tsv`, kept only by
 `{{SCRIPTS}}/review-ledger.sh`) holds the same way (#206): a PR whose newest verdict is `fix-first`,
-`rethink` or `fixing` shows `SKIP review:<verdict>`, and `pr-merge.sh` refuses it with exit 14,
+`rethink`, `fixing`, `repairing` (a repair session still pushing, #212) or `repaired` shows
+`SKIP review:<verdict>`, and `pr-merge.sh` refuses it with exit 14,
 until a newer `ship` row. Never record a verdict yourself: report the PR as held by its review.
 
 ## Steps

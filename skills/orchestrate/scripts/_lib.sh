@@ -123,16 +123,17 @@ orch_hold_of() {
 
 # orch_review_hold_of OWNER/REPO PR: does PR's latest internal review verdict hold it? Read through
 # review-ledger.sh latest. Prints `#N review:<verdict> since:<iso> head:<sha> <note>` and returns 0
-# when the latest verdict is not ship (fix-first, rethink, fixing), 1 when it is ship or there is
+# when the latest verdict is not ship (fix-first, rethink, fixing, repairing, repaired), 1 when it is ship or there is
 # none, 2 when the ledger could not be read. The merge paths ask it next to orch_hold_of (#206).
 orch_review_hold_of() {
-  local row rc=0 t p v h n
+  local row rc=0 t p v h n s
   row=$("$_orch_lib_dir/review-ledger.sh" latest --repo "$1" --pr "${2#\#}" 2>/dev/null) || rc=$?
   ((rc != 3)) || return 1
   ((rc == 0)) || return 2
-  IFS=$'\t' read -r t p v h n <<<"$row"
+  IFS=$'\t' read -r t p v h n s <<<"$row"
   [[ "$v" != ship ]] || return 1
-  printf '#%s review:%s since:%s head:%s %s\n' "$p" "$v" "$t" "$h" "$n"
+  # A repairing or repaired row (#212) names its session.
+  printf '#%s review:%s since:%s head:%s %s%s\n' "$p" "$v" "$t" "$h" "$n" "${s:+ session:$s}"
 }
 
 # orch_iso EPOCH -> 2026-01-02T03:04:05Z

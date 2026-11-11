@@ -34,12 +34,19 @@
 #                  Then one line per hold older than --hold-hours (default
 #                  ORCHESTRATE_HOLD_STALE_HOURS, 12) or of unknown age (an old-format line):
 #       hold-stale #<pr> age=<h>h|unknown until:<event> reason=<text>
+#       repairs inflight=#a,...|- settled=#b,...|- unknown=#c,...|-
+#                  repair sessions in flight (review-ledger.sh settle, #212): settled ones posted
+#                  their closing comment and now need a review of the final head; omitted with
+#                  none in flight. Then one line per repair in flight longer than --hold-hours:
+#       repair-stale #<pr> session:<id> since:<iso>
 #     Reasons: main-red, flake-rerun, rerun-pending, main-unknown, merge-loop-<state> (only while PRs
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
 #     host-hold (in place of dispatch=<n> while the host line is HOLD or BACKOFF; "host unknown"
 #     holds nothing), cron-expiring (under 24h left), resolve-now=<n> (PRs whose threads only need
 #     resolving: the local orchestrator resolves them, they are not repair targets), hold-stale=<m>
-#     (holds past --hold-hours: check their release condition, `hold.sh check`). A part that
+#     (holds past --hold-hours: check their release condition, `hold.sh check`), repaired=<n>
+#     (repairs that ended: review the final head, then record the verdict), repair-stale=<m>
+#     (check the session; if its run ended, `review-ledger.sh repaired --pr N`). A part that
 #     could not be read says "unknown"; never a guess.
 #     Device slots: an active lanes.tsv row whose agent column reads "<type>:<agent>" holds one
 #     <type> slot. Types and sizes: --device-slots or ORCHESTRATE_DEVICE_SLOTS (e.g.
@@ -334,6 +341,21 @@ if hold_rows=$("$here/hold.sh" list --repo "$repo" 2>/dev/null) && [[ -n "$hold_
   ((ns == 0)) || reasons+=("hold-stale=$ns")
 fi
 
+# Repairs in flight (review-ledger.sh, #212): each is settled against its closing comment, and one
+# in flight past --hold-hours is named so its session is checked. Omitted with none in flight.
+repairs_line="" stale_repairs=""
+if fl=$("$here/review-ledger.sh" inflight --repo "$repo" 2>/dev/null) && [[ -n "$fl" ]]; then
+  st=$("$here/review-ledger.sh" settle --repo "$repo" 2>/dev/null) || true
+  cut=$(orch_iso "$((now - hold_hours * 3600))")
+  repairs_line=$(awk '{ k[$1] = k[$1] (k[$1] == "" ? "" : ",") $2 }
+    END { printf "repairs inflight=%s settled=%s unknown=%s", (k["inflight"] == "" ? "-" : k["inflight"]),
+      (k["settled"] == "" ? "-" : k["settled"]), (k["unknown"] == "" ? "-" : k["unknown"]) }' <<<"$st")
+  stale_repairs=$(awk -v cut="$cut" '$1 == "inflight" { t = $4; sub(/^since:/, "", t); if (t < cut) print $2 " " $3 " " $4 }' <<<"$st")
+  ns=$(awk '$1 == "settled" { c++ } END { print c + 0 }' <<<"$st")
+  ((ns == 0)) || reasons+=("repaired=$ns")
+  [[ -z "$stale_repairs" ]] || reasons+=("repair-stale=$(awk 'END { print NR }' <<<"$stale_repairs")")
+fi
+
 if ((${#reasons[@]})); then echo "verdict act $(IFS=,; echo "${reasons[*]}")"; else echo "verdict ok"; fi
 echo "$main_line"
 echo "prs open=$open${reviews:+ $reviews}"
@@ -345,3 +367,5 @@ echo "$threads"
 echo "$host"
 [[ -z "$holds_line" ]] || echo "$holds_line"
 [[ -z "$stale_holds" ]] || sed 's/^/hold-stale /' <<<"$stale_holds"
+[[ -z "$repairs_line" ]] || echo "$repairs_line"
+[[ -z "$stale_repairs" ]] || sed 's/^/repair-stale /' <<<"$stale_repairs"

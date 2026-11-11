@@ -18,10 +18,11 @@
 #                          [--repo R]
 #        cloud-dispatch.sh briefs install [--dir D] [--kind K] [--base B] [--gates TEXT] [--force]
 #        cloud-dispatch.sh briefs check [--dir D | --remote] [--kind K] [--base B] [--repo R]
-#        cloud-dispatch.sh created [--issue N [--kind repair]] [--response FILE] [--run-at ISO]
+#        cloud-dispatch.sh created [--issue N [--kind repair --pr P]] [--response FILE]
+#                          [--run-at ISO]
 #        cloud-dispatch.sh pace [--per-minute N] [--repo OWNER/REPO]
 #        cloud-dispatch.sh backoff [--seconds S] [--message TEXT] [--repo OWNER/REPO]
-#        cloud-dispatch.sh record --issue N --trigger ID --run-at ISO [--kind repair] [--repo R]
+#        cloud-dispatch.sh record --issue N --trigger ID --run-at ISO [--kind repair --pr P] [--repo R]
 #        cloud-dispatch.sh status [--repo OWNER/REPO]
 #   queue add   append issues to the todo queue, skipping ones already queued or dispatched;
 #               prints "queued N" per issue added. queue list prints the issues still to dispatch;
@@ -57,7 +58,8 @@
 #               naming the blockers; exit 7 when the blockers could not be read (unverified is
 #               not clear). --no-blocker-check skips it. --brief-ref sends the one-line prompt
 #               as the message; repair needs --pr, skips the ledger refusal, the blocker check
-#               and the fixtures check (the issue was dispatched before; its PR exists).
+#               and the fixtures check (the issue was dispatched before; its PR exists), and is
+#               refused (exit 3) while a repair is in flight on PR P (review-ledger.sh inflight).
 #   briefs      the standard briefs kept in the target repository at .claude/briefs/K.md (K:
 #               implement, repair, or all, the default). install renders waaagh's template
 #               (<state dir>/briefs/K.md if present, else ../briefs/K.md) with {{REPO}} {{BASE}}
@@ -77,16 +79,21 @@
 #               else 20 s. Prints "backoff until <iso>".
 #   record      after a create succeeds: append "issue trigger run_at created_at" to
 #               cloud-sessions.tsv. Refused (exit 3) when the issue is already recorded.
-#               --kind repair adds a fifth column "repair": never refused, never a dispatch.
+#               --kind repair adds a fifth column "repair": never refused, never a dispatch. It
+#               needs --pr P and marks the repair in flight on P (review-ledger.sh repair
+#               --session <trigger>, #212): P neither merges nor takes a ship verdict until the
+#               repair ends. Exit 9 when that mark failed (the row is written; mark it by hand).
 #   status      queued, dispatched, last dispatch, backoff remaining (and repairs, when any); one
 #               "key value" per line.
 # Files in <state dir>: cloud-queue.txt (one issue per line), cloud-sessions.tsv (issue, trigger
 # id, run_at, created_at[, repair]; ISO times), cloud-backoff (epoch until which creates wait).
 # Exit 5 refuses an issue whose fixtures are missing (route it back to its lane); exit 7 means the
-# issue, its comments, its timeline or its blockers could not be read (do not dispatch it), or for
-# created that the response holds no trigger id; exit 6 is a missing or outdated brief in the
-# repository; exit 8 refuses an issue blocked by an open issue (route the blocker first).
-# Exit: 0 ok | 2 usage | 3 refused (already dispatched) | 4 brief template missing | 5 | 6 | 7 | 8
+# issue, its comments, its timeline, its blockers or (repair) the review ledger could not be read
+# (do not dispatch it), or for created that the response holds no trigger id; exit 6 is a missing
+# or outdated brief in the repository; exit 8 refuses an issue blocked by an open issue (route the
+# blocker first).
+# Exit 9: a repair was recorded but its PR could not be marked repairing (review-ledger.sh repair).
+# Exit: 0 ok | 2 usage | 3 refused (dispatched, repair in flight) | 4 no template | 5 | 6 | 7 | 8 | 9
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
@@ -154,6 +161,9 @@ if [[ "$cmd" == briefs ]]; then
   case "${kind:=all}" in all) kinds="implement repair" ;; implement | repair) kinds=$kind ;; *) usage ;; esac
 else
   case "${kind:=implement}" in implement | repair) ;; *) usage ;; esac
+  if [[ "$kind" == repair && -n "$issue" && -z "$pr" ]] && [[ "$cmd" == record || "$cmd" == created ]]; then
+    echo "cloud-dispatch.sh: $cmd --kind repair needs --pr" >&2; exit 2
+  fi
 fi
 
 repo=$(orch_repo "$repo")
@@ -288,8 +298,14 @@ do_record() {
   [[ -n "$trigger" && -n "$run_at" ]] || { echo "cloud-dispatch.sh: record needs --trigger and --run-at" >&2; exit 2; }
   iso_epoch "$run_at" >/dev/null 2>&1 || { echo "cloud-dispatch.sh: --run-at must be ISO 8601 (2026-01-02T03:04:05Z)" >&2; exit 2; }
   if [[ "$kind" == repair ]]; then
+    [[ -n "$pr" ]] || { echo "cloud-dispatch.sh: record --kind repair needs --pr" >&2; exit 2; }
     printf '%s\t%s\t%s\t%s\trepair\n' "$issue" "$trigger" "$run_at" "$(orch_iso "$now")" >>"$ledger"
     echo "recorded $issue $trigger $run_at repair"
+    # The repair is in flight from now: PR P must neither merge nor be shipped mid-repair (#212).
+    "$here/review-ledger.sh" repair --repo "$repo" --pr "$pr" --session "$trigger" \
+      --note "cloud repair of issue #$issue" >/dev/null ||
+      { echo "cloud-dispatch.sh: PR #$pr is not marked repairing; run review-ledger.sh repair --pr $pr --session $trigger" >&2; exit 9; }
+    echo "repairing PR #$pr session $trigger: held, and no ship verdict, until the repair ends"
     return
   fi
   if dispatched "$issue"; then echo "cloud-dispatch.sh: #$issue already recorded" >&2; exit 3; fi
@@ -375,6 +391,12 @@ case "$cmd" in
     [[ -n "$env_id" && -n "$source_arg" ]] || { echo "cloud-dispatch.sh: payload needs --env and --source" >&2; exit 2; }
     if [[ "$brief_ref" == repair ]]; then
       [[ -n "$fixtures" ]] || fixtures=none
+      fl=$("$here/review-ledger.sh" inflight --repo "$repo" --pr "$pr") ||
+        { echo "cloud-dispatch.sh: the review ledger could not be read; do not dispatch a repair of PR #$pr" >&2; exit 7; }
+      if [[ -n "$fl" ]]; then
+        echo "cloud-dispatch.sh: a repair is already in flight on PR #$pr (session $(cut -f2 <<<"$fl") since $(cut -f3 <<<"$fl"))" >&2
+        exit 3
+      fi
     elif dispatched "$issue"; then
       echo "cloud-dispatch.sh: #$issue already dispatched: $(awk -F'\t' -v n="$issue" '$1 == n && $5 != "repair" { print $2 " at " $3 }' "$ledger")" >&2
       exit 3

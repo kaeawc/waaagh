@@ -103,8 +103,18 @@ line `<!-- waaagh-brief <kind> v<V> -->`) are the default:
    rendered brief instead until it passes.
 3. Dispatch with `payload --brief-ref implement`. To send a cloud session back to its own red or
    reviewed PR: `payload --issue N --pr P --brief-ref repair` (`Follow .claude/briefs/repair.md for
-   PR #P (issue #N, branch work/N-auto).`), then `record --kind repair`; a repair is never refused
-   as a second dispatch and never counts as one.
+   PR #P (issue #N, branch work/N-auto).`), then `record --kind repair --pr P`; a repair is never
+   refused as a second dispatch and never counts as one.
+4. **A repair is in flight until it ends** (#212). `record --kind repair --pr P` marks PR P
+   `repairing` with the trigger id as the session (`review-ledger.sh repair`): P does not merge on
+   any path and `review-ledger.sh record --verdict ship` is refused (exit 6), because a session's
+   first pushed commit is not the end of its repair. A second repair of P is refused (`payload`
+   exit 3) while one is in flight. It ends when the session posts its closing comment
+   (`REPAIR-END done:`, `REPAIR-END blocked:` or `SUPERSEDED-CANDIDATE`, from `repair.md`):
+   `review-ledger.sh settle`, which every triage tick runs, records it `repaired`. When the
+   session's run ended without that comment (the routine shows it finished or failed), record it
+   yourself: `review-ledger.sh repaired --pr P --session <trigger> --note "run ended"`. A
+   `repaired` PR still waits for a review of its final head; only that `ship` lets it merge.
 
 ## Results come back only through PRs
 

@@ -79,7 +79,7 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   cd_ briefs install --dir "$CO" --base main
   run cd_ briefs check --dir "$CO" --base main
   [ "$status" -eq 0 ]
-  [ "$output" = "$(printf 'brief implement ok v1\nbrief repair ok v2')" ]
+  [ "$output" = "$(printf 'brief implement ok v1\nbrief repair ok v3')" ]
   # A repository's own edits at the current version are fine; a version line it dropped is "custom".
   echo "Extra repo rule." >>"$CO/.claude/briefs/implement.md"
   printf 'Our own repair brief.\n' >"$CO/.claude/briefs/repair.md"
@@ -137,9 +137,9 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   jq -e '.name == "r #5 cloud repair of PR #31" and .run_once_at == "2026-09-27T12:01:20Z"
     and .job_config.ccr.events[0].data.message == "Follow .claude/briefs/repair.md for PR #31 (issue #5, branch work/5-auto)."' <<<"$output"
   [ ! -s "$FX/calls" ]
-  run cd_ record --issue 5 --kind repair --trigger trig_r --run-at 2026-09-27T12:01:20Z
-  [ "$output" = "recorded 5 trig_r 2026-09-27T12:01:20Z repair" ]
-  cd_ record --issue 6 --kind repair --trigger trig_s --run-at 2026-09-27T12:01:40Z
+  run cd_ record --issue 5 --kind repair --pr 31 --trigger trig_r --run-at 2026-09-27T12:01:20Z
+  [ "${lines[0]}" = "recorded 5 trig_r 2026-09-27T12:01:20Z repair" ]
+  cd_ record --issue 6 --kind repair --pr 32 --trigger trig_s --run-at 2026-09-27T12:01:40Z
   run cd_ next
   [ "$output" = "6" ]
   run cd_ status
