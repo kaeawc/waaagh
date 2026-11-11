@@ -196,8 +196,7 @@ ver() { # ver K: the version on the first line of waaagh's K brief, so a bump ne
   has "$ROOT/skills/orchestrate/SKILL.md" ".claude/briefs/"
   has "$ROOT/skills/orchestrate/roles/README.md" "../briefs/implement.md"
   has "$ROOT/README.md" "briefs install"
-  for k in implement repair; do
+  for k in implement repair; do   # size caps: brief-size.bats (#239)
     [[ "$(sed -n 1p "$ROOT/skills/orchestrate/briefs/$k.md")" == "<!-- waaagh-brief $k v"* ]]
-    [ "$(wc -c <"$ROOT/skills/orchestrate/briefs/$k.md")" -lt 2200 ]
   done
 }
