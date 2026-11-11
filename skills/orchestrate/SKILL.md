@@ -569,6 +569,8 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
 1. **Open a ready PR** once implementation and required pre-PR validation pass, unless the user
    asked for a draft. Missing device evidence is no reason for a draft: open ready once the
    CI-verifiable work is complete and list the missing evidence in the body (drafts skip bot review).
+   The merge loop never merges a draft: the tick names each draft with a ship verdict or green
+   checks (`reviewed-draft`), and in `campaign.sh mode autonomous` marks a ship draft ready (#205).
 2. **Feedback snapshot.** A complete, current snapshot across paginated conversation comments,
    reviews, inline comments and review threads (use `github-pr-feedback` if present). Triage the
    actionable items together.
