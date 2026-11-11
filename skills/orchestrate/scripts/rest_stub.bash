@@ -44,7 +44,8 @@ REST='def rest: {number, title: (.title // ""), body: (.body // ""),
     draft: (.isDraft // false), base: {ref: .baseRefName, repo: {full_name: "o/r"}},
     head: {ref: .headRefName, sha: .headRefOid, repo: (if .isCrossRepository then {full_name: "fork/r"} else {full_name: "o/r"} end)},
     labels: (.labels // []), created_at: .createdAt, updated_at: .updatedAt, html_url: .url,
-    mergeable: (if .mergeable == "MERGEABLE" then true elif .mergeable == "CONFLICTING" then false else null end)};
+    mergeable: (if .mergeable == "MERGEABLE" then true elif .mergeable == "CONFLICTING" then false else null end),
+    mergeable_state: ((.mergeStateStatus // "unknown") | ascii_downcase)};
   def status_item: .__typename == "StatusContext" or has("context");
   def rollup($sha): (map(select(.headRefOid == $sha)) | first // {}) | (.statusCheckRollup // []);'
 # Full thread nodes as REST review comments: thread i of PR n starts with comment (n*100+i+1)*10;
@@ -77,7 +78,7 @@ case "$a" in
       "api repos/o/r/issues"*) src=$(jq -c . "$FX/issues.json") ;;
       "api search/"*) src=$(jq -c . "$FX/merged.json") ;;
       *) if [ -f "$FX/pulls.json" ]; then src=$(jq -c 'map(del(._closing))' "$FX/pulls.json")
-         else src=$(jq -c "$REST"'map(rest | del(.mergeable))' "$FX/prs.json") || exit 1; fi ;;
+         else src=$(jq -c "$REST"'map(rest | del(.mergeable, .mergeable_state))' "$FX/prs.json") || exit 1; fi ;;
     esac
     jq -c --arg l "$l" --argjson page "${page:-1}" --argjson per "${per:-30}" --arg s "$a" '
       [.[] | select($l == "" or any(.labels[]; .name == $l))] | .[($page - 1) * $per:$page * $per]

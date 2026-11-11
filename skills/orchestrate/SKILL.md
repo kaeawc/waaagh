@@ -440,8 +440,11 @@ against its PR's own changes.
   waiting queue item gets main merged in again (fresh CI), only when main's newer commits touch a
   merge-sensitive glob or a shared manifest (`<state dir>/merge-manifests`; default package.json,
   lockfiles, schema files). Updating on every unrelated merge restarts the front's CI each time
-  and it never lands. A repo whose branch protection requires up-to-date branches sets
-  `MERGE_QUEUE_UPDATE_BEHIND=always`.
+  and it never lands. Under branch protection that requires up-to-date branches, `pr-ready.sh`
+  reports a green PR whose `mergeStateStatus` is BEHIND as `BEHIND` (#251), and the queue merges
+  main in on its next pass. The strict setting is read from rulesets and classic protection; the
+  classic read needs admin and may 404, and unknown counts as not strict: set
+  `MERGE_QUEUE_UPDATE_BEHIND=always` there to merge every base move in.
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
   every stacked merge: take the default branch's copy and regenerate it, never hand-merge.
   `"$SCRIPTS/regen-merge.sh"` does this from `<state dir>/generated-files.tsv` and refuses an

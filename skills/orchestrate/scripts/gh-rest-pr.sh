@@ -14,11 +14,12 @@
 #   list     open PRs, newest first (--asc: oldest first), at most --limit (default 300), from
 #            GET pulls?state=open in pages of 100: number title body state author{login}
 #            isDraft isCrossRepository baseRefName headRefName headRefOid labels createdAt
-#            updatedAt url closingIssuesReferences, with mergeable "UNKNOWN" and an empty
-#            statusCheckRollup (the list endpoint carries neither; use view --checks).
+#            updatedAt url closingIssuesReferences, with mergeable and mergeStateStatus "UNKNOWN"
+#            and an empty statusCheckRollup (the list endpoint carries none; use view --checks).
 #   view     one PR (GET pulls/<n>) in the same shape, with mergeable read (true MERGEABLE, false
-#            CONFLICTING, null UNKNOWN) and state OPEN|CLOSED|MERGED; --checks adds its head's
-#            statusCheckRollup (see rollup).
+#            CONFLICTING, null UNKNOWN), mergeStateStatus from mergeable_state upper-cased
+#            (behind BEHIND, clean CLEAN, ...; absent UNKNOWN) and state OPEN|CLOSED|MERGED;
+#            --checks adds its head's statusCheckRollup (see rollup).
 #   rollup   the statusCheckRollup of a commit: GET commits/<sha>/check-runs as CheckRun items
 #            (name, status, conclusion upper-cased, startedAt, detailsUrl, workflowName) plus
 #            GET commits/<sha>/status as StatusContext items (context, state, targetUrl,
@@ -96,6 +97,7 @@ shape='def pr_shape($repo):
    labels: [(.labels // [])[] | {name}],
    createdAt: .created_at, updatedAt: .updated_at, url: .html_url,
    mergeable: (if .mergeable == true then "MERGEABLE" elif .mergeable == false then "CONFLICTING" else "UNKNOWN" end),
+   mergeStateStatus: ((.mergeable_state // "unknown") | ascii_upcase),
    statusCheckRollup: [],
    closingIssuesReferences: ([(.body // "")
        | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#([0-9]+)")

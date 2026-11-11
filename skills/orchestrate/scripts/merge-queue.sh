@@ -60,8 +60,11 @@
 #                              blockers are failures of those checks goes to pr-merge.sh --admin
 #                              --except-check ...; pr-merge.sh enforces the fast-path, authorization
 #                              and every other gate
-#      MERGE_QUEUE_UPDATE_BEHIND=always  merge every base move into a waiting item, protected or not
-#                              (a repo whose branch protection requires up-to-date branches)
+#      MERGE_QUEUE_UPDATE_BEHIND=always  merge every base move into a waiting item, protected or not.
+#                              Only an override: a PR that pr-ready.sh reports BEHIND (strict
+#                              branch protection, #251) gets the base merged in on the next pass
+#                              without it; set it when the strict setting is unreadable (classic
+#                              protection without admin rights reads as not strict)
 #      MERGE_QUEUE_MAIN_HEALTH_ARGS  extra main-health.sh flags (e.g. --ignore-workflow Badges)
 #      ORCHESTRATE_DIRECT_MERGE=1    deliberate ungated mode (only on the user's word): no readiness
 #                              gate here or in pr-merge.sh
@@ -276,8 +279,9 @@ case "$cmd" in
       # Resuming a waiting item: the base merge, check and push are already done when the pushed
       # head is unchanged and either still contains the current base, or the base moved only
       # outside the protected paths (merge-sensitive.sh drift, #204): re-validating the front on
-      # unrelated drift restarts its CI on every merge to main and starves it. A stale refusal
-      # (<id>.refresh) or MERGE_QUEUE_UPDATE_BEHIND=always merges any drift in.
+      # unrelated drift restarts its CI on every merge to main and starves it. A stale refusal or a
+      # BEHIND row under strict protection (<id>.refresh, #251) or MERGE_QUEUE_UPDATE_BEHIND=always
+      # merges any drift in.
       local_head=$(git -C "$qwt" rev-parse HEAD)
       resume=""
       if [[ ( "$prev" == waiting || "$prev" == held ) && "$(cat "$qdir/$qid.pushed" 2>/dev/null)" == "$local_head" ]] &&
@@ -354,14 +358,20 @@ case "$cmd" in
         if [[ -z "$row" ]]; then set_outcome "$qid" error "no readiness row for PR $pr"; continue; fi
         if [[ "$head" != "$rhead"* ]]; then set_outcome "$qid" waiting "readiness row is for $rhead"; continue; fi
         # Not there yet (pending, unreported, unknown mergeability) is waiting; anything else blocks.
-        others=""; fails=""
+        # Behind under strict protection (#251): the next pass merges the base in (<id>.refresh).
+        others=""; fails=""; behind=no
         for token in $detail; do
           case "$token" in
             pending:* | few-checks=0 | mergeable=UNKNOWN | -) ;;
+            behind) behind=yes ;;
             fail:*) fails+=",${token#fail:}" ;;
             *) others+=" $token" ;;
           esac
         done
+        if [[ "$behind" == yes && ( "$verdict" == BEHIND || "$verdict" == WAIT || -z "$others" ) ]]; then
+          : >"$qdir/$qid.refresh"
+          set_outcome "$qid" waiting "PR $pr: $detail; $base requires up-to-date branches, next pass merges it in"; continue
+        fi
         case "$verdict" in
           READY) ;;
           WAIT) set_outcome "$qid" waiting "PR $pr: $detail"; continue ;;
