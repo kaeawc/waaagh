@@ -173,8 +173,14 @@ while validation runs.
 
 **Review brief** (`roles/review.md`): goal, acceptance criteria, risk surface, and the diff as a
 path — never pasted inline. Verified findings only, with `file:line` and a failure scenario.
+When a PR changes what an input means (units, coordinate space, encoding, default), the verdict
+must carry a written-out "Callers of changed functions" section listing every caller, internal
+ones included, and whether each still passes the right meaning; a focused brief never waives it
+(#211). Where a repo uses Claude Code Review, put the same rule in the repo's review instructions.
 Record every verdict the moment it comes back: `"$SCRIPTS/review-ledger.sh" record --pr N --verdict
-ship|fix-first|rethink --head <sha>`. The latest verdict is a merge gate (#206): anything but `ship`
+ship|fix-first|rethink --head <sha> --findings <file>`: a ship whose findings lack the
+`input-meaning:` line, or the callers section when it says `changed`, is recorded `incomplete`
+(exit 6) and holds the PR. The latest verdict is a merge gate (#206): anything but `ship`
 holds the PR on every merge path (`pr-ready.sh` SKIP `review:<verdict>`, `pr-merge.sh` exit 14,
 `merge-queue.sh` `held`) and adds a `hold.sh` hold until `review-ship`; a newer `ship` row releases
 it. Starting a fix pass on a PR, for any reason, is `"$SCRIPTS/review-ledger.sh" fix --pr N` before
