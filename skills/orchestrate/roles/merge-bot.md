@@ -14,6 +14,10 @@ itself; pass `--hold N` only for a PR your prompt names that is not in the file 
 `hold.sh add --repo {{REPO}} --pr N --until <event> --reason "<why>"`. Release a hold only with
 `hold.sh release --repo {{REPO}} --pr N --note "<evidence>"`: it removes the line and writes the
 `holds.log` line together. Never write "hold released" anywhere by hand, and never edit the file.
+The file binds every merge path, not only selection: `pr-merge.sh` refuses a held PR with exit 14
+(`held:`) in every mode, `--admin`, `--main-fix` and direct mode included, and `merge-queue.sh`
+parks a held item as `held` until the hold is released (#202). Report exit 14 as held; never work
+around it.
 
 ## Steps
 1. `{{SCRIPTS}}/main-health.sh --repo {{REPO}}` — if it prints `red`, merge only the PRs your

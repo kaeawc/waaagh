@@ -47,6 +47,10 @@
 #       | 11 stale: touches a merge-sensitive path and the base moved past the head
 #       | 12 busy: another PR's merge holds the lock of a merge-sensitive path it touches
 #       | 13 needs review: the owner's bot-review policy (review-gate.sh check) is not met
+#       | 14 held: the PR is in the hold file (hold.sh); only `hold.sh release` (or check
+#       --release) clears it. Checked before the gates and again right before the merge
+# Holds: a PR in <state dir>/holds is never merged, in any mode (--admin, --main-fix and
+# ORCHESTRATE_DIRECT_MERGE included); a hold file hold.sh cannot read refuses with exit 9.
 # Review policy: when <state dir>/review-policy is set and not off, review-gate.sh check must say
 # ok for the head; a merge it allowed without a review is added to the unreviewed-merges ledger.
 # GitHub outages: success is read from the PR state, never from the merge's exit code. A 5xx or
@@ -127,6 +131,20 @@ if [[ -f "$journal" ]] && [[ "$(jq -r .state "$journal" 2>/dev/null)" =~ ^(inten
     *) orch_journal "$journal" "$(jq -c '.state = "superseded"' "$journal")" ;;
   esac
 fi
+
+# The hold file (hold.sh) wins over every mode: a held PR is never merged (#202).
+refuse_if_held() {
+  local hrc=0 hold
+  hold=$(orch_hold_of "$repo" "$pr") || hrc=$?
+  case "$hrc" in
+    0) log "refused held: $hold"
+      echo "held: PR $pr is in the hold file ($hold); hold.sh release clears it"; exit 14 ;;
+    1) ;;
+    *) release_locks; log "refused: hold file unreadable"
+      echo "unverified: the hold file could not be read (hold.sh list); nothing was attempted"; exit 9 ;;
+  esac
+}
+refuse_if_held
 
 if [[ -f "$state/MAIN_RED" && "$main_fix" == no ]]; then
   echo "hold: default branch is red ($(head -1 "$state/MAIN_RED"))"; exit 4
@@ -278,6 +296,8 @@ if [[ -n "$spats" ]]; then
 fi
 
 log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "$full" "$*" >>"$state/merges.log"; }
+# A hold set while the gates above ran (by hand, or when a fix pass starts) still stops the merge.
+refuse_if_held
 args=("--$method" --match-head-commit "$full")
 [[ "$admin" == yes ]] && args+=(--admin)
 attempt="$(orch_now)-$$"
