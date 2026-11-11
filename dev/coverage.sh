@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Line coverage of the scripts under the BATS suites, measured with bashcov (Bash xtrace).
 # Writes coverage/.resultset.json and prints one line per script, least covered first, then the total.
+# The suites' output goes to coverage/test.log (kept in a temp file until bashcov exits, #228).
 #
 # Usage: dev/coverage.sh [-j N] [FILE.bats...]
 #        dev/coverage.sh --changed [BASE] [-j N]
@@ -15,8 +16,9 @@
 #   --changed B  measure only what a branch changed (#194): the scripts that differ from the merge
 #                base with B (default origin/main; committed, staged, unstaged or untracked), the
 #                suites that name one of them outside a comment, directly or through a *.bash helper
-#                they load (gh-shim/gh: suites that name gh-shim), then --check dev/coverage-floor.tsv
-#                for those scripts only. Partial numbers as with FILE; the changed scripts are listed
+#                they load (gh-shim/gh: suites that name gh-shim), or that name a script sourcing one
+#                (`source`/`.`, transitively: _slots.sh picks wt-cleanup.sh's suites, #245), then
+#                --check dev/coverage-floor.tsv for those scripts only. Partial numbers as with FILE; the changed scripts are listed
 #                in coverage/changed.txt. No changed script: nothing runs, exit 0. A changed script
 #                no suite names is reported and not judged (CI's full run still measures it).
 #   --check F    run no suites: compare an existing resultset to the floors in F (script<TAB>min%,
@@ -148,7 +150,10 @@ credit_extents() {
 summary() { if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then cat >>"$GITHUB_STEP_SUMMARY"; else cat >/dev/null; fi; }
 
 ext="" # credit_extents' output, made where it is needed: the bashcov check runs with a minimal PATH
-trap '[[ -z "$ext" ]] || rm -f "$ext"' EXIT
+# bashcov's output while it runs, kept outside the repo so a git add -A mid-run, or an interrupted
+# run, leaves no stray file at the root (#228); moved to coverage/test.log once bashcov exits.
+log=""
+trap '[[ -z "$ext" ]] || rm -f "$ext"; [[ -z "$log" ]] || rm -f "$log"' EXIT
 
 # check_floors: the --check verdict for $floor and $resultset; returns 0 or 3, exits 4 on bad input.
 # With $only set (newline-separated paths, --changed), only those scripts are judged.
@@ -215,19 +220,38 @@ if [[ -n "$changed" ]]; then
   sdir=$root/skills/orchestrate/scripts
   # names FILE PATTERN: FILE has a non-comment line matching PATTERN (awk reads to the end: no early-exit pipe).
   names() { awk -v p="$2" '!/^[[:space:]]*#/ && $0 ~ p { hit = 1 } END { exit !hit }' "$1"; }
-  unnamed="" picked=""
-  while IFS= read -r f; do
-    b=${f##*/}
-    if [[ "$f" == */gh-shim/gh ]]; then pat='gh-shim'; else pat="(^|[^A-Za-z0-9_.-])${b//./[.]}([^A-Za-z0-9_-]|\$)"; fi
-    found=""
-    for s in "$sdir"/*.bats; do if names "$s" "$pat"; then found+="$s"$'\n'; fi; done
+  # naming PATH: the suites that name PATH outside a comment, directly or through a *.bash helper.
+  naming() {
+    local b=${1##*/} pat s h hb
+    if [[ "$1" == */gh-shim/gh ]]; then pat='gh-shim'; else pat="(^|[^A-Za-z0-9_.-])${b//./[.]}([^A-Za-z0-9_-]|\$)"; fi
+    for s in "$sdir"/*.bats; do if names "$s" "$pat"; then echo "$s"; fi; done
     # A helper that names it counts for every suite that loads the helper.
     for h in "$sdir"/*.bash; do
       names "$h" "$pat" || continue
       hb=${h##*/}; hb=${hb%.bash}
-      for s in "$sdir"/*.bats; do if names "$s" "(^|[[:space:];])load[[:space:]]+[\"']?$hb([\"'.;[:space:]]|\$)"; then found+="$s"$'\n'; fi; done
+      for s in "$sdir"/*.bats; do if names "$s" "(^|[[:space:];])load[[:space:]]+[\"']?$hb([\"'.;[:space:]]|\$)"; then echo "$s"; fi; done
     done
-    if [[ -z "$found" ]]; then unnamed+="$f"$'\n'; else picked+="$found"; fi
+  }
+  # sourcers PATH: the scripts that source PATH (`source` or `.`), transitively (#245): a suite
+  # reaches a sourced helper such as _slots.sh through them without naming it.
+  sourcers() {
+    local todo=$1 seen=$'\n'"$1"$'\n' cur b sp
+    while [[ -n "$todo" ]]; do
+      cur=${todo%%$'\n'*}
+      if [[ "$todo" == *$'\n'* ]]; then todo=${todo#*$'\n'}; else todo=""; fi
+      b=${cur##*/}
+      for sp in "$sdir"/*.sh "$root"/bin/*.sh; do
+        [[ -f "$sp" && "$seen" != *$'\n'"${sp#"$root"/}"$'\n'* ]] || continue
+        names "$sp" "(^|[[:space:];&|(])(source|[.])[[:space:]]+[^;&|]*[/\"'[:space:]]${b//./[.]}([\"';)[:space:]]|\$)" || continue
+        seen+="${sp#"$root"/}"$'\n'; todo+="${todo:+$'\n'}${sp#"$root"/}"
+        echo "${sp#"$root"/}"
+      done
+    done
+  }
+  unnamed="" picked=""
+  while IFS= read -r f; do
+    found=$(naming "$f"; while IFS= read -r p; do [[ -z "$p" ]] || naming "$p"; done < <(sourcers "$f"))
+    if [[ -z "$found" ]]; then unnamed+="$f"$'\n'; else picked+="$found"$'\n'; fi
   done <<<"$only"
   # cli-contract.bats runs every script's -h and unknown-flag lines without naming the script.
   [[ -z "$picked" || ! -f "$sdir/cli-contract.bats" ]] || picked+="$sdir/cli-contract.bats"$'\n'
@@ -267,8 +291,11 @@ fi
 cd "$root"
 rm -rf coverage
 rc=0
-"$bashcov" --root "$root" -- dev/test.sh ${jobs[@]+"${jobs[@]}"} ${suites[@]+"${suites[@]}"} >coverage.log 2>&1 || rc=$?
-mkdir -p coverage && mv coverage.log coverage/test.log
+log=$(mktemp)
+"$bashcov" --root "$root" -- dev/test.sh ${jobs[@]+"${jobs[@]}"} ${suites[@]+"${suites[@]}"} >"$log" 2>&1 || rc=$?
+mkdir -p coverage
+mv "$log" coverage/test.log
+log=""
 [[ -f coverage/.resultset.json ]] || { echo "dev/coverage.sh: bashcov wrote no results (see coverage/test.log)" >&2; exit 1; }
 subset=""
 if ((${#suites[@]})); then

@@ -31,9 +31,9 @@
 #            optionally isOutdated/is_outdated/outdated (absent: current). A thread without a
 #            resolved flag, or any other shape, is unreadable (exit 3), never "0".
 #   thread-nodes  the PR as the GraphQL pull request node thread-sweep.sh classifies: {number,
-#            commits{nodes[{commit{oid}}]}, reviewThreads{pageInfo{hasNextPage:false}, nodes[{id,
-#            isResolved, isOutdated, starter{nodes[{author{login},url}]}, latest{totalCount,
-#            nodes[{author{login},body}]}, comments{nodes[{body}]} (the last 100)}]}}. Flags come
+#            commits{nodes[{commit{oid,committedDate}}]}, reviewThreads{pageInfo{hasNextPage:false},
+#            nodes[{id, isResolved, isOutdated, starter{nodes[{author{login},url}]}, latest{totalCount,
+#            nodes[{author{login},body,createdAt}]}, comments{nodes[{body}]} (the last 100)}]}}. Flags come
 #            from ccr/review_threads as in threads; bodies and authors from GET pulls/<n>/comments,
 #            commits from GET pulls/<n>/commits (neither is read when the PR has no thread). A
 #            thread is tied to its comments by a comment id it carries (root_comment_id,
@@ -201,7 +201,7 @@ thread_nodes() {
     def login: (.user.login // "") | sub("\\[bot\\]$"; "");
     def items: if type == "array" then .[] else error("not a list") end;
     [$cm[] | items] as $all
-    | {number: $n, commits: {nodes: [$co[] | items | {commit: {oid: .sha}}]},
+    | {number: $n, commits: {nodes: [$co[] | items | {commit: {oid: .sha, committedDate: (.commit.committer.date // null)}}]},
        reviewThreads: {pageInfo: {hasNextPage: false}, nodes: [$t[0][]
          | ([.root_comment_id, .rootCommentId, .comment_id, .commentId, .first_comment_id, .firstCommentId,
              ((.comments // null) | cmts | (.[0] // {}) | (.databaseId // .database_id // .id))]
@@ -211,7 +211,7 @@ thread_nodes() {
          | ([$all[] | select((.in_reply_to_id // .id) == $root)] | sort_by(.created_at // "", .id)) as $c
          | {id: ($root | tostring), isResolved: ._r, isOutdated: ._o,
             starter: {nodes: [{author: {login: ($c[0] | login)}, url: ($c[0].html_url // "-")}]},
-            latest: {totalCount: ($c | length), nodes: [{author: {login: ($c[-1] | login)}, body: ($c[-1].body // "")}]},
+            latest: {totalCount: ($c | length), nodes: [{author: {login: ($c[-1] | login)}, body: ($c[-1].body // ""), createdAt: ($c[-1].created_at // null)}]},
             comments: {nodes: [$c[-100:][] | {body: (.body // "")}]}}]}}' 2>/dev/null ||
     unreadable "PR $pr: review threads could not be tied to their comments"
 }

@@ -53,6 +53,16 @@ from memory (advisory workflows, ready label, device slot types).
      thread answered (an issue link or a pushed fix in the last reply). They are not repair
      targets: for each, `"{{SCRIPTS}}/thread-sweep.sh" resolve --repo {{REPO}} --pr <n>` (exit 5
      or 9: rerun once). Only `repair=` PRs need a lane. See `{{SCRIPTS}}/../thread-resolution.md`.
+   - `stalled=<n>`: the `threads` line's `stalled=` PRs have a thread our own account answered
+     after the head commit without naming a commit or an issue (agreed, nothing pushed). The
+     session that wrote it has ended: dispatch a repair for each now, do not wait for it (#209).
+   - `reviewed-draft=<n>`: each `reviewed-draft #<pr> review=<v> rollup=<r>: <what>` line is a
+     draft with a ship verdict or green checks. The merge loop skips drafts, so it sits unmerged
+     until someone marks it ready (#205). Report each as "reviewed draft: mark ready?" with its
+     review and checks; `held (until:<event>)` names the hold that keeps it. In autonomous mode
+     (`"{{SCRIPTS}}/campaign.sh" mode autonomous`, set by the owner) the snapshot itself marks a ship
+     draft ready when no hold names it and the verdict is for its head; `mark-ready failed (...)`
+     says why it could not. Never mark a draft ready yourself.
    - `hold-stale=<m>`: each `hold-stale #<pr> age=<h>h until:<event> reason=<text>` line is a
      merge-loop hold older than `--hold-hours` (default 12, `ORCHESTRATE_HOLD_STALE_HOURS`), or an
      old-format line of unknown age. Run `"{{SCRIPTS}}/hold.sh" check --repo {{REPO}} --release`:

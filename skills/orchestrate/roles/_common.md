@@ -47,3 +47,11 @@
    `lane-rules.md`. Do not read the rest of the learnings store. A procedural failure you worked
    around (a tool limit, a rate limit, a delivery gap) goes in your report as a proposed learning:
    rule, why, how to apply; the orchestrator writes it (`learnings.md`).
+13. Review findings on your PR (bot or human): for one you agree with, push the fix in this pass,
+   then reply on the thread with the commit SHA and resolve it (a cloud session cannot resolve:
+   it replies, and the local `thread-sweep.sh resolve` resolves it). For one you disagree with,
+   reply starting "Disagree:" with the reason. "Agreed", "proposed fix" or "deferred" with no
+   pushed commit is not an answer: it blocks the merge loop until a repair is sent (#209). Defer
+   only a minor or cosmetic finding, with the issue you filed for it in the reply; one that can
+   crash, hang or corrupt state is fixed now. Before your report, list the PR's unresolved
+   threads: never end with an agreed but unfixed thread.

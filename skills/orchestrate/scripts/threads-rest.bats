@@ -168,10 +168,10 @@ STUB
          {"id":12,"in_reply_to_id":11,"user":{"login":"me"},"body":"follow-up #9","created_at":"2026-01-01T00:00:02Z"},
          {"id":20,"user":{"login":"x"},"body":"b","html_url":"u20","created_at":"2026-01-01T00:00:01Z"}]' >"$FX/t-comments"
   out=$(tn '[{"isResolved":false,"comments":{"nodes":[{"id":"PRRC_x","databaseId":11}]}},{"is_resolved":true,"root_comment_id":"20"}]')
-  jq -e '.number == 5 and .commits.nodes == [{commit: {oid: "abc"}}]
+  jq -e '.number == 5 and .commits.nodes == [{commit: {oid: "abc", committedDate: null}}]
     and .reviewThreads.nodes[0] == {id: "11", isResolved: false, isOutdated: false,
       starter: {nodes: [{author: {login: "bot"}, url: "u11"}]},
-      latest: {totalCount: 3, nodes: [{author: {login: "bot"}, body: "no"}]},
+      latest: {totalCount: 3, nodes: [{author: {login: "bot"}, body: "no", createdAt: "2026-01-01T00:00:03Z"}]},
       comments: {nodes: [{body: "finding"}, {body: "follow-up #9"}, {body: "no"}]}}
     and (.reviewThreads.nodes[1] | .id == "20" and .isResolved and .latest.totalCount == 1)' <<<"$out"
   # a reply's id names the thread it is in
