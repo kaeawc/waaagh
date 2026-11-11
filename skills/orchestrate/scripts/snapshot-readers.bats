@@ -9,7 +9,7 @@ setup() {
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me
-  unset ORCHESTRATE_NOW ORCHESTRATE_GH_API ORCHESTRATE_SNAPSHOT_TTL ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_REVIEW_BOTS
+  unset ORCHESTRATE_NOW ORCHESTRATE_GH_API ORCHESTRATE_SNAPSHOT_TTL ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_REVIEW_BOT_LOGIN ORCHESTRATE_REVIEW_CHECK
   ST="$ORCHESTRATE_STATE_DIR/o__r"; mkdir -p "$ST"
   H70=7070707070707070707070707070707070707070
   H71=7171717171717171717171717171717171717171
@@ -39,7 +39,8 @@ case "$*" in
   "issue list"*) cat "$FX/issues.json" ;;
   "api repos/o/r/pulls?state=open"*) rows | jq 'map({number, draft: false, user: {login: "me", type: "User"}, body: "",
       base: {ref: "main", repo: {full_name: "o/r"}}, head: {ref: "b", sha: .head, repo: {full_name: "o/r"}}, labels: []})' ;;
-  *"/check-runs"*) echo '{"total_count":1,"check_runs":[{"name":"build","status":"completed","conclusion":"success"}]}' ;;
+  *"/check-runs"*) if [ -f "$FX/check-runs.json" ]; then cat "$FX/check-runs.json"; else
+    echo '{"total_count":1,"check_runs":[{"name":"build","status":"completed","conclusion":"success"}]}'; fi ;;
   *"/status"*) echo '{"state":"success","statuses":[]}' ;;
   *"/pulls/"*"/reviews"*) n=$(printf '%s\n' "$*" | sed -nE 's#.*/pulls/([0-9]+)/reviews.*#\1#p')
     if [ -f "$FX/reviews.json" ]; then cat "$FX/reviews.json"
@@ -96,9 +97,9 @@ calls() { grep -c "$1" "$FX/calls" || true; }
   [ "$output" = "wait never-reviewed" ]
   [ "$(calls '^pr view')" -eq 0 ]
   [ "$(calls '/reviews')" -eq 0 ]
-  [ "$(calls '/comments')" -eq 1 ]
-  # a bot comment naming the head still counts: comments are always read
-  jq -n --arg h "$H72" '[{user: {login: "coderabbitai[bot]"}, body: ("Reviewed commit: " + $h[0:10])}]' >"$FX/comments.json"
+  [ "$(calls "/commits/$H72/check-runs")" -eq 1 ]
+  # the bot's completed check run on the head still counts: it is read whenever no review is at the head
+  echo '{"check_runs":[{"name":"Claude Code Review","status":"completed","conclusion":"neutral","output":{"title":"Code review found no issues"}}]}' >"$FX/check-runs.json"
   run rg check --pr 72 --head "$H72"
   [ "$status" -eq 0 ] && [ "$output" = "ok reviewed at-head" ]
 }
@@ -107,7 +108,7 @@ calls() { grep -c "$1" "$FX/calls" || true; }
   rg policy review-at-head >/dev/null
   "$SCRIPTS/gh-snapshot.sh" --repo o/r >/dev/null
   : >"$FX/calls"
-  jq -n --arg h "$H70" '[{user: {login: "chatgpt-codex-connector[bot]"}, state: "COMMENTED", commit_id: $h, body: "fine"}]' >"$FX/reviews.json"
+  jq -n --arg h "$H70" '[{user: {login: "claude[bot]"}, state: "COMMENTED", commit_id: $h, body: "fine"}]' >"$FX/reviews.json"
   run rg check --pr 70
   [ "$status" -eq 0 ]
   [ "$output" = "ok reviewed at-head" ]
