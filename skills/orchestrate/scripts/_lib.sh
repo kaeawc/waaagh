@@ -108,6 +108,19 @@ orch_gh_refused() {
 
 orch_default_branch() { gh api "repos/$1" | jq -r .default_branch; }
 
+# orch_hold_of OWNER/REPO PR: is PR in the merge loop's hold file? Read through hold.sh list, never
+# by parsing <state dir>/holds again. Prints `#N until:<event> since:<iso> <reason>` and returns 0
+# when held, 1 when not, 2 when hold.sh could not read the file. Every merge path asks this before
+# it merges (pr-merge.sh exit 14, merge-queue.sh outcome `held`; #202), so a hold set at any time,
+# by hand or automatically, stops the merge.
+orch_hold_of() {
+  local rows
+  rows=$("$_orch_lib_dir/hold.sh" list --repo "$1" 2>/dev/null) || return 2
+  rows=$(awk -F'\t' -v pr="${2#\#}" '$1 == pr { printf "#%s until:%s since:%s %s\n", $1, $2, $3, $5 }' <<<"$rows")
+  [[ -n "$rows" ]] || return 1
+  printf '%s\n' "$rows"
+}
+
 # orch_iso EPOCH -> 2026-01-02T03:04:05Z
 orch_iso() { jq -rn --argjson t "$1" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")'; }
 

@@ -9,8 +9,8 @@
 #             Appends a row to <state dir>/merge-queue/queue.tsv. A duplicate id is refused.
 #             `--requires auto` depends on the queued item whose branch is `parent B`.
 #   run-once  Refresh main health, then process eligible items in file order, serially, until the
-#             pass ends. An item runs when it has no outcome (or `waiting`) and every id in
-#             `requires` has outcome `merged`.
+#             pass ends. An item runs when it has no outcome (or `waiting` or `held`) and every id
+#             in `requires` has outcome `merged`.
 #   status    One line per item: id, outcome (or `pending` / `blocked:<ids>`), branch.
 #   retry ID  Clear a non-merged outcome so the next run-once picks the item up again.
 #   parent B  Print the branch B stacks on: `name-3` -> `name-2`, `name-2` -> `name`, else nothing.
@@ -32,6 +32,11 @@
 #   superseded a conflict that supersede-check.sh calls a SUPERSEDED-CANDIDATE (later merges ship
 #              the PR's issue another way): taken off the queue front, parked until `retry`, for
 #              an evidence session (roles/supersede-evidence.md), never a re-apply
+#   held       the item's PR is in the hold file (hold.sh; also pr-merge.sh exit 14): set aside so
+#              the rest of the queue runs, nothing pushed or merged for it. Every pass re-checks it
+#              (a known PR before any fetch or push) and resumes it once `hold.sh release` (or
+#              check --release) has cleared the hold; no `retry` needed. A hold file hold.sh cannot
+#              read leaves the item `waiting`
 # Bot review (pr-merge.sh exit 13): the item asks `review-gate.sh request --pr N` once per pushed
 # head; the gate's throttle decides whether a request is posted and never asks an out-of-quota bot.
 # The answer is in the outcome detail: `review requested from <bot>`, `review throttled until
@@ -147,6 +152,26 @@ review_detail() {
   esac
 }
 
+# held_detail PR -> the outcome detail for an item whose PR the hold file holds (orch_hold_of).
+# Returns 1 when PR is not held, 2 when the hold file could not be read.
+held_detail() {
+  local hrc=0 hold
+  hold=$(orch_hold_of "$repo" "$1") || hrc=$?
+  ((hrc == 0)) || return "$hrc"
+  echo "PR $1 is held: $hold; hold.sh release clears it"
+}
+
+# park_if_held ID PR: true (and the outcome written) when the item must not go on this pass.
+park_if_held() {
+  local hd hrc=0
+  hd=$(held_detail "$2") || hrc=$?
+  case "$hrc" in
+    0) set_outcome "$1" held "$hd" ;;
+    1) return 1 ;;
+    *) set_outcome "$1" waiting "hold file unreadable (hold.sh list); will re-check" ;;
+  esac
+}
+
 # unmet_deps REQUIRES -> the ids in the list whose outcome is not `merged`.
 unmet_deps() {
   local dep missing=() deps
@@ -202,11 +227,11 @@ case "$cmd" in
     fi
     while IFS=$'\t' read -r -u 3 qid qwt qbranch qtitle qbody qreq; do
       prev=$(outcome_of "$qid")
-      [[ -z "$prev" || "$prev" == waiting ]] || continue
+      [[ -z "$prev" || "$prev" == waiting || "$prev" == held ]] || continue
       miss=$(unmet_deps "$qreq")
       if [[ -n "$miss" ]]; then echo "$qid: blocked on $miss"; continue; fi
       log="$qdir/logs/$qid.log"
-      [[ "$prev" == waiting ]] || : >"$log"
+      [[ "$prev" == waiting || "$prev" == held ]] || : >"$log"
       if [[ -n "$(git -C "$qwt" status --porcelain)" ]] ||
         [[ "$(git -C "$qwt" branch --show-current)" != "$qbranch" ]]; then
         set_outcome "$qid" error "worktree dirty or not on $qbranch"; continue
@@ -219,12 +244,13 @@ case "$cmd" in
           set_outcome "$qid" waiting "PR $known unreadable (transient); will re-check"; continue
         fi
         if [[ "$kstate" == MERGED ]]; then set_outcome "$qid" merged "PR $known (confirmed on re-check)"; continue; fi
+        if park_if_held "$qid" "$known"; then continue; fi
       fi
       git -C "$qwt" fetch -q origin >>"$log" 2>&1 || { set_outcome "$qid" error "fetch failed, see $log"; continue; }
       # Resuming a waiting item: the base merge, check and push are already done when the pushed
       # head still contains the current base and nothing moved since.
       local_head=$(git -C "$qwt" rev-parse HEAD)
-      if [[ "$prev" == waiting && "$(cat "$qdir/$qid.pushed" 2>/dev/null)" == "$local_head" ]] &&
+      if [[ ( "$prev" == waiting || "$prev" == held ) && "$(cat "$qdir/$qid.pushed" 2>/dev/null)" == "$local_head" ]] &&
         [[ "$(git -C "$qwt" rev-parse -q --verify "origin/$qbranch" || true)" == "$local_head" ]] &&
         git -C "$qwt" merge-base --is-ancestor "origin/$base" HEAD; then
         echo "$qid: resuming at ${local_head:0:9}" >>"$log"
@@ -273,6 +299,7 @@ case "$cmd" in
       [[ -z "$pr" ]] || printf '%s\n' "$pr" >"$qdir/$qid.pr"
       head=$(jq -r '.[0].headRefOid // empty' <<<"$prs")
       [[ -n "$pr" && -n "$head" ]] || { set_outcome "$qid" error "no open PR for $qbranch"; continue; }
+      if park_if_held "$qid" "$pr"; then continue; fi
       if [[ "$head" != "$local_head" ]]; then
         set_outcome "$qid" waiting "PR $pr shows head ${head:0:9}, pushed ${local_head:0:9}"; continue
       fi
@@ -317,6 +344,7 @@ case "$cmd" in
         9) set_outcome "$qid" waiting "merge outcome unknown; will reconcile" ;;
         11) set_outcome "$qid" waiting "base moved past a merge-sensitive path; next pass merges it in again" ;;
         12) set_outcome "$qid" waiting "another merge holds a merge-sensitive path lock" ;;
+        14) set_outcome "$qid" held "$(held_detail "$pr" || echo "pr-merge refused PR $pr as held, see $log")" ;;
         13) set_outcome "$qid" waiting "waiting for a bot review (review-gate.sh policy): $(review_detail "$qid" "$pr" "$head")" ;;
         10) set_outcome "$qid" waiting "merge pending on GitHub (5xx, in progress or outage); will reconcile"
           if [[ -f "$(orch_state_dir "$repo")/GITHUB_OUTAGE" ]]; then echo "paused: GitHub outage; pass stopped"; break; fi ;;
