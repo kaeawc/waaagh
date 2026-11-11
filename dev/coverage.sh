@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Line coverage of the scripts under the BATS suites, measured with bashcov (Bash xtrace).
 # Writes coverage/.resultset.json and prints one line per script, least covered first, then the total.
+# The suites' output goes to coverage/test.log (kept in a temp file until bashcov exits, #228).
 #
 # Usage: dev/coverage.sh [-j N] [FILE.bats...]
 #        dev/coverage.sh --changed [BASE] [-j N]
@@ -148,7 +149,10 @@ credit_extents() {
 summary() { if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then cat >>"$GITHUB_STEP_SUMMARY"; else cat >/dev/null; fi; }
 
 ext="" # credit_extents' output, made where it is needed: the bashcov check runs with a minimal PATH
-trap '[[ -z "$ext" ]] || rm -f "$ext"' EXIT
+# bashcov's output while it runs, kept outside the repo so a git add -A mid-run, or an interrupted
+# run, leaves no stray file at the root (#228); moved to coverage/test.log once bashcov exits.
+log=""
+trap '[[ -z "$ext" ]] || rm -f "$ext"; [[ -z "$log" ]] || rm -f "$log"' EXIT
 
 # check_floors: the --check verdict for $floor and $resultset; returns 0 or 3, exits 4 on bad input.
 # With $only set (newline-separated paths, --changed), only those scripts are judged.
@@ -267,8 +271,11 @@ fi
 cd "$root"
 rm -rf coverage
 rc=0
-"$bashcov" --root "$root" -- dev/test.sh ${jobs[@]+"${jobs[@]}"} ${suites[@]+"${suites[@]}"} >coverage.log 2>&1 || rc=$?
-mkdir -p coverage && mv coverage.log coverage/test.log
+log=$(mktemp)
+"$bashcov" --root "$root" -- dev/test.sh ${jobs[@]+"${jobs[@]}"} ${suites[@]+"${suites[@]}"} >"$log" 2>&1 || rc=$?
+mkdir -p coverage
+mv "$log" coverage/test.log
+log=""
 [[ -f coverage/.resultset.json ]] || { echo "dev/coverage.sh: bashcov wrote no results (see coverage/test.log)" >&2; exit 1; }
 subset=""
 if ((${#suites[@]})); then
