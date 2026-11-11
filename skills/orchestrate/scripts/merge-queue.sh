@@ -32,9 +32,9 @@
 #   superseded a conflict that supersede-check.sh calls a SUPERSEDED-CANDIDATE (later merges ship
 #              the PR's issue another way): taken off the queue front, parked until `retry`, for
 #              an evidence session (roles/supersede-evidence.md), never a re-apply
-#   held       the item's PR is in the hold file (hold.sh; also pr-merge.sh exit 14), or a release
-#              freeze is on (freeze.sh: every PR is held until `freeze.sh end`), or its latest
-#              internal review verdict (review-ledger.sh) is not ship: set aside so
+#   held       the item's PR is in the hold file (hold.sh), or its latest internal review verdict
+#              (review-ledger.sh) is not ship (also pr-merge.sh exit 14), or a release freeze is on
+#              (freeze.sh: every PR is held until `freeze.sh end`): set aside so
 #              the rest of the queue runs, nothing pushed or merged for it. Every pass re-checks it
 #              (a known PR before any fetch or push) and resumes it once `hold.sh release` (or
 #              check --release) has cleared the hold, or a newer ship verdict is recorded; no

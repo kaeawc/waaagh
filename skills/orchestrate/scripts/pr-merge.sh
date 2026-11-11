@@ -53,7 +53,7 @@
 #       Also when the PR's latest internal review verdict (review-ledger.sh) is not ship
 #       (`held: ... latest internal review`); only a newer ship verdict clears that
 # Holds: a PR in <state dir>/holds, or whose latest review-ledger.sh verdict is fix-first, rethink,
-# fixing, repairing or repaired, is never merged, in any mode (--admin, --main-fix and
+# fixing, repairing or repaired (#212), is never merged, in any mode (--admin, --main-fix and
 # ORCHESTRATE_DIRECT_MERGE included); a hold file or review ledger that cannot be read refuses
 # with exit 9.
 # Review policy: when <state dir>/review-policy is set and not off, review-gate.sh check must say
