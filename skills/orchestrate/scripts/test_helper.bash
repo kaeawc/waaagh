@@ -162,13 +162,14 @@ required_snapshot_lines() {
     }' <<<"$output"
 }
 
-# snapshot_line_names [SCRIPT]: the line names triage-tick.sh's usage header documents for
+# snapshot_line_names SCRIPT: the line names SCRIPT's (triage-tick.sh's) usage header documents for
 # `snapshot`, one per line, in order (the first word of each line at the header's 7-space indent
 # between "prints:" and "Reasons:"). A bound on the snapshot's size uses their count, so it follows
-# the header rather than a fixed number.
+# the header rather than a fixed number. The caller passes the path: a helper every suite loads must
+# not name a script, or dev/coverage.sh --changed picks every suite for a change to it (#248).
 snapshot_line_names() {
   awk '/^set -euo/ { exit } /prints:$/ { on = 1; next } /^#     Reasons:/ { on = 0 }
-    on && /^#       [a-z]/ { print $2 }' "${1:-$BATS_TEST_DIRNAME/triage-tick.sh}"
+    on && /^#       [a-z]/ { print $2 }' "${1:?snapshot_line_names: SCRIPT path required}"
 }
 
 # `run ! cmd` is how a mid-test negative assertion fails (#134); bats >= 1.5 has it.
