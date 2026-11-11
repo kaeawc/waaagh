@@ -51,6 +51,9 @@ from memory (advisory workflows, ready label, device slot types).
      thread answered (an issue link or a pushed fix in the last reply). They are not repair
      targets: for each, `"{{SCRIPTS}}/thread-sweep.sh" resolve --repo {{REPO}} --pr <n>` (exit 5
      or 9: rerun once). Only `repair=` PRs need a lane. See `{{SCRIPTS}}/../thread-resolution.md`.
+   - `stalled=<n>`: the `threads` line's `stalled=` PRs have a thread our own account answered
+     after the head commit without naming a commit or an issue (agreed, nothing pushed). The
+     session that wrote it has ended: dispatch a repair for each now, do not wait for it (#209).
    - `hold-stale=<m>`: each `hold-stale #<pr> age=<h>h until:<event> reason=<text>` line is a
      merge-loop hold older than `--hold-hours` (default 12, `ORCHESTRATE_HOLD_STALE_HOURS`), or an
      old-format line of unknown age. Run `"{{SCRIPTS}}/hold.sh" check --repo {{REPO}} --release`:

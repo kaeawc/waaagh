@@ -55,10 +55,19 @@ paragraph above. Threads that arrive after the first review round go through
 `triage-tick.sh snapshot` prints a `threads` line (`thread-sweep.sh scan --summary`):
 
 ```
-threads unresolved=<n> answered=<n> resolve-now=#a,#b|- repair=#c|-
+threads unresolved=<n> answered=<n> resolve-now=#a,#b|- repair=#c|- [stalled=#d,...]
 ```
 
 `resolve-now` lists PRs whose unresolved threads are all answered, and raises the reason
 `resolve-now=<count>`: resolve them now (`thread-sweep.sh resolve`), do not dispatch a repair. Only
 the `repair` PRs need a lane. A PR with more than 100 review threads is always listed as `repair`,
 never guessed answered.
+
+`stalled` (printed only when there is one) lists PRs with a thread whose last reply is from our own
+account, came after the PR's head commit and names neither a commit nor an issue: a session that
+replied "agreed, proposed fix" and stopped without pushing (#209). It raises the reason
+`stalled=<count>`: dispatch a repair for each now; waiting changes nothing, the session that wrote
+the reply has ended. Our account is `ORCHESTRATE_SELF_LOGIN`, else `gh api user`, read only when
+such a reply exists. A reply that starts "Disagree" stays `open`, and a reply older than the head
+commit may have been followed by its push, so neither is stalled. The briefs (`briefs/`,
+`roles/_common.md` rule 13) forbid the pattern; this is the check for when a session ignores them.

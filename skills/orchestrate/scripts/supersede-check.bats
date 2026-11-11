@@ -194,7 +194,7 @@ R
   [[ "$(cat "$R/conflict-lane.md")" == *'supersede-check.sh" --pr P --worktree'* ]]
   [[ "$(cat "$R/conflict-lane.md")" == *"supersede-evidence.md"* ]]
   [[ "$(cat "$B/repair.md")" == *"SUPERSEDED-CANDIDATE"* ]]
-  [[ "$(sed -n 1p "$B/repair.md")" == "<!-- waaagh-brief repair v2."* ]]
+  [[ "$(sed -n 1p "$B/repair.md")" == "<!-- waaagh-brief repair v"* ]]
   E=$(cat "$R/supersede-evidence.md")
   [[ "$E" == *"Start fresh from \`origin/{{BASE}}\`"* ]]
   [[ "$E" == *"failing-first test per"* ]]

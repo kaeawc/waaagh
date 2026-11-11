@@ -24,9 +24,11 @@
 #       slots <type>=<busy>/<n>,... | slots none
 #       cron <none|age=<h>h expires_in=<h>h>
 #       threads none | threads unknown
-#             | threads unresolved=<n> answered=<n> resolve-now=#a,...|- repair=#b,...|-
+#             | threads unresolved=<n> answered=<n> resolve-now=#a,...|- repair=#b,...|- [stalled=#c,...]
 #                  review threads on open PRs (thread-sweep.sh scan --summary): resolve-now PRs have
-#                  every unresolved thread answered (an issue link or a pushed fix in the last reply)
+#                  every unresolved thread answered (an issue link or a pushed fix in the last reply);
+#                  stalled PRs have a thread our own account answered after the head commit without
+#                  naming a fix or an issue ("agreed", nothing pushed, #209)
 #       host <ADMIT|HOLD|BACKOFF> cause=<indexing|lanes|other|-> free_gb=<g|unknown> load=<l> limit=<x>
 #            | host unknown      lane admission on this host (host-load.sh --top 3; the command is
 #                  ORCHESTRATE_HOST_LOAD, default host-load.sh beside this script)
@@ -38,7 +40,8 @@
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
 #     host-hold (in place of dispatch=<n> while the host line is HOLD or BACKOFF; "host unknown"
 #     holds nothing), cron-expiring (under 24h left), resolve-now=<n> (PRs whose threads only need
-#     resolving: the local orchestrator resolves them, they are not repair targets), hold-stale=<m>
+#     resolving: the local orchestrator resolves them, they are not repair targets), stalled=<n> (PRs
+#     with an agreed but unpushed thread: dispatch a repair now, no session is still on it), hold-stale=<m>
 #     (holds past --hold-hours: check their release condition, `hold.sh check`). A part that
 #     could not be read says "unknown"; never a guess.
 #     Device slots: an active lanes.tsv row whose agent column reads "<type>:<agent>" holds one
@@ -376,6 +379,8 @@ elif [[ "$open" != unknown ]]; then
 fi
 rn=$(sed -n 's/.* resolve-now=\([^ ]*\).*/\1/p' <<<"$threads")
 if [[ -n "$rn" && "$rn" != - ]]; then reasons+=("resolve-now=$(tr ',' '\n' <<<"$rn" | awk 'END { print NR }')"); fi
+sp=$(sed -n 's/.* stalled=\([^ ]*\).*/\1/p' <<<"$threads")
+if [[ -n "$sp" ]]; then reasons+=("stalled=$(tr ',' '\n' <<<"$sp" | awk 'END { print NR }')"); fi
 
 # Merge-loop holds (hold.sh): count them and name every one past --hold-hours with its reason, so
 # a hold whose condition passed but was never released is seen at the next tick (#196).
