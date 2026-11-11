@@ -217,12 +217,13 @@ Everything a campaign must remember lives in one directory per repository:
 | `campaign.json` | `campaign.sh` | start time, last verification time and SHA, wrap-up, `close_policy` (`owner-decisions.md`) |
 | `MAIN_RED` | `main-health.sh` | present while the default branch is red; holds merges |
 | `GITHUB_OUTAGE` | `pr-merge.sh` | present while githubstatus.com reports Pull Requests down; pauses merges |
+| `FREEZE`, `freeze-disarmed`, `freeze.log` | `freeze.sh` | present during a release freeze: every PR held on every merge path; the auto-merges it disarmed (method, head, who armed it) to re-arm at `end`; every disarm and re-arm (`release-freeze.md`) |
 | `merges.log` | `pr-merge.sh` | every merge attempt, with admin evidence |
 | `merge-sensitive` | you | merge-sensitive path globs (optional): PRs touching one merge serially and only up to date |
 | `locks/` | `pr-merge.sh` | one lock per merge-sensitive path while a merge over it is in flight |
 | `holds`, `holds.log` | `hold.sh` | merge-loop holds, one `<pr> until:<event> since:<iso> <reason>` line each (skipped by `pr-ready.sh`, refused by `pr-merge.sh` exit 14, parked `held` by `merge-queue.sh`, aged by the tick); every hold and release, logged in the same step as the file edit |
 | `reviews.tsv` | `review-ledger.sh` | internal review verdicts, one `iso pr verdict head note` row each, appended; a latest verdict other than `ship` holds the PR from merging |
-| `reruns.log`, `merge-loop.beat`, `triage-cron` | `triage-tick.sh` | known-flake reruns of default-branch runs (one per run); the merge loop's heartbeat and why it ended; when the session cron was created |
+| `reruns.log`, `merge-loop.beat`, `triage-cron` | `triage-tick.sh` | known-flake reruns of default-branch runs (one per run; a full rerun once per head SHA for a needs dependency that did not succeed); the merge loop's heartbeat and why it ended; when the session cron was created |
 | `bin/`, `loops/` | `loops.sh` | long-lived loop scripts (merge loop, tick, review snapshot), never in a session scratchpad; one `<name>.heartbeat` per loop, beaten every pass |
 | `merge-queue/` | `merge-queue.sh` | queue rows, one outcome file per item, check and error logs |
 | `ops/` | `pr-merge.sh`, `issue-close.sh` | journal of each GitHub write (intent, attempt, state) and its raw output, so a lost answer is reconciled, never replayed |
@@ -403,6 +404,11 @@ against its PR's own changes.
   (`"$SCRIPTS/gh-status.sh"`), re-reads after waits of 60 s or more, and exits 10 if still OPEN.
   While Pull Requests is in an outage it writes `GITHUB_OUTAGE` and every merge pauses (the queue
   stops its pass) until the status is operational, instead of logging a failure each pass.
+- **A release freeze covers every merge source, not only your merge loop** (`release-freeze.md`).
+  Before dispatching a release: `"$SCRIPTS/freeze.sh" start --reason "release X"` holds every PR on
+  every merge path and disarms every armed auto-merge, whoever armed it; `sweep` again before
+  every check of the release run; `end` re-arms the logged PRs and lifts it. Exit 6 means GitHub
+  refused the GraphQL-only mutation: do the listed PRs another way, then rerun.
 - **Merge-sensitive paths: green alone is not green together.** Two PRs that each grow a size
   budget, or each add keys to a version catalog in different places, merge cleanly in git and
   break main. List such shared, append-mostly paths (catalogs, budget tests, generated contracts)
