@@ -131,5 +131,44 @@ STUB
 }
 gh_route() { printf '%s\t%s\n' "$1" "$2" >>"$FX/routes.tsv"; }
 gh_routes() { cat >"$FX/routes.sh"; }
+# --- triage-tick.sh snapshot lines ----------------------------------------------------------
+# Tests name the snapshot lines they check instead of counting or indexing them (#201, #225), so a
+# new snapshot line needs no edit to any suite. The order is the one triage-tick.sh's header
+# documents (the source of truth); the required lines are the ones it always prints. Optional lines
+# (holds, hold-stale) and any line added later may follow.
+REQUIRED_SNAPSHOT_LINES="verdict main prs merge_loop dispatch slots cron threads host"
+
+# snap_line NAME: the one line of $output whose first word is NAME. Prints nothing and fails when
+# there is none or more than one, so `[ "$(snap_line x)" = ... ]` fails either way.
+snap_line() {
+  awk -v k="$1" '$1 == k { n++; l = $0 }
+    END { if (n == 1) { print l; exit 0 }
+          printf "snapshot line %s: found %d times, want once\n", k, n > "/dev/stderr"; exit 1 }' <<<"$output"
+}
+
+# required_snapshot_lines: every required line is in $output exactly once, in the documented order,
+# with the verdict first.
+required_snapshot_lines() {
+  awk -v want="$REQUIRED_SNAPSHOT_LINES" '
+    BEGIN { n = split(want, w, " "); for (i = 1; i <= n; i++) idx[w[i]] = i }
+    ($1 in idx) { seen[$1]++; at[$1] = NR }
+    END {
+      bad = 0
+      for (i = 1; i <= n; i++) if (seen[w[i]] != 1) { printf "%s: %d times, want once\n", w[i], seen[w[i]]; bad = 1 }
+      if (!bad && at["verdict"] != 1) { print "verdict is line " at["verdict"] ", want 1"; bad = 1 }
+      for (i = 2; !bad && i <= n; i++) if (at[w[i]] <= at[w[i-1]]) { printf "%s (line %d) before %s (line %d)\n", w[i], at[w[i]], w[i-1], at[w[i-1]]; bad = 1 }
+      exit bad
+    }' <<<"$output"
+}
+
+# snapshot_line_names [SCRIPT]: the line names triage-tick.sh's usage header documents for
+# `snapshot`, one per line, in order (the first word of each line at the header's 7-space indent
+# between "prints:" and "Reasons:"). A bound on the snapshot's size uses their count, so it follows
+# the header rather than a fixed number.
+snapshot_line_names() {
+  awk '/^set -euo/ { exit } /prints:$/ { on = 1; next } /^#     Reasons:/ { on = 0 }
+    on && /^#       [a-z]/ { print $2 }' "${1:-$BATS_TEST_DIRNAME/triage-tick.sh}"
+}
+
 # `run ! cmd` is how a mid-test negative assertion fails (#134); bats >= 1.5 has it.
 bats_require_minimum_version 1.5.0
