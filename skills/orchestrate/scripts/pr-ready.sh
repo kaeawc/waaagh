@@ -31,7 +31,9 @@
 # differently is still judged. Exclusions are explicit and visible as SKIP rows: --hold PR, every
 # PR in the campaign's hold file (<state dir>/holds, kept by hold.sh: its holds need no --hold),
 # every PR whose latest internal review verdict (review-ledger.sh) is not ship (`review:fix-first`,
-# `review:rethink`, `review:fixing`, until a newer ship verdict; #206),
+# `review:rethink`, `review:fixing`, until a newer ship verdict; #206), and every PR whose ship
+# verdict was recorded --head another commit that its head does not extend by GitHub-made
+# update-branch merges alone (`review:stale`, #210; local git in ORCHESTRATE_GIT_DIR, default .),
 # --hold-label (default hold), --exclude-label (repeatable; e.g. `dependencies` when dependabot
 # PRs have their own lane) and --head-match REGEX (a jq regex the head branch must match;
 # discouraged). A skipped PR that is otherwise READY is counted on the summary line, so a filter
@@ -247,6 +249,17 @@ if [[ "$api" == rest ]]; then
     $prs[0] as $prs | (map(select(type == "object" and has("number")) | {key: (.number | tostring), value: del(.state)}) | from_entries) as $by
     | $prs | map($by[.number | tostring] // .)')
 fi
+# A ship verdict pinned to another head than the PR's holds it as review:stale, unless only
+# GitHub-made update-branch merges came after the reviewed head (orch_review_covers, #210).
+while IFS=$'\t' read -r sp sh; do
+  [[ -n "$sp" ]] || continue
+  read -r ph pb <<<"$(jq -r --argjson n "$sp" '.[] | select(.number == $n) | "\(.headRefOid // "") \(.baseRefName // "")"' <<<"$prs")"
+  [[ -n "${ph:-}" && "$ph" != "$sh"* ]] || continue
+  # pr-merge.sh and merge-queue.sh print why (orch_review_hold_of); selection only skips it.
+  if ! orch_review_covers "${ORCHESTRATE_GIT_DIR:-.}" "$sp" "$sh" "$ph" "${pb:-$base}" >/dev/null; then
+    reviews_json=$(jq -c --arg p "$sp" '.[$p] = "stale"' <<<"$reviews_json")
+  fi
+done < <("$here/review-ledger.sh" shipped --repo "$repo" 2>/dev/null || true)
 rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" --argjson holds "$holds_json" \
     --argjson reviews "$reviews_json" --argjson required "$required" --arg base "$base" --arg hold_label "$hold_label" \
     --argjson excludes "$excludes_json" --arg head_match "$head_match" \

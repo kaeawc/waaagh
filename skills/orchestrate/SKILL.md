@@ -192,6 +192,11 @@ review of its first pushed commit never lets the merge loop strand the rest of t
 session's closing comment (`review-ledger.sh settle`, run by every triage tick) or
 `review-ledger.sh repaired` when its run ended records `repaired`; then review the final head
 (`roles/cloud-dispatch.md`, "A repair is in flight until it ends").
+A `ship` recorded `--head R` is pinned to the reviewed content, not the literal SHA (#210): it still
+counts at a later head only when every commit after R that is not on the base is a merge GitHub
+made from update-branch (committer GitHub, a clean merge of the base); any other commit, a merge
+made by hand (a conflict resolution) included, holds the PR as `review:stale` until the new head
+is reviewed. The check is local git (`orch_review_covers` in `scripts/_lib.sh`), never the compare API.
 
 **Concept brief** (Fable): the decision, constraints, options considered, what would change the
 answer. Ask for a verdict (ship / fix-first / rethink) with the deciding risk, under 300 words.

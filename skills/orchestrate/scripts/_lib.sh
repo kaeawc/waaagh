@@ -127,20 +127,73 @@ orch_hold_of() {
   printf '%s\n' "$rows"
 }
 
-# orch_review_hold_of OWNER/REPO PR: does PR's latest internal review verdict hold it? Read through
-# review-ledger.sh latest. Prints `#N review:<verdict> since:<iso> head:<sha> <note>` and returns 0
-# when the latest verdict is not ship (fix-first, rethink, fixing, repairing, repaired), 1 when it is
-# ship or there is none, 2 when the ledger could not be read. The merge paths ask it next to
-# orch_hold_of (#206).
+# orch_review_hold_of OWNER/REPO PR [HEAD [BASE [GITDIR]]]: does PR's latest internal review verdict
+# hold it? Read through review-ledger.sh latest. Prints `#N review:<verdict> since:<iso> head:<sha>
+# <note>` and returns 0 when the latest verdict is not ship (fix-first, rethink, fixing, repairing,
+# repaired), 1 when it is ship or there is none, 2 when the ledger could not be read. The merge
+# paths ask it next to orch_hold_of (#206). With HEAD (the PR's full head SHA), a ship recorded
+# --head R holds too unless orch_review_covers R HEAD (#210): `#N review:stale since:<iso> head:R
+# ship at R does not cover HEAD: <why>`. A ship row with no head is not pinned. BASE defaults to
+# the default branch, GITDIR to ORCHESTRATE_GIT_DIR or the current directory.
 orch_review_hold_of() {
-  local row rc=0 t p v h n s
+  local row rc=0 t p v h n s base why
   row=$("$_orch_lib_dir/review-ledger.sh" latest --repo "$1" --pr "${2#\#}" 2>/dev/null) || rc=$?
   ((rc != 3)) || return 1
   ((rc == 0)) || return 2
   IFS=$'\t' read -r t p v h n s <<<"$row"
-  [[ "$v" != ship ]] || return 1
+  if [[ "$v" == ship ]]; then
+    [[ -n "${3:-}" && -n "$h" && "$h" != - && "$3" != "$h"* ]] || return 1
+    base=${4:-}
+    [[ -n "$base" ]] || base=$(orch_default_branch "$1" 2>/dev/null) || base=""
+    why=$(orch_review_covers "${5:-${ORCHESTRATE_GIT_DIR:-.}}" "$p" "$h" "$3" "$base") && return 1
+    printf '#%s review:stale since:%s head:%s ship at %s does not cover %s: %s\n' "$p" "$t" "$h" "${h:0:9}" "${3:0:9}" "$why"
+    return 0
+  fi
   # A repairing or repaired row (#212) names its session.
   printf '#%s review:%s since:%s head:%s %s%s\n' "$p" "$v" "$t" "$h" "$n" "${s:+ session:$s}"
+}
+
+# orch_review_covers GITDIR PR REVIEWED HEAD BASE: does a review of REVIEWED still hold at HEAD
+# (#210)? Yes (return 0) when they are the same commit, or when REVIEWED is an ancestor of HEAD and
+# every commit in `git rev-list REVIEWED..HEAD --not origin/BASE` is a merge GitHub made from
+# update-branch: committer GitHub <noreply@github.com>, two parents, one of them on origin/BASE,
+# and a tree equal to the clean automatic merge of its parents (`git merge-tree --write-tree`,
+# git 2.38+), so it carries nothing beyond the base. Anything else returns 1 and prints why: a
+# merge made by hand (an agent's conflict resolution, or a web-editor resolution), a non-merge
+# commit, a non-ancestor, or commits GITDIR does not have. Local git only, never the compare API
+# (it also lists the base's own squash commits); it first fetches BASE and refs/pull/PR/head
+# from origin into GITDIR, quietly, and reads what is there if that fails.
+orch_review_covers() {
+  local d=$1 pr=$2 r=$3 h=$4 base=$5 c ps cn ce p ok tree want after
+  [[ "$r" != "$h" ]] || return 0
+  [[ -n "$base" ]] || { echo "cannot verify: no base branch"; return 1; }
+  git -C "$d" fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" </dev/null >/dev/null 2>&1 || true
+  git -C "$d" cat-file -e "$h^{commit}" 2>/dev/null ||
+    git -C "$d" fetch -q origin "refs/pull/$pr/head" </dev/null >/dev/null 2>&1 || true
+  r=$(git -C "$d" rev-parse -q --verify "$r^{commit}" 2>/dev/null) || { echo "cannot verify: ${3:0:9} is not in $d"; return 1; }
+  h=$(git -C "$d" rev-parse -q --verify "$h^{commit}" 2>/dev/null) || { echo "cannot verify: ${4:0:9} is not in $d"; return 1; }
+  [[ "$r" != "$h" ]] || return 0
+  git -C "$d" rev-parse -q --verify "refs/remotes/origin/$base^{commit}" >/dev/null 2>&1 ||
+    { echo "cannot verify: origin/$base is not in $d"; return 1; }
+  git -C "$d" merge-base --is-ancestor "$r" "$h" 2>/dev/null || { echo "${r:0:9} is not an ancestor of ${h:0:9}"; return 1; }
+  after=$(git -C "$d" log --format='%H%x09%P%x09%cn%x09%ce' "$h" "^$r" "^refs/remotes/origin/$base") ||
+    { echo "cannot verify: git log ${r:0:9}..${h:0:9} failed in $d"; return 1; }
+  while IFS=$'\t' read -r c ps cn ce; do
+    [[ -n "$c" ]] || continue
+    # shellcheck disable=SC2086 # the parent list splits on spaces on purpose
+    set -- $ps
+    (($# == 2)) || { echo "${c:0:9} is not a merge"; return 1; }
+    [[ "$cn" == GitHub && "$ce" == noreply@github.com ]] || { echo "${c:0:9} is a merge made by hand ($cn <$ce>)"; return 1; }
+    ok=no
+    for p in "$1" "$2"; do
+      ! git -C "$d" merge-base --is-ancestor "$p" "refs/remotes/origin/$base" 2>/dev/null || ok=yes
+    done
+    [[ "$ok" == yes ]] || { echo "${c:0:9} does not merge $base"; return 1; }
+    want=$(git -C "$d" merge-tree --write-tree "$1" "$2" 2>/dev/null) || { echo "${c:0:9} is not a clean merge of its parents (or git is older than 2.38)"; return 1; }
+    tree=$(git -C "$d" rev-parse "$c^{tree}")
+    [[ "${want%%$'\n'*}" == "$tree" ]] || { echo "${c:0:9} changes more than the merge of $base"; return 1; }
+  done <<<"$after"
+  return 0
 }
 
 # orch_hold_hint HOLD -> what lifts a hold orch_hold_of printed: freeze.sh end, or hold.sh release.

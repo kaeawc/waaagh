@@ -51,7 +51,10 @@
 #       --release) clears it. Also every PR while a release freeze is on (freeze.sh; `freeze.sh
 #       end` lifts it). Checked before the gates and again right before the merge.
 #       Also when the PR's latest internal review verdict (review-ledger.sh) is not ship
-#       (`held: ... latest internal review`); only a newer ship verdict clears that
+#       (`held: ... latest internal review`); only a newer ship verdict clears that. A ship
+#       recorded --head R holds a PR whose head moved past R, unless every commit after R that is
+#       not on the base is a GitHub-made update-branch merge (orch_review_covers in _lib.sh, #210;
+#       local git in ORCHESTRATE_GIT_DIR, default the current directory)
 # Holds: a PR in <state dir>/holds, or whose latest review-ledger.sh verdict is fix-first, rethink,
 # fixing, repairing or repaired (#212), is never merged, in any mode (--admin, --main-fix and
 # ORCHESTRATE_DIRECT_MERGE included); a hold file or review ledger that cannot be read refuses
@@ -149,10 +152,14 @@ refuse_if_held() {
       echo "unverified: the hold file could not be read (hold.sh list); nothing was attempted"; exit 9 ;;
   esac
   # The latest internal review verdict is a gate too: fix-first (or any non-ship) holds (#206).
+  # Once the full head is known, a ship verdict pinned to another head must cover it (#210).
   hrc=0
-  hold=$(orch_review_hold_of "$repo" "$pr") || hrc=$?
+  hold=$(orch_review_hold_of "$repo" "$pr" "${full:-}" "${pbase:-}") || hrc=$?
   case "$hrc" in
     0) log "refused held: $hold"
+      if [[ "$hold" == *" review:stale "* ]]; then
+        echo "held: PR $pr's ship review is for another head ($hold); review this head and record it (review-ledger.sh record --head)"; exit 14
+      fi
       echo "held: PR $pr's latest internal review is not ship ($hold); a newer ship verdict (review-ledger.sh record) clears it"; exit 14 ;;
     1) ;;
     *) release_locks; log "refused: review ledger unreadable"
@@ -187,7 +194,7 @@ if [[ "$admin" == yes ]]; then
   fi
 fi
 
-info=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,isDraft,isCrossRepository,headRefOid,author,mergeable) ||
+info=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,isDraft,isCrossRepository,headRefOid,baseRefName,author,mergeable) ||
   { echo "unverified: PR $pr could not be read; nothing was attempted"; exit 9; }
 ok=$(jq -r --arg head "$head" --args '
   .state == "OPEN" and (.isDraft | not) and (.isCrossRepository | not)
@@ -200,6 +207,8 @@ if [[ "$ok" != true ]]; then
 fi
 
 full=$(jq -r .headRefOid <<<"$info")
+pbase=$(jq -r '.baseRefName // empty' <<<"$info")
+refuse_if_held
 
 if [[ "$admin" == yes || "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
   # A fresh readiness row for this exact head. The admin exception covers the named checks only;
