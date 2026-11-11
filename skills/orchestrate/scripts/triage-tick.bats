@@ -48,35 +48,6 @@ red_runs() { # newest Test run 11 failed
 }
 snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
 
-# Tests name the snapshot lines they check instead of counting or indexing them (#201), so a new
-# snapshot line needs no edit here. The order is the one triage-tick.sh's header documents (the
-# source of truth); the required lines are the ones it always prints. Optional lines (holds,
-# hold-stale) and any line added later may follow.
-REQUIRED_SNAPSHOT_LINES="verdict main prs merge_loop dispatch slots cron threads host"
-
-# snap_line NAME: the one line of $output whose first word is NAME. Prints nothing and fails when
-# there is none or more than one, so `[ "$(snap_line x)" = ... ]` fails either way.
-snap_line() {
-  awk -v k="$1" '$1 == k { n++; l = $0 }
-    END { if (n == 1) { print l; exit 0 }
-          printf "snapshot line %s: found %d times, want once\n", k, n > "/dev/stderr"; exit 1 }' <<<"$output"
-}
-
-# required_snapshot_lines: every required line is in $output exactly once, in the documented order,
-# with the verdict first.
-required_snapshot_lines() {
-  awk -v want="$REQUIRED_SNAPSHOT_LINES" '
-    BEGIN { n = split(want, w, " "); for (i = 1; i <= n; i++) idx[w[i]] = i }
-    ($1 in idx) { seen[$1]++; at[$1] = NR }
-    END {
-      bad = 0
-      for (i = 1; i <= n; i++) if (seen[w[i]] != 1) { printf "%s: %d times, want once\n", w[i], seen[w[i]]; bad = 1 }
-      if (!bad && at["verdict"] != 1) { print "verdict is line " at["verdict"] ", want 1"; bad = 1 }
-      for (i = 2; !bad && i <= n; i++) if (at[w[i]] <= at[w[i-1]]) { printf "%s (line %d) before %s (line %d)\n", w[i], at[w[i]], w[i-1], at[w[i-1]]; bad = 1 }
-      exit bad
-    }' <<<"$output"
-}
-
 @test "the required snapshot lines are each present exactly once, in the documented order (#201)" {
   run snap
   [ "$status" -eq 0 ]
@@ -108,6 +79,16 @@ required_snapshot_lines() {
   # an extra line anywhere is fine
   output=$'verdict ok\nmain green x\nnew-part 1\nprs open=0\nmerge_loop absent\ndispatch 0 next=-\nslots none\ncron none\nthreads none\nhost unknown\nholds n=1 stale=0'
   required_snapshot_lines
+}
+
+@test "the required snapshot lines are documented in triage-tick.sh's header, in that order (#225)" {
+  run snapshot_line_names "$SCRIPTS/triage-tick.sh"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = verdict ]
+  # every required line, in order, among the documented ones (optional ones may sit between)
+  [ "$(awk -v want="$REQUIRED_SNAPSHOT_LINES" 'BEGIN { n = split(want, w, " "); i = 1 }
+    $1 == w[i] { i++ } END { print (i - 1 == n) ? "all" : "missing " w[i] }' <<<"$output")" = all ]
+  [[ "$output" == *$'\n'holds$'\n'hold-stale* ]]
 }
 
 @test "a quiet campaign is one ok verdict with every part present" {

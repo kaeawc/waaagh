@@ -144,10 +144,10 @@ write_prs() {
   run "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" == "verdict act "*"resolve-now=1"* ]]
-  [ "${lines[7]}" = "threads unresolved=8 answered=3 resolve-now=#70 repair=#71,#73" ]
+  [ "$(snap_line threads)" = "threads unresolved=8 answered=3 resolve-now=#70 repair=#71,#73" ]
   echo '[]' >"$FX/prs.json"
   run "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main
-  [ "${lines[7]}" = "threads none" ]
+  [ "$(snap_line threads)" = "threads none" ]
   [[ "${lines[0]}" != *resolve-now* ]]
 }
 

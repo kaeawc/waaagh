@@ -38,13 +38,16 @@ remote_file() { # remote_file KIND FILE: serve FILE as the contents API answer f
   jq -n --arg c "$(base64 <"$2" | tr -d '\n')" '{content: $c, encoding: "base64"}' >"$FX/c-$1.json"
 }
 has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1; }; }
+ver() { # ver K: the version on the first line of waaagh's K brief, so a bump needs no test edit (#199)
+  sed -n '1s/.*waaagh-brief [a-z]* v\([0-9]*\).*/\1/p' "$ROOT/skills/orchestrate/briefs/$1.md"
+}
 
 @test "briefs install fills repo, base and gates, keeps per-issue values for the prompt" {
   run cd_ briefs install --dir "$CO" --base trunk --gates "make test"
   [ "$status" -eq 0 ]
   [ "$output" = "$(printf 'installed %s\ninstalled %s' "$CO/.claude/briefs/implement.md" "$CO/.claude/briefs/repair.md")" ]
   I="$CO/.claude/briefs/implement.md"
-  [[ "$(sed -n 1p "$I")" == "<!-- waaagh-brief implement v1."* ]]
+  [[ "$(sed -n 1p "$I")" == "<!-- waaagh-brief implement v$(ver implement)."* ]]
   has "$I" "implement one issue in o/r"
   has "$I" 'Create BRANCH from `origin/trunk`'
   has "$I" "Gates, all passing before you push: make test."
@@ -79,17 +82,18 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   cd_ briefs install --dir "$CO" --base main
   run cd_ briefs check --dir "$CO" --base main
   [ "$status" -eq 0 ]
-  [ "$output" = "$(printf 'brief implement ok v1\nbrief repair ok v2')" ]
+  [ "$output" = "$(printf 'brief implement ok v%s\nbrief repair ok v%s' "$(ver implement)" "$(ver repair)")" ]
   # A repository's own edits at the current version are fine; a version line it dropped is "custom".
   echo "Extra repo rule." >>"$CO/.claude/briefs/implement.md"
   printf 'Our own repair brief.\n' >"$CO/.claude/briefs/repair.md"
   run cd_ briefs check --dir "$CO" --base main
   [ "$status" -eq 0 ]
-  [ "$output" = "$(printf 'brief implement ok v1\nbrief repair custom')" ]
-  sed 's/implement v1/implement v0/' "$CO/.claude/briefs/implement.md" >"$CO/x" && mv "$CO/x" "$CO/.claude/briefs/implement.md"
+  [ "$output" = "$(printf 'brief implement ok v%s\nbrief repair custom' "$(ver implement)")" ]
+  sed "s/implement v$(ver implement)/implement v0/" "$CO/.claude/briefs/implement.md" >"$CO/x"
+  mv "$CO/x" "$CO/.claude/briefs/implement.md"
   run cd_ briefs check --dir "$CO" --base main --kind implement
   [ "$status" -eq 6 ]
-  [ "$output" = "brief implement outdated v0 (template v1)" ]
+  [ "$output" = "brief implement outdated v0 (template v$(ver implement))" ]
 }
 
 @test "briefs check --remote reads the base branch through gh-read" {
@@ -97,7 +101,7 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   remote_file implement "$CO/.claude/briefs/implement.md"
   run cd_ briefs check --remote --base main
   [ "$status" -eq 6 ]
-  [ "$output" = "$(printf 'brief implement ok v1\nbrief repair missing .claude/briefs/repair.md on main')" ]
+  [ "$output" = "$(printf 'brief implement ok v%s\nbrief repair missing .claude/briefs/repair.md on main' "$(ver implement)")" ]
   remote_file repair "$CO/.claude/briefs/repair.md"
   run cd_ briefs check --remote --base main
   [ "$status" -eq 0 ]
