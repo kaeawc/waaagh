@@ -18,24 +18,10 @@ setup() {
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   stub_gh_router
   rest_wrap
-  # In front of both: classic protection's required_status_checks, from $FX/protection.json when
-  # it exists, else the 404 a token without admin rights gets.
-  mkdir -p "$BATS_TEST_TMPDIR/pbin"
-  {
-    gh_stub_header
-    cat <<'STUB'
-gh_stub_args "$@"
-case "$a" in
-  *"/protection/required_status_checks"*)
-    echo "$a" >>"$FX/protection-calls"
-    if [ -f "$FX/protection.json" ]; then cat "$FX/protection.json"; exit 0; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi ;;
-esac
-exec "$BATS_TEST_TMPDIR/restbin/gh" "$@"
-STUB
-  } >"$BATS_TEST_TMPDIR/pbin/gh"
-  chmod +x "$BATS_TEST_TMPDIR/pbin/gh"
-  export PATH="$BATS_TEST_TMPDIR/pbin:$PATH"
+  # Classic protection's required_status_checks: stub_gh_router's own route (#233), from
+  # $FX/protection.json when it exists, else the 404 a token without admin rights gets.
 }
+protection_calls() { grep '/protection' "$FX/calls" || true; }
 
 STRICT_RULES='[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"build"}]}}]'
 PENDING='[{"name":"build","status":"IN_PROGRESS","conclusion":""}]'
@@ -88,7 +74,7 @@ verdict() { printf '%s\n' "$output" | awk -F'\t' -v n="$1" '$1 == n { print $2 "
   echo '{"strict":true,"contexts":["build"]}' >"$FX/protection.json"
   run ready
   [ "$(verdict 1)" = $'BEHIND\tbehind' ]
-  [[ "$(cat "$FX/protection-calls")" == "api repos/o/r/branches/main/protection/required_status_checks" ]]
+  [ "$(protection_calls)" = "api repos/o/r/branches/main/protection/required_status_checks" ]
   rm "$FX/protection.json"
   run ready
   [ "$status" -eq 0 ]
@@ -96,15 +82,15 @@ verdict() { printf '%s\n' "$output" | awk -F'\t' -v n="$1" '$1 == n { print $2 "
   [[ "$output" != *"policy=unknown"* ]]
   [[ "$output" != *"diagnostics="* ]]
   # An unprotected branch, or a strict ruleset, needs no classic read.
-  rm "$FX/protection-calls"
+  : >"$FX/calls"
   echo '{"protected":false}' >"$FX/branch.json"
   run ready
-  [ ! -f "$FX/protection-calls" ]
+  [ -z "$(protection_calls)" ]
   echo "$STRICT_RULES" >"$FX/rules.json"
   echo '{"protected":true}' >"$FX/branch.json"
   run ready
   [ "$(verdict 1)" = $'BEHIND\tbehind' ]
-  [ ! -f "$FX/protection-calls" ]
+  [ -z "$(protection_calls)" ]
 }
 
 @test "rest: mergeable_state behind gives the BEHIND row GraphQL gives" {
@@ -143,9 +129,9 @@ esac
 STUB
   chmod +x "$QB/gh"
   export PATH="$QB:$PATH"
+  # Stubs for pr-merge.sh, main-health.sh and pr-ready.sh; every other script is the real one (#233).
   S="$BATS_TEST_TMPDIR/s"; mkdir -p "$S"
-  cp "$SCRIPTS/merge-queue.sh" "$SCRIPTS/_lib.sh" "$SCRIPTS/gh-read.sh" "$SCRIPTS/regen-merge.sh" "$SCRIPTS/hold.sh" \
-    "$SCRIPTS/review-ledger.sh" "$SCRIPTS/merge-sensitive.sh" "$S/"
+  export ORCHESTRATE_SCRIPTS_DIR="$S"
   printf '#!/usr/bin/env bash\necho "$*" >>"$FX/pm-calls"\nexit "$(cat "$FX/pm-rc")"\n' >"$S/pr-merge.sh"
   printf '#!/usr/bin/env bash\necho green\n' >"$S/main-health.sh"
   # pr-ready.sh stub: one row for PR 5 at the pushed head, verdict and detail from $FX/verdict.
@@ -162,11 +148,11 @@ STUB
   git -C "$BATS_TEST_TMPDIR/q" add -A
   git -C "$BATS_TEST_TMPDIR/q" commit -qm q
   echo body >"$BATS_TEST_TMPDIR/body.md"
-  "$S/merge-queue.sh" add --repo o/r --id q --worktree "$BATS_TEST_TMPDIR/q" --branch q --title t \
+  "$SCRIPTS/merge-queue.sh" add --repo o/r --id q --worktree "$BATS_TEST_TMPDIR/q" --branch q --title t \
     --body-file "$BATS_TEST_TMPDIR/body.md"
   echo 'WAIT|pending:build' >"$FX/verdict"
   echo 0 >"$FX/pm-rc"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [[ "$output" == *"q: waiting"* ]]
   pushed=$(pushed_now)
 }
@@ -182,13 +168,13 @@ main_moves() { # FILE: a new commit on origin/main that edits FILE
   queue_setup
   main_moves docs.md
   echo 'BEHIND|behind' >"$FX/verdict"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [[ "$output" == *"q: waiting"*"main requires up-to-date branches, next pass merges it in"* ]]
   [ "$(pushed_now)" = "$pushed" ]   # resumed over unrelated drift, nothing pushed this pass
   [ -f "$STATE/merge-queue/q.refresh" ]
   [ ! -f "$FX/pm-calls" ]
   echo 'READY|-' >"$FX/verdict"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [[ "$output" == *"q: merged"* ]]
   [ "$(pushed_now)" != "$pushed" ]
   git -C "$BATS_TEST_TMPDIR/origin.git" merge-base --is-ancestor refs/heads/main refs/heads/q
@@ -198,16 +184,16 @@ main_moves() { # FILE: a new commit on origin/main that edits FILE
 @test "merge-queue: a pending row behind waits with a refresh; a real blocker behind stays blocked" {
   queue_setup
   echo 'WAIT|pending:build behind' >"$FX/verdict"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [[ "$output" == *"q: waiting"*"pending:build behind; main requires up-to-date branches"* ]]
   [ -f "$STATE/merge-queue/q.refresh" ]
   rm "$STATE/merge-queue/q.refresh"
   echo 'BLOCK|pending:build behind' >"$FX/verdict"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [ -f "$STATE/merge-queue/q.refresh" ]
   rm "$STATE/merge-queue/q.refresh"
   echo 'BLOCK|conflict behind' >"$FX/verdict"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [[ "$output" == *"q: blocked"*"conflict behind"* ]]
   [ ! -f "$STATE/merge-queue/q.refresh" ]
   [ ! -f "$FX/pm-calls" ]

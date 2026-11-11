@@ -139,19 +139,19 @@ main_moves() { # FILE: a new commit on origin/main that edits FILE
   [ "$output" = "unverified: could not read the files main changed since abcdef123" ]
 }
 
-# The real merge-queue.sh beside a pr-merge.sh stub answering with the exit code in $FX/pm-rc.
+# The real merge-queue.sh, with a pr-merge.sh stub (ORCHESTRATE_SCRIPTS_DIR, #233) answering with
+# the exit code in $FX/pm-rc.
 queue_front() {
   S="$BATS_TEST_TMPDIR/s"; mkdir -p "$S"
-  cp "$SCRIPTS/merge-queue.sh" "$SCRIPTS/_lib.sh" "$SCRIPTS/gh-read.sh" "$SCRIPTS/regen-merge.sh" "$SCRIPTS/hold.sh" \
-    "$SCRIPTS/review-ledger.sh" "$SCRIPTS/merge-sensitive.sh" "$S/"
+  export ORCHESTRATE_SCRIPTS_DIR="$S"
   printf '#!/usr/bin/env bash\necho "$*" >>"$FX/pm-calls"\nexit "$(cat "$FX/pm-rc")"\n' >"$S/pr-merge.sh"
   chmod +x "$S/pr-merge.sh"
   export ORCHESTRATE_DIRECT_MERGE=1 MERGE_QUEUE_CHECK_CMD='echo ran >>"$FX/check-runs"'
   echo body >"$BATS_TEST_TMPDIR/body.md"
-  "$S/merge-queue.sh" add --repo o/r --id q --worktree "$BATS_TEST_TMPDIR/q" --branch q --title t \
+  "$SCRIPTS/merge-queue.sh" add --repo o/r --id q --worktree "$BATS_TEST_TMPDIR/q" --branch q --title t \
     --body-file "$BATS_TEST_TMPDIR/body.md"
   echo 7 >"$FX/pm-rc"   # not ready yet: waiting
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [[ "$output" == *"q: waiting"* ]]
   pushed=$(git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/q)
 }
@@ -161,7 +161,7 @@ pushed_now() { git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/q; }
   queue_front
   main_moves docs/a.md
   echo 0 >"$FX/pm-rc"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [[ "$output" == *"q: merged"* ]]
   [ "$(pushed_now)" = "$pushed" ]
   [ "$(grep -c ran "$FX/check-runs")" -eq 1 ]
@@ -171,11 +171,11 @@ pushed_now() { git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/q; }
 @test "merge-queue: drift over a shared manifest merges the base in, re-runs the check and pushes" {
   queue_front
   main_moves docs/a.md
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [ "$(pushed_now)" = "$pushed" ]
   main_moves package-lock.json
   echo 0 >"$FX/pm-rc"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [[ "$output" == *"q: merged"* ]]
   [ "$(pushed_now)" != "$pushed" ]
   git -C "$BATS_TEST_TMPDIR/origin.git" merge-base --is-ancestor refs/heads/main refs/heads/q
@@ -187,13 +187,15 @@ pushed_now() { git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/q; }
   queue_front
   main_moves docs/a.md
   export MERGE_QUEUE_UPDATE_BEHIND=always
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   second=$(pushed_now)
   [ "$second" != "$pushed" ]
   unset MERGE_QUEUE_UPDATE_BEHIND
-  rm "$S/merge-sensitive.sh"
+  # A drift read that fails: merge-sensitive.sh exits 9 (unverified).
+  printf '#!/usr/bin/env bash\nexit 9\n' >"$S/merge-sensitive.sh"
+  chmod +x "$S/merge-sensitive.sh"
   main_moves docs/b.md
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [ "$(pushed_now)" != "$second" ]
   grep -q "q: main moved over protected paths (drift unverified); merging it in" "$STATE/merge-queue/logs/q.log"
 }
@@ -202,16 +204,16 @@ pushed_now() { git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/q; }
   queue_front
   echo 11 >"$FX/pm-rc"
   main_moves docs/a.md
-  run "$S/merge-queue.sh" run-once --repo o/r   # resumes (unrelated), pr-merge says stale
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r   # resumes (unrelated), pr-merge says stale
   [ "$(pushed_now)" = "$pushed" ]
   [ -f "$STATE/merge-queue/q.refresh" ]
   main_moves docs/b.md
   echo 7 >"$FX/pm-rc"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   second=$(pushed_now)
   [ "$second" != "$pushed" ]
   [ ! -f "$STATE/merge-queue/q.refresh" ]
   main_moves docs/c.md
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [ "$(pushed_now)" = "$second" ]
 }

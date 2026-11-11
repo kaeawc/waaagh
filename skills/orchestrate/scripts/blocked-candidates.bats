@@ -98,12 +98,11 @@ sweep() { "$SCRIPTS/issue-candidates.sh" sweep --repo o/r --checkout "$BATS_TEST
 @test "sweep --drop-blocked: a blocker check that fails outright leaves every C row unverified" {
   list_issue 4 "C" needs-local:android-emulator
   rest_issue 4 open
-  printf '#!/usr/bin/env bash\nexit 2\n' >"$BATS_TEST_TMPDIR/ob"
-  mkdir -p "$BATS_TEST_TMPDIR/copy"
-  cp "$SCRIPTS"/*.sh "$BATS_TEST_TMPDIR/copy/"
-  cp "$BATS_TEST_TMPDIR/ob" "$BATS_TEST_TMPDIR/copy/open-blockers.sh"
-  chmod +x "$BATS_TEST_TMPDIR/copy/"*.sh
-  run "$BATS_TEST_TMPDIR/copy/issue-candidates.sh" sweep --repo o/r --checkout "$BATS_TEST_TMPDIR/nogit" --drop-blocked
+  # An open-blockers.sh stub that fails; everything else runs from the real tree (#233).
+  mkdir -p "$BATS_TEST_TMPDIR/stubs"
+  printf '#!/usr/bin/env bash\nexit 2\n' >"$BATS_TEST_TMPDIR/stubs/open-blockers.sh"
+  chmod +x "$BATS_TEST_TMPDIR/stubs/open-blockers.sh"
+  ORCHESTRATE_SCRIPTS_DIR="$BATS_TEST_TMPDIR/stubs" run "$SCRIPTS/issue-candidates.sh" sweep --repo o/r --checkout "$BATS_TEST_TMPDIR/nogit" --drop-blocked
   [ "$status" -eq 0 ]
   [[ "$output" == *"open-blockers.sh failed (exit 2); C rows unverified"* ]]
   [ "$(row 4 | cut -f1,6)" = $'C\tno merged fix; blockers unverified (blocker check)' ]

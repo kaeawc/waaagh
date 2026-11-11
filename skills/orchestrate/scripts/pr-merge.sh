@@ -175,7 +175,7 @@ fi
 # Paused while GitHub's Pull Requests component is down: no attempt, no failure line per pass.
 if [[ -f "$state/GITHUB_OUTAGE" ]]; then
   src=0
-  st=$("$here/gh-status.sh") || src=$?
+  st=$(orch_run gh-status.sh) || src=$?
   if ((src == 4)); then
     echo "outage: merging paused since $(cut -f1 "$state/GITHUB_OUTAGE"); githubstatus: $st"; exit 10
   fi
@@ -216,7 +216,7 @@ if [[ "$admin" == yes || "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
   flags=(--repo "$repo" --pr "$pr")
   for a in "${authors[@]}"; do flags+=(--author "$a"); done
   for c in ${ignores[@]+"${ignores[@]}"}; do flags+=(--ignore-check "$c"); done
-  row=$("$here/pr-ready.sh" "${flags[@]}" 2>/dev/null | awk 'NR == 1') || row=""
+  row=$(orch_run pr-ready.sh "${flags[@]}" 2>/dev/null | awk 'NR == 1') || row=""
   IFS=$'\t' read -r _ verdict rhead _ _ detail <<<"$row"
   why=""
   if [[ -z "$row" ]]; then why=" no readiness row for PR $pr"
@@ -257,7 +257,7 @@ fi
 if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" == 1 ]]; }; then
   rflags=(--repo "$repo" --pr "$pr" --no-threads)
   for a in "${authors[@]}"; do rflags+=(--author "$a"); done
-  raw=$("$here/pr-ready.sh" "${rflags[@]}" 2>/dev/null | awk 'NR == 1') || raw=""
+  raw=$(orch_run pr-ready.sh "${rflags[@]}" 2>/dev/null | awk 'NR == 1') || raw=""
   if [[ -z "$raw" ]]; then
     log "refused: check state unreadable and no --evidence"
     echo "refused: the head's checks could not be read; a merge past them needs --evidence"; exit 6
@@ -274,7 +274,7 @@ fi
 review=""
 if [[ -f "$state/review-policy" && "$(awk 'NR == 1 { print $1 }' "$state/review-policy")" != off ]]; then
   src=0
-  review=$("$here/review-gate.sh" check --repo "$repo" --pr "$pr" --head "$full") || src=$?
+  review=$(orch_run review-gate.sh check --repo "$repo" --pr "$pr" --head "$full") || src=$?
   case "$src" in
     0) ;;
     3) log "refused review: $review"; echo "needs review: $review (review-gate.sh policy)"; exit 13 ;;
@@ -286,7 +286,7 @@ fi
 # passing merge-result check. Locks are taken before the check so no other merge moves the base
 # over the same path between the check and this merge.
 src=0
-spats=$("$here/merge-sensitive.sh" paths --repo "$repo" --pr "$pr") || src=$?
+spats=$(orch_run merge-sensitive.sh paths --repo "$repo" --pr "$pr") || src=$?
 if ((src)); then
   log "refused: $spats"; echo "$spats; nothing was attempted"; exit 9
 fi
@@ -311,7 +311,7 @@ if [[ -n "$spats" ]]; then
   cflags=(check --repo "$repo" --pr "$pr" --head "$full")
   [[ -z "$mcheck" ]] || cflags+=(--worktree "$mwt" --check-cmd "$mcheck")
   src=0
-  sout=$("$here/merge-sensitive.sh" "${cflags[@]}") || src=$?
+  sout=$(orch_run merge-sensitive.sh "${cflags[@]}") || src=$?
   case "$src" in
     0) log "sensitive $sout" ;;
     3) log "refused $sout"; echo "$sout"; exit 11 ;;
@@ -362,7 +362,7 @@ while :; do
   kind=$(pending_kind)
   [[ -n "$kind" ]] || break
   src=0
-  st=$("$here/gh-status.sh") || src=$?
+  st=$(orch_run gh-status.sh) || src=$?
   log "pending: $kind (exit $rc: $out); githubstatus: $st"
   if ((src == 4)); then
     printf '%s\t%s\n' "$(orch_iso "$(orch_now)")" "$st" >"$state/GITHUB_OUTAGE"
@@ -384,7 +384,7 @@ if [[ "$final" == MERGED* ]]; then
   jset merged "${final#MERGED }"
   log "merged ${final#MERGED } method=$method admin=$admin${evidence:+ evidence=$evidence}${review:+ review=$review}"
   if [[ "$review" == "ok unreviewed"* ]]; then
-    "$here/review-gate.sh" ledger add --repo "$repo" --pr "$pr" --head "$full" --note "${review#ok unreviewed }" >/dev/null ||
+    orch_run review-gate.sh ledger add --repo "$repo" --pr "$pr" --head "$full" --note "${review#ok unreviewed }" >/dev/null ||
       echo "warning: merged PR $pr without a review but the unreviewed-merges ledger write failed" >&2
   fi
   echo "merged $pr ${final#MERGED }"

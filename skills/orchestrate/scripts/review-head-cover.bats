@@ -14,6 +14,7 @@ setup_file() {
 
 setup() {
   load test_helper
+  load selftest_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   ROOT="$(cd "$SCRIPTS/.." && pwd)"
   export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1790510400 ORCHESTRATE_READ_SLEEP=0
@@ -26,40 +27,10 @@ setup() {
   O="$BATS_TEST_TMPDIR/origin.git"
   W="$BATS_TEST_TMPDIR/a"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_GIT_DIR="$W"
-  # PR 5 is branch a; its head is origin's refs/heads/a.
-  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
-#!/usr/bin/env bash
-all="$*"
-echo "$all" >>"$FX/calls"
-head_of() { git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a || echo none; }
-case "$all" in
-  "api repos/o/r") echo '{"default_branch":"main"}' ;;
-  *rules/branches*) echo '[]' ;;
-  "api repos/o/r/branches/"*) echo '{"protected":false}' ;;
-  *graphql*) echo '{"data":{"repository":{"p5":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}}' ;;
-  "api repos/o/r/actions/runs?"*) echo '{"workflow_runs":[]}' ;;
-  "api --paginate repos/o/r/pulls/"*"/files"*) printf 'f.txt\n' ;;
-  "api repos/o/r/pulls/"*"/reviews"*) echo '[]' ;;
-  "api repos/o/r/issues/"*"/comments"*) echo '[]' ;;
-  "api repos/o/r/pulls/"*) echo main ;;
-  "api repos/o/r/compare/"*) echo 0 ;;
-  "pr list"*"--state merged"*) echo '[]' ;;
-  "pr list"*--head*) jq -n --arg h "$(head_of)" '[{number: 5, headRefOid: $h}]' ;;
-  "pr list"*"--json number") echo '[{"number":5}]' ;;
-  "pr list"*) jq -n --arg h "$(head_of)" \
-      '[{number: 5, author: {login: "me"}, isDraft: false, isCrossRepository: false, baseRefName: "main",
-         headRefOid: $h, mergeable: "MERGEABLE", labels: [],
-         statusCheckRollup: [{name: "build", conclusion: "SUCCESS", startedAt: "2026-09-27T01:00:00Z"}]}]' ;;
-  "pr create"*) ;;
-  "pr merge"*) touch "$FX/merged" ;;
-  "pr view"*)
-    if [ -f "$FX/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}'
-    else jq -n --arg h "$(head_of)" '{state: "OPEN", isDraft: false, isCrossRepository: false, headRefOid: $h,
-      baseRefName: "main", author: {login: "me"}, mergeable: "MERGEABLE", autoMergeRequest: null}'; fi ;;
-  *) echo "unexpected gh call: $all" >&2; exit 9 ;;
-esac
-STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+  # PR 5 is branch a; its head is origin's refs/heads/a. The shared merge-path gh stub
+  # (selftest_helper.bash, #233).
+  stub_gh_merge_path
+  echo a >"$FX/branch"
   echo body >"$BATS_TEST_TMPDIR/body.md"
   # Branch a with one reviewed commit R, pushed; then main moves on in origin.
   git clone -q "$O" "$W" 2>/dev/null

@@ -137,7 +137,7 @@ review_detail() {
   if [[ "$pstate" == requested ]]; then echo "review requested from $pbot"; return 0; fi
   if [[ "$pstate" == waiting ]]; then echo "waiting for an automatic review from $pbot"; return 0; fi
   if [[ "$pstate" == throttled ]]; then rargs=(--bot "$pbot"); else rargs=(--pr "$rpr"); fi
-  line=$("$here/review-gate.sh" request --repo "$repo" "${rargs[@]}" 2>>"$rlog") || rrc=$?
+  line=$(orch_run review-gate.sh request --repo "$repo" "${rargs[@]}" 2>>"$rlog") || rrc=$?
   echo "review-gate.sh request ${rargs[*]}: ${line:-exit $rrc}" >>"$rlog"
   line=$(awk 'END { print }' <<<"$line")
   case "$line" in
@@ -250,7 +250,7 @@ case "$cmd" in
     if [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
       # Fresh main evidence for this pass; red writes the hold, unknown leaves it as it was.
       read -r -a mh_args <<<"${MERGE_QUEUE_MAIN_HEALTH_ARGS:-}"
-      mh=$("$here/main-health.sh" --repo "$repo" --branch "$base" ${mh_args[@]+"${mh_args[@]}"} 2>&1) || true
+      mh=$(orch_run main-health.sh --repo "$repo" --branch "$base" ${mh_args[@]+"${mh_args[@]}"} 2>&1) || true
       echo "main: $mh"
     fi
     while IFS=$'\t' read -r -u 3 qid qwt qbranch qtitle qbody qreq; do
@@ -290,7 +290,7 @@ case "$cmd" in
           resume="resuming at ${local_head:0:9}"
         elif [[ "${MERGE_QUEUE_UPDATE_BEHIND:-protected}" != always && ! -f "$qdir/$qid.refresh" ]]; then
           drc=0
-          dhits=$("$here/merge-sensitive.sh" drift --repo "$repo" --worktree "$qwt" --base "$base" 2>>"$log") || drc=$?
+          dhits=$(orch_run merge-sensitive.sh drift --repo "$repo" --worktree "$qwt" --base "$base" 2>>"$log") || drc=$?
           if ((drc == 0)) && [[ -z "$dhits" ]]; then
             resume="resuming at ${local_head:0:9}: $base moved, but over no protected path"
           else
@@ -304,13 +304,13 @@ case "$cmd" in
       else
         # Merge the base right before the push; generated-file conflicts are regenerated.
         mrc=0
-        "$here/regen-merge.sh" --worktree "$qwt" --base "$base" >>"$log" 2>&1 || mrc=$?
+        orch_run regen-merge.sh --worktree "$qwt" --base "$base" >>"$log" 2>&1 || mrc=$?
         case "$mrc" in
           0) ;;
           3) # Superseded by later merges? Then it needs an evidence session, not a conflict lane.
             sargs=(--repo "$repo" --worktree "$qwt" --base "$base")
             [[ ! -f "$qdir/$qid.pr" ]] || sargs+=(--pr "$(cat "$qdir/$qid.pr")")
-            src=0; "$here/supersede-check.sh" "${sargs[@]}" >>"$log" 2>&1 || src=$?
+            src=0; orch_run supersede-check.sh "${sargs[@]}" >>"$log" 2>&1 || src=$?
             if ((src == 10)); then set_outcome "$qid" superseded "route to an evidence session, see $log"; continue; fi
             set_outcome "$qid" conflict "see $log"; continue ;;
           5) set_outcome "$qid" conflict "generated files did not regenerate cleanly, see $log"; continue ;;
@@ -353,7 +353,7 @@ case "$cmd" in
       fi
       margs=(--repo "$repo" --pr "$pr" --head "$head")
       if [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
-        row=$(ORCHESTRATE_GIT_DIR=$qwt "$here/pr-ready.sh" --repo "$repo" --base "$base" --pr "$pr" 2>>"$log" | awk 'NR == 1') || row=""
+        row=$(ORCHESTRATE_GIT_DIR=$qwt orch_run pr-ready.sh --repo "$repo" --base "$base" --pr "$pr" 2>>"$log" | awk 'NR == 1') || row=""
         IFS=$'\t' read -r _ verdict rhead _ _ detail <<<"$row"
         if [[ -z "$row" ]]; then set_outcome "$qid" error "no readiness row for PR $pr"; continue; fi
         if [[ "$head" != "$rhead"* ]]; then set_outcome "$qid" waiting "readiness row is for $rhead"; continue; fi
@@ -388,7 +388,7 @@ case "$cmd" in
         esac
       fi
       rc=0
-      ORCHESTRATE_GIT_DIR=$qwt "$here/pr-merge.sh" "${margs[@]}" >>"$log" 2>&1 || rc=$?
+      ORCHESTRATE_GIT_DIR=$qwt orch_run pr-merge.sh "${margs[@]}" >>"$log" 2>&1 || rc=$?
       case "$rc" in
         0) set_outcome "$qid" merged "PR $pr" ;;
         4) echo "hold: default branch is red; pass stopped"; exit 4 ;;

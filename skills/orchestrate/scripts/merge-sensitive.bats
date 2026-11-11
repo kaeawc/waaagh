@@ -192,9 +192,10 @@ DUPCHECK='! sed -n "s/ =.*//p" libs.toml | sort | uniq -d | grep .'
 }
 
 @test "merge-queue: a stale refusal leaves the item waiting; the next pass merges main in and pushes again" {
-  # The real merge-queue.sh beside a pr-merge.sh that answers with the exit code in $FX/pm-rc.
+  # The real merge-queue.sh, with a pr-merge.sh stub (ORCHESTRATE_SCRIPTS_DIR, #233) that answers
+  # with the exit code in $FX/pm-rc.
   S="$BATS_TEST_TMPDIR/s"; mkdir -p "$S"
-  cp "$SCRIPTS/merge-queue.sh" "$SCRIPTS/_lib.sh" "$SCRIPTS/gh-read.sh" "$SCRIPTS/regen-merge.sh" "$SCRIPTS/hold.sh" "$SCRIPTS/review-ledger.sh" "$SCRIPTS/merge-sensitive.sh" "$S/"
+  export ORCHESTRATE_SCRIPTS_DIR="$S"
   printf '#!/usr/bin/env bash\necho "$*" >>"$FX/pm-calls"\nexit "$(cat "$FX/pm-rc")"\n' >"$S/pr-merge.sh"
   chmod +x "$S/pr-merge.sh"
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
@@ -210,10 +211,10 @@ STUB
   git -C "$BATS_TEST_TMPDIR/checkout" switch -q pr
   export ORCHESTRATE_DIRECT_MERGE=1
   echo body >"$BATS_TEST_TMPDIR/body.md"
-  "$S/merge-queue.sh" add --repo o/r --id q1 --worktree "$BATS_TEST_TMPDIR/checkout" --branch pr \
+  "$SCRIPTS/merge-queue.sh" add --repo o/r --id q1 --worktree "$BATS_TEST_TMPDIR/checkout" --branch pr \
     --title t --body-file "$BATS_TEST_TMPDIR/body.md"
   echo 11 >"$FX/pm-rc"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [ "$status" -eq 0 ]
   [[ "$output" == *"q1: waiting (base moved past a merge-sensitive path"* ]]
   first=$(git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/pr)
@@ -224,7 +225,7 @@ STUB
   git -C "$BATS_TEST_TMPDIR/seed" commit -qm "main moves"
   git -C "$BATS_TEST_TMPDIR/seed" push -q origin main
   echo 0 >"$FX/pm-rc"
-  run "$S/merge-queue.sh" run-once --repo o/r
+  run "$SCRIPTS/merge-queue.sh" run-once --repo o/r
   [ "$status" -eq 0 ]
   [[ "$output" == *"q1: merged"* ]]
   second=$(git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/pr)

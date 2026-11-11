@@ -2,7 +2,7 @@
 # The coverage workflow fails when a script drops below its floor or a script has no row here. It runs
 # on PRs that change scripts (#157): a PR that adds branches to a script must cover them, or it goes red.
 # Set at the credited % (dev/coverage.sh, #147) rounded down, minus 1. Raise a floor in the PR that adds the tests.
-skills/orchestrate/scripts/_lib.sh	91
+skills/orchestrate/scripts/_lib.sh	94
 skills/orchestrate/scripts/_slots.sh	99
 skills/orchestrate/scripts/bench.sh	99
 skills/orchestrate/scripts/campaign.sh	94
@@ -37,7 +37,7 @@ skills/orchestrate/scripts/lane-safety.sh	94
 skills/orchestrate/scripts/learning.sh	98
 skills/orchestrate/scripts/loops.sh	90
 skills/orchestrate/scripts/main-health.sh	99
-skills/orchestrate/scripts/merge-queue.sh	92
+skills/orchestrate/scripts/merge-queue.sh	93
 skills/orchestrate/scripts/merge-sensitive.sh	95
 skills/orchestrate/scripts/open-blockers.sh	99
 skills/orchestrate/scripts/pr-claim.sh	97
@@ -48,7 +48,7 @@ skills/orchestrate/scripts/regen-merge.sh	94
 skills/orchestrate/scripts/relay.sh	94
 skills/orchestrate/scripts/review-followup.sh	96
 skills/orchestrate/scripts/review-gate.sh	96
-skills/orchestrate/scripts/review-ledger.sh	90
+skills/orchestrate/scripts/review-ledger.sh	97
 skills/orchestrate/scripts/supersede-check.sh	90
 skills/orchestrate/scripts/thread-resolve.sh	97
 skills/orchestrate/scripts/thread-sweep.sh	94
