@@ -49,9 +49,12 @@
 #       | 13 needs review: the owner's bot-review policy (review-gate.sh check) is not met
 #       | 14 held: the PR is in the hold file (hold.sh); only `hold.sh release` (or check
 #       --release) clears it. Also every PR while a release freeze is on (freeze.sh; `freeze.sh
-#       end` lifts it). Checked before the gates and again right before the merge
-# Holds: a PR in <state dir>/holds is never merged, in any mode (--admin, --main-fix and
-# ORCHESTRATE_DIRECT_MERGE included); a hold file hold.sh cannot read refuses with exit 9.
+#       end` lifts it). Checked before the gates and again right before the merge.
+#       Also when the PR's latest internal review verdict (review-ledger.sh) is not ship
+#       (`held: ... latest internal review`); only a newer ship verdict clears that
+# Holds: a PR in <state dir>/holds, or whose latest review-ledger.sh verdict is fix-first, rethink
+# or fixing, is never merged, in any mode (--admin, --main-fix and ORCHESTRATE_DIRECT_MERGE
+# included); a hold file or review ledger that cannot be read refuses with exit 9.
 # Review policy: when <state dir>/review-policy is set and not off, review-gate.sh check must say
 # ok for the head; a merge it allowed without a review is added to the unreviewed-merges ledger.
 # GitHub outages: success is read from the PR state, never from the merge's exit code. A 5xx or
@@ -143,6 +146,16 @@ refuse_if_held() {
     1) ;;
     *) release_locks; log "refused: hold file unreadable"
       echo "unverified: the hold file could not be read (hold.sh list); nothing was attempted"; exit 9 ;;
+  esac
+  # The latest internal review verdict is a gate too: fix-first (or any non-ship) holds (#206).
+  hrc=0
+  hold=$(orch_review_hold_of "$repo" "$pr") || hrc=$?
+  case "$hrc" in
+    0) log "refused held: $hold"
+      echo "held: PR $pr's latest internal review is not ship ($hold); a newer ship verdict (review-ledger.sh record) clears it"; exit 14 ;;
+    1) ;;
+    *) release_locks; log "refused: review ledger unreadable"
+      echo "unverified: the review ledger could not be read (review-ledger.sh latest); nothing was attempted"; exit 9 ;;
   esac
 }
 refuse_if_held

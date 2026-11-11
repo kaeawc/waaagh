@@ -29,7 +29,10 @@
    or `--simulator`); exit 4 means it is not yours: stop and report.
 7. Merging and pushing need authority your brief quotes from the user. Without it, hand back
    ready-to-run commands instead of running them. Unless your brief says otherwise: no merges, no force-pushes, no history rewrites, no branch
-   deletion, no stash, no draft-state changes, no closing or editing of issues or PRs.
+   deletion, no stash, no draft-state changes, no closing or editing of issues or PRs. Before
+   each push to a PR's branch, confirm the PR is still open: `{{SCRIPTS}}/claim-check.sh open
+   --repo {{REPO}} --pr <n>`. Exit 3 (merged or closed) or 4 (unreadable) means do not push: report
+   it, so the work moves to a new branch on purpose instead of landing on a merged one (#206).
 8. Read `{{STATE}}/lane-rules.md` if it exists and obey it; where it conflicts with this file, it
    wins.
 9. Keep long output in files under `{{STATE}}/`, never inside a checkout (it would change the

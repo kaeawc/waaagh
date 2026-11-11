@@ -16,11 +16,14 @@
 #          | checks=unknown (REST path: the PR's checks or mergeable state could not be read)
 #          Review threads and policy are checked for BLOCK rows too, so a row whose only blocker
 #          is a failed check really has no other: the admin path depends on that.
-#   SKIP   draft | fork | hold | label:<label> | branch, then " ready-but-skipped" when the PR
-#          would otherwise be READY (checks, review threads and policy are judged for it too)
+#   SKIP   draft | fork | hold | review:<verdict> | label:<label> | branch, then
+#          " ready-but-skipped" when the PR would otherwise be READY (checks, review threads and
+#          policy are judged for it too)
 # Selection is by author and base, never by branch name: a lane that names its branches
 # differently is still judged. Exclusions are explicit and visible as SKIP rows: --hold PR, every
 # PR in the campaign's hold file (<state dir>/holds, kept by hold.sh: its holds need no --hold),
+# every PR whose latest internal review verdict (review-ledger.sh) is not ship (`review:fix-first`,
+# `review:rethink`, `review:fixing`, until a newer ship verdict; #206),
 # --hold-label (default hold), --exclude-label (repeatable; e.g. `dependencies` when dependabot
 # PRs have their own lane) and --head-match REGEX (a jq regex the head branch must match;
 # discouraged). A skipped PR that is otherwise READY is counted on the summary line, so a filter
@@ -95,6 +98,9 @@ repo=$(orch_repo "$repo")
 [[ -n "$base" ]] || base=$(orch_default_branch "$repo")
 # The hold file (hold.sh) is the merge loop's list of holds: each one is skipped like --hold (#196).
 while IFS= read -r h; do [[ -z "$h" ]] || holds+=("$h"); done < <("$here/hold.sh" prs --repo "$repo" 2>/dev/null || true)
+# The latest internal review verdict gates selection too (#206): {"<pr>": "<verdict>"} for non-ship.
+reviews_json=$("$here/review-ledger.sh" blocked --repo "$repo" 2>/dev/null |
+  jq -Rsc 'split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries') || reviews_json='{}'
 
 json_list() { if (($#)); then jq -nc '$ARGS.positional' --args "$@"; else echo '[]'; fi; }
 authors_json=$(json_list "${authors[@]}")
@@ -223,7 +229,7 @@ if [[ "$api" == rest ]]; then
     | $prs | map($by[.number | tostring] // .)')
 fi
 rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" --argjson holds "$holds_json" \
-    --argjson required "$required" --arg base "$base" --arg hold_label "$hold_label" \
+    --argjson reviews "$reviews_json" --argjson required "$required" --arg base "$base" --arg hold_label "$hold_label" \
     --argjson excludes "$excludes_json" --arg head_match "$head_match" \
     --argjson min_pass "$min_pass" --arg only_pr "$only_pr" '
     def norm: . as $c | (($c.conclusion // "") | if . == "" then ($c.state // $c.status // "") else . end) | ascii_upcase;
@@ -265,6 +271,7 @@ rows=$(jq -r --argjson authors "$authors_json" --argjson ignore "$ignores_json" 
     # An explicit exclusion; the PR is still judged so a ready one can be reported.
     | ([.labels[].name] as $l
        | if (.number as $n | $holds | map(tonumber) | index($n)) or ($l | index($hold_label)) then "hold"
+         elif $reviews[.number | tostring] != null then "review:" + $reviews[.number | tostring]
          elif ([$l[] | select(. as $x | $excludes | index($x))] | first) != null then
            "label:" + ([$l[] | select(. as $x | $excludes | index($x))] | first)
          elif $head_match != "" and ((.headRefName // "") | test($head_match) | not) then "branch"

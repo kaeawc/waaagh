@@ -58,9 +58,14 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    item for the orchestrator to file as an issue, unless
    it is a serious regression the PR itself introduces — fix that. Check `{{STATE}}`'s PR
    checkpoint (`{{SCRIPTS}}/pr-claim.sh path --repo {{REPO}} --pr <n>`)/state.json: if
-   `fix_pass_consumed` is true, report new feedback instead of starting another pass.
-6. **Commit and push** after green local gates and a clean, intended-files-only status. Plain
-   push; a rejected push means someone else is writing — stop on that PR.
+   `fix_pass_consumed` is true, report new feedback instead of starting another pass. Before the
+   first edit of a pass, hold the PR: `{{SCRIPTS}}/review-ledger.sh fix --repo {{REPO}} --pr <n>
+   --note "<what the pass fixes>"`, so the merge loop cannot merge it under you (#206); only the
+   orchestrator's next `ship` verdict releases it.
+6. **Commit and push** after green local gates and a clean, intended-files-only status. Right
+   before each push, `{{SCRIPTS}}/claim-check.sh open --repo {{REPO}} --pr <n>`: anything but exit
+   0 (merged, closed, or unreadable) means do not push; report it. Plain push; a rejected push
+   means someone else is writing — stop on that PR.
 7. **Reply** in one short comment per PR saying what changed, and one line for each class-(c)
    item worth a reason. Do not resolve threads you did not address. End each thread reply with
    `fixed in <sha>` (pushed) or `follow-up #N`; then `{{SCRIPTS}}/thread-sweep.sh resolve --repo

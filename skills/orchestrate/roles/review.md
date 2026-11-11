@@ -19,4 +19,6 @@ the base's code path to say so). A regression finding is always a blocker
 style and naming are out of scope; "No findings" is a valid result; at most 10.
 
 Write them to the findings path in your prompt, then reply in under 250 words with a verdict
-(ship / fix-first) and the blocker and should-fix findings, one line each.
+(ship / fix-first) and the blocker and should-fix findings, one line each. The orchestrator
+records it (`{{SCRIPTS}}/review-ledger.sh record`): a `fix-first` verdict holds the PR from merging
+until a later review says `ship`.

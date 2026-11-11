@@ -22,6 +22,8 @@
 # Release conditions (EVENT):
 #   device-recheck  device-recheck.sh check on the PR's current head says clear
 #   main-green      no MAIN_RED in the state dir
+#   review-ship     the PR's latest internal review verdict (review-ledger.sh latest) is ship;
+#                   review-ledger.sh sets and releases it itself (#206)
 #   merged:M        PR M is merged
 #   closed:M        issue (or PR) M is closed
 #   at:ISO          the time ISO (2026-01-02T03:04:05Z) has passed
@@ -66,7 +68,7 @@ case "$cmd" in
 esac
 valid_event() {
   case "$1" in
-    device-recheck | main-green | owner) return 0 ;;
+    device-recheck | main-green | review-ship | owner) return 0 ;;
     merged:* | closed:*) [[ "${1#*:}" =~ ^[0-9]+$ ]] ;;
     at:*) [[ "${1#at:}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ;;
     *) return 1 ;;
@@ -74,7 +76,7 @@ valid_event() {
 }
 if [[ "$cmd" == add ]]; then
   valid_event "$until_ev" ||
-    { echo "hold.sh: --until must be device-recheck, main-green, owner, merged:N, closed:N or at:ISO" >&2; exit 2; }
+    { echo "hold.sh: --until must be device-recheck, main-green, review-ship, owner, merged:N, closed:N or at:ISO" >&2; exit 2; }
 fi
 
 repo=$(orch_repo "$repo")
@@ -197,6 +199,15 @@ case "$cmd" in
       case "$u" in
         owner) v=manual d="only the owner releases it" ;;
         main-green) if [[ -f "$state/MAIN_RED" ]]; then v=unmet d="MAIN_RED is set"; else v=met d="no MAIN_RED"; fi ;;
+        review-ship)
+          rrc=0
+          rrow=$("$here/review-ledger.sh" latest --repo "$repo" --pr "$p" </dev/null 2>/dev/null) || rrc=$?
+          rv=$(cut -f3 <<<"$rrow")
+          case "$rrc" in
+            0) if [[ "$rv" == ship ]]; then v=met d="latest review: ship"; else v=unmet d="latest review: $rv"; fi ;;
+            3) v=unmet d="no review recorded" ;;
+            *) d="the review ledger could not be read" ;;
+          esac ;;
         at:*) if [[ "$now_iso" > "${u#at:}" || "$now_iso" == "${u#at:}" ]]; then v=met d="${u#at:} passed"; else v=unmet d="not before ${u#at:}"; fi ;;
         merged:*)
           n=${u#merged:}

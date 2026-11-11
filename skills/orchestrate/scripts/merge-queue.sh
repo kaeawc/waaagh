@@ -32,12 +32,13 @@
 #   superseded a conflict that supersede-check.sh calls a SUPERSEDED-CANDIDATE (later merges ship
 #              the PR's issue another way): taken off the queue front, parked until `retry`, for
 #              an evidence session (roles/supersede-evidence.md), never a re-apply
-#   held       the item's PR is in the hold file (hold.sh; also pr-merge.sh exit 14), or a release
-#              freeze is on (freeze.sh: every PR is held until `freeze.sh end`): set aside so
+#   held       the item's PR is in the hold file (hold.sh), or its latest internal review verdict
+#              (review-ledger.sh) is not ship (also pr-merge.sh exit 14), or a release freeze is on
+#              (freeze.sh: every PR is held until `freeze.sh end`): set aside so
 #              the rest of the queue runs, nothing pushed or merged for it. Every pass re-checks it
 #              (a known PR before any fetch or push) and resumes it once `hold.sh release` (or
-#              check --release) has cleared the hold; no `retry` needed. A hold file hold.sh cannot
-#              read leaves the item `waiting`
+#              check --release) has cleared the hold, or a newer ship verdict is recorded; no
+#              `retry` needed. A hold file or review ledger that cannot be read leaves it `waiting`
 # Bot review (pr-merge.sh exit 13): the item asks `review-gate.sh request --pr N` once per pushed
 # head; the gate's throttle decides whether a request is posted and never asks an out-of-quota bot.
 # The answer is in the outcome detail: `review requested from <bot>`, `review throttled until
@@ -164,8 +165,13 @@ review_detail() {
 held_detail() {
   local hrc=0 hold
   hold=$(orch_hold_of "$repo" "$1") || hrc=$?
+  if ((hrc == 0)); then echo "PR $1 is held: $hold; $(orch_hold_hint "$hold")"; return 0; fi
+  ((hrc == 1)) || return "$hrc"
+  # The latest internal review verdict holds it too (#206).
+  hrc=0
+  hold=$(orch_review_hold_of "$repo" "$1") || hrc=$?
   ((hrc == 0)) || return "$hrc"
-  echo "PR $1 is held: $hold; $(orch_hold_hint "$hold")"
+  echo "PR $1 is held by its review: $hold; a newer ship verdict (review-ledger.sh record) clears it"
 }
 
 # park_if_held ID PR: true (and the outcome written) when the item must not go on this pass.
@@ -175,7 +181,7 @@ park_if_held() {
   case "$hrc" in
     0) set_outcome "$1" held "$hd" ;;
     1) return 1 ;;
-    *) set_outcome "$1" waiting "hold file unreadable (hold.sh list); will re-check" ;;
+    *) set_outcome "$1" waiting "hold file or review ledger unreadable; will re-check" ;;
   esac
 }
 
