@@ -38,7 +38,10 @@
 #              the rest of the queue runs, nothing pushed or merged for it. Every pass re-checks it
 #              (a known PR before any fetch or push) and resumes it once `hold.sh release` (or
 #              check --release) has cleared the hold, or a newer ship verdict is recorded; no
-#              `retry` needed. A hold file or review ledger that cannot be read leaves it `waiting`
+#              `retry` needed. A hold file or review ledger that cannot be read leaves it `waiting`.
+#              A ship verdict recorded --head R holds the PR (`review:stale`) once its head moved
+#              past R, unless only GitHub-made update-branch merges came after R (#210); the
+#              queue's own base merge is made locally, so it needs a review of the new head
 # Bot review (pr-merge.sh exit 13): the item asks `review-gate.sh request --pr N` once per pushed
 # head; the gate's throttle decides whether a request is posted and never asks an out-of-quota bot.
 # The answer is in the outcome detail: `review requested from <bot>`, `review throttled until
@@ -160,8 +163,9 @@ review_detail() {
   esac
 }
 
-# held_detail PR -> the outcome detail for an item whose PR the hold file holds (orch_hold_of).
-# Returns 1 when PR is not held, 2 when the hold file could not be read.
+# held_detail PR [HEAD] -> the outcome detail for an item whose PR the hold file holds (orch_hold_of).
+# Returns 1 when PR is not held, 2 when the hold file could not be read. With HEAD, a ship verdict
+# pinned to another head must cover it, judged in the item's worktree $qwt (#210).
 held_detail() {
   local hrc=0 hold
   hold=$(orch_hold_of "$repo" "$1") || hrc=$?
@@ -169,15 +173,18 @@ held_detail() {
   ((hrc == 1)) || return "$hrc"
   # The latest internal review verdict holds it too (#206).
   hrc=0
-  hold=$(orch_review_hold_of "$repo" "$1") || hrc=$?
+  hold=$(orch_review_hold_of "$repo" "$1" "${2:-}" "$base" "$qwt") || hrc=$?
   ((hrc == 0)) || return "$hrc"
+  if [[ "$hold" == *" review:stale "* ]]; then
+    echo "PR $1 is held by its review: $hold; review this head and record it (review-ledger.sh record --head)"; return 0
+  fi
   echo "PR $1 is held by its review: $hold; a newer ship verdict (review-ledger.sh record) clears it"
 }
 
-# park_if_held ID PR: true (and the outcome written) when the item must not go on this pass.
+# park_if_held ID PR [HEAD]: true (and the outcome written) when the item must not go on this pass.
 park_if_held() {
   local hd hrc=0
-  hd=$(held_detail "$2") || hrc=$?
+  hd=$(held_detail "$2" "${3:-}") || hrc=$?
   case "$hrc" in
     0) set_outcome "$1" held "$hd" ;;
     1) return 1 ;;
@@ -257,7 +264,8 @@ case "$cmd" in
           set_outcome "$qid" waiting "PR $known unreadable (transient); will re-check"; continue
         fi
         if [[ "$kstate" == MERGED ]]; then set_outcome "$qid" merged "PR $known (confirmed on re-check)"; continue; fi
-        if park_if_held "$qid" "$known"; then continue; fi
+        # The head this queue last pushed stands for the PR's head here (#210).
+        if park_if_held "$qid" "$known" "$(cat "$qdir/$qid.pushed" 2>/dev/null || true)"; then continue; fi
       fi
       git -C "$qwt" fetch -q origin >>"$log" 2>&1 || { set_outcome "$qid" error "fetch failed, see $log"; continue; }
       # Resuming a waiting item: the base merge, check and push are already done when the pushed
@@ -312,13 +320,13 @@ case "$cmd" in
       [[ -z "$pr" ]] || printf '%s\n' "$pr" >"$qdir/$qid.pr"
       head=$(jq -r '.[0].headRefOid // empty' <<<"$prs")
       [[ -n "$pr" && -n "$head" ]] || { set_outcome "$qid" error "no open PR for $qbranch"; continue; }
-      if park_if_held "$qid" "$pr"; then continue; fi
+      if park_if_held "$qid" "$pr" "$head"; then continue; fi
       if [[ "$head" != "$local_head" ]]; then
         set_outcome "$qid" waiting "PR $pr shows head ${head:0:9}, pushed ${local_head:0:9}"; continue
       fi
       margs=(--repo "$repo" --pr "$pr" --head "$head")
       if [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
-        row=$("$here/pr-ready.sh" --repo "$repo" --base "$base" --pr "$pr" 2>>"$log" | awk 'NR == 1') || row=""
+        row=$(ORCHESTRATE_GIT_DIR=$qwt "$here/pr-ready.sh" --repo "$repo" --base "$base" --pr "$pr" 2>>"$log" | awk 'NR == 1') || row=""
         IFS=$'\t' read -r _ verdict rhead _ _ detail <<<"$row"
         if [[ -z "$row" ]]; then set_outcome "$qid" error "no readiness row for PR $pr"; continue; fi
         if [[ "$head" != "$rhead"* ]]; then set_outcome "$qid" waiting "readiness row is for $rhead"; continue; fi
@@ -347,7 +355,7 @@ case "$cmd" in
         esac
       fi
       rc=0
-      "$here/pr-merge.sh" "${margs[@]}" >>"$log" 2>&1 || rc=$?
+      ORCHESTRATE_GIT_DIR=$qwt "$here/pr-merge.sh" "${margs[@]}" >>"$log" 2>&1 || rc=$?
       case "$rc" in
         0) set_outcome "$qid" merged "PR $pr" ;;
         4) echo "hold: default branch is red; pass stopped"; exit 4 ;;
@@ -357,7 +365,7 @@ case "$cmd" in
         9) set_outcome "$qid" waiting "merge outcome unknown; will reconcile" ;;
         11) set_outcome "$qid" waiting "base moved past a merge-sensitive path; next pass merges it in again" ;;
         12) set_outcome "$qid" waiting "another merge holds a merge-sensitive path lock" ;;
-        14) set_outcome "$qid" held "$(held_detail "$pr" || echo "pr-merge refused PR $pr as held, see $log")" ;;
+        14) set_outcome "$qid" held "$(held_detail "$pr" "$head" || echo "pr-merge refused PR $pr as held, see $log")" ;;
         13) set_outcome "$qid" waiting "waiting for a bot review (review-gate.sh policy): $(review_detail "$qid" "$pr" "$head")" ;;
         10) set_outcome "$qid" waiting "merge pending on GitHub (5xx, in progress or outage); will reconcile"
           if [[ -f "$(orch_state_dir "$repo")/GITHUB_OUTAGE" ]]; then echo "paused: GitHub outage; pass stopped"; break; fi ;;

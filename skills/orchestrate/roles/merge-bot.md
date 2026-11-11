@@ -21,7 +21,9 @@ around it. The latest internal review verdict (`{{STATE}}/reviews.tsv`, kept onl
 `{{SCRIPTS}}/review-ledger.sh`) holds the same way (#206): a PR whose newest verdict is `fix-first`,
 `rethink`, `fixing`, `repairing` (a repair session still pushing, #212) or `repaired` shows
 `SKIP review:<verdict>`, and `pr-merge.sh` refuses it with exit 14,
-until a newer `ship` row. Never record a verdict yourself: report the PR as held by its review.
+until a newer `ship` row. A `ship` row pinned to an older head shows `SKIP review:stale` once the
+head has commits other than GitHub's own update-branch merges (#210): report it as needing a
+review of the new head. Never record a verdict yourself: report the PR as held by its review.
 
 ## Steps
 1. `{{SCRIPTS}}/main-health.sh --repo {{REPO}}` — if it prints `red`, merge only the PRs your

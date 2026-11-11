@@ -16,6 +16,7 @@
 #        review-ledger.sh inflight [--pr N] [--repo OWNER/REPO]
 #        review-ledger.sh latest   --pr N [--repo OWNER/REPO]
 #        review-ledger.sh blocked  [--repo OWNER/REPO]
+#        review-ledger.sh shipped  [--repo OWNER/REPO]
 #        review-ledger.sh list     [--pr N] [--repo OWNER/REPO]
 #   record   append a verdict. A non-ship verdict also holds the PR (`hold.sh add --until
 #            review-ship`) unless it is held already; `ship` releases a hold whose condition is
@@ -38,6 +39,9 @@
 #   inflight local only: `pr  session  since` for every repair in flight (of PR N).
 #   latest   the PR's newest row. Exit 3 when the PR has no verdict.
 #   blocked  local only: `pr  verdict` for every PR whose latest verdict is not ship.
+#   shipped  local only: `pr  head` for every PR whose latest verdict is ship recorded with --head.
+#            The merge paths hold such a PR (`review:stale`) once its head moved past that head,
+#            unless only GitHub-made update-branch merges came after it (orch_review_covers, #210).
 #   list     local only: every row (of one PR with --pr).
 # The ledger is <state dir>/reviews.tsv, one row per verdict: iso  pr  verdict  head  note
 # [session] (head and note `-` when not given; the session only on repairing and repaired rows).
@@ -54,7 +58,7 @@ orch_gh_priority normal
 usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
-  record | fix | repair | repaired | settle | inflight | latest | blocked | list) shift ;;
+  record | fix | repair | repaired | settle | inflight | latest | blocked | shipped | list) shift ;;
   -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
@@ -132,6 +136,7 @@ case "$cmd" in
     printf '%s\n' "$row"
     ;;
   blocked) rows | awk -F'\t' '{ v[$2] = $3 } END { for (p in v) if (v[p] != "ship") print p "\t" v[p] }' | sort -n ;;
+  shipped) rows | awk -F'\t' '{ v[$2] = $3; h[$2] = $4 } END { for (p in v) if (v[p] == "ship" && h[p] != "-") print p "\t" h[p] }' | sort -n ;;
   list) rows "$pr" ;;
   inflight) inflight "$pr" ;;
   record | fix)
