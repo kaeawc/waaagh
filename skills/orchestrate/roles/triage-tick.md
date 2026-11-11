@@ -26,9 +26,15 @@ from memory (advisory workflows, ready label, device slot types).
      for each run in `runs=`, `"{{SCRIPTS}}/triage-tick.sh" rerun --repo {{REPO}} --run <id>
      --issue <tracking issue>`. It re-runs the failed jobs once, notes the re-run on the tracking
      issue, and keeps merges held until `{{BASE}}` is green. Exit 3 means that run was already
-     re-run once: it is a real red now; report it as `main-red`.
+     re-run once: it is a real red now; report it as `main-red`. `rerun` reads the run's
+     failed-job log first: when a job it needs was abandoned, cancelled or skipped, it re-runs the
+     whole run instead (`gh run rerun ID`, not `--failed`), once per head SHA.
    - `rerun-pending`: a re-run is still going; merges stay held. Nothing to do.
-   - `main-red` (unclassified, investigate, or a re-run that failed again): report the runs; the
+   - `main-red` (unclassified, investigate, or a re-run that failed again): first, for each run,
+     `"{{SCRIPTS}}/triage-tick.sh" rerun --repo {{REPO}} --run <id> --issue <tracking issue>
+     --needs-only`. Exit 0: the failure was a needs dependency that did not succeed, and the run is
+     re-run in full (merges stay held). Exit 1 (any other failure) or 3 (already re-run in full on
+     this head: look at the runner pool, `failure-triage.md`): report the runs; the
      orchestrator gives the first free lane the fix. File the failure on the tracking issue, or
      append the run and the classifier verdict to it, once per run id.
    - `main-unknown`: change nothing; an existing hold stays.

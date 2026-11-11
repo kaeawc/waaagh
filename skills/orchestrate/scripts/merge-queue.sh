@@ -32,8 +32,9 @@
 #   superseded a conflict that supersede-check.sh calls a SUPERSEDED-CANDIDATE (later merges ship
 #              the PR's issue another way): taken off the queue front, parked until `retry`, for
 #              an evidence session (roles/supersede-evidence.md), never a re-apply
-#   held       the item's PR is in the hold file (hold.sh), or its latest internal review verdict
-#              (review-ledger.sh) is not ship (also pr-merge.sh exit 14): set aside so
+#   held       the item's PR is in the hold file (hold.sh; also pr-merge.sh exit 14), or a release
+#              freeze is on (freeze.sh: every PR is held until `freeze.sh end`), or its latest
+#              internal review verdict (review-ledger.sh) is not ship: set aside so
 #              the rest of the queue runs, nothing pushed or merged for it. Every pass re-checks it
 #              (a known PR before any fetch or push) and resumes it once `hold.sh release` (or
 #              check --release) has cleared the hold, or a newer ship verdict is recorded; no
@@ -164,7 +165,7 @@ review_detail() {
 held_detail() {
   local hrc=0 hold
   hold=$(orch_hold_of "$repo" "$1") || hrc=$?
-  if ((hrc == 0)); then echo "PR $1 is held: $hold; hold.sh release clears it"; return 0; fi
+  if ((hrc == 0)); then echo "PR $1 is held: $hold; $(orch_hold_hint "$hold")"; return 0; fi
   ((hrc == 1)) || return "$hrc"
   # The latest internal review verdict holds it too (#206).
   hrc=0

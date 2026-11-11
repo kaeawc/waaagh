@@ -48,12 +48,14 @@
 #       | 12 busy: another PR's merge holds the lock of a merge-sensitive path it touches
 #       | 13 needs review: the owner's bot-review policy (review-gate.sh check) is not met
 #       | 14 held: the PR is in the hold file (hold.sh); only `hold.sh release` (or check
-#       --release) clears it. Checked before the gates and again right before the merge.
+#       --release) clears it. Also every PR while a release freeze is on (freeze.sh; `freeze.sh
+#       end` lifts it). Checked before the gates and again right before the merge.
 #       Also when the PR's latest internal review verdict (review-ledger.sh) is not ship
 #       (`held: ... latest internal review`); only a newer ship verdict clears that
-# Holds: a PR in <state dir>/holds, or whose latest review-ledger.sh verdict is fix-first, rethink
-# or fixing, is never merged, in any mode (--admin, --main-fix and ORCHESTRATE_DIRECT_MERGE
-# included); a hold file or review ledger that cannot be read refuses with exit 9.
+# Holds: a PR in <state dir>/holds, or whose latest review-ledger.sh verdict is fix-first, rethink,
+# fixing, repairing or repaired, is never merged, in any mode (--admin, --main-fix and
+# ORCHESTRATE_DIRECT_MERGE included); a hold file or review ledger that cannot be read refuses
+# with exit 9.
 # Review policy: when <state dir>/review-policy is set and not off, review-gate.sh check must say
 # ok for the head; a merge it allowed without a review is added to the unreviewed-merges ledger.
 # GitHub outages: success is read from the PR state, never from the merge's exit code. A 5xx or
@@ -141,7 +143,7 @@ refuse_if_held() {
   hold=$(orch_hold_of "$repo" "$pr") || hrc=$?
   case "$hrc" in
     0) log "refused held: $hold"
-      echo "held: PR $pr is in the hold file ($hold); hold.sh release clears it"; exit 14 ;;
+      echo "held: PR $pr is in the hold file ($hold); $(orch_hold_hint "$hold")"; exit 14 ;;
     1) ;;
     *) release_locks; log "refused: hold file unreadable"
       echo "unverified: the hold file could not be read (hold.sh list); nothing was attempted"; exit 9 ;;
