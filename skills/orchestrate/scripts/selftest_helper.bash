@@ -33,24 +33,6 @@ intake() {
     "$SCRIPTS/pr-intake.sh" --repo o/r --owner ME "$@"
 }
 
-# --- codex-lane-run.sh cross-lane guard ---
-runner_env() {
-  RUNNER="$SCRIPTS/../../../bin/codex-lane-run.sh"
-  FAKEBIN="$BATS_TEST_TMPDIR/fakebin"; mkdir -p "$FAKEBIN"
-  cat >"$FAKEBIN/codex" <<'SH'
-#!/usr/bin/env bash
-out=""; while (($#)); do [[ $1 == --output-last-message ]] && out=$2; shift; done
-spec=$(cat); printf 'saw:%s\n' "$(printf '%s\n' "$spec" | sed -n 2p)" >"$out"
-SH
-  chmod +x "$FAKEBIN/codex"
-  OTHER="$BATS_TEST_TMPDIR/other"; mkdir -p "$OTHER"
-  RUNDIR="$BATS_TEST_TMPDIR/run"; mkdir -p "$RUNDIR"
-}
-
-run_lane() { PATH="$FAKEBIN:$PATH" HOME="$BATS_TEST_TMPDIR/home" "$RUNNER" --model gpt-6-luna --spec "$1" --final "$RUNDIR/final.md" --log "$RUNDIR/codex.jsonl" --cd "$REPO" --poll 1 3>&-; }   # fd 3 closed: see selftest-lanes.bats teardown
-
-WAITER() { "$SCRIPTS/../../../bin/codex-lane-wait.sh" "$@"; }
-
 # --- campaign scripts: readiness, merge, main health, issues, lanes, device lock ---------------
 
 # gh stub that answers by subcommand from fixture files and records every call. It reads its

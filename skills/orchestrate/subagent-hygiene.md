@@ -1,9 +1,9 @@
 # Background subagent hygiene
 
-Background subagents (lane drivers, sweeps, routers, verify batches) cost Claude usage for as long
+Background subagents (implementation lanes, sweeps, routers, verify batches) cost Claude usage for as long
 as they run and for every notification they send. Three habits keep them quiet and short: briefs
 that close every loose end, stopping lanes whose work is gone, and the cheapest model that can do
-the role. This extends the Mechanics rules in `SKILL.md` ("One fresh, small driver per task", "An
+the role. This extends the Mechanics rules in `SKILL.md` ("One fresh, small lane per task", "An
 interim stop is not a result") and `roles/_common.md`; it does not replace them.
 
 ## What every brief says
@@ -45,36 +45,39 @@ Pick the cheapest model that has done the role well; always pass `model` explici
 
 | Role | Model | Why |
 |---|---|---|
-| Single-issue lane driver, premise check, validation batch, merge bot, triage tick | `haiku` | One issue, a fixed checklist, a short report: Haiku drivers did well on premise checks and verification batches. |
+| Routine implementation lane (the spec settles the outcome) | `sonnet` | It writes the code and tests itself; a fully specified change needs care, not judgment. |
+| Judgment implementation lane: PR doctor, conflict lane, supersede evidence, anything the spec cannot settle | `opus` | The outcome depends on decisions the spec leaves open. |
+| Premise check, validation batch, merge bot, triage tick | `haiku` | A fixed checklist and a short report: Haiku did well on premise checks and verification batches. |
 | Router, local sweep, hygiene bot, rebase bot | `sonnet` | Many items and cross-item judgment (duplicates, routing, clusters). |
 | Verify batch over several issues, verification | `sonnet` | Multi-issue verification batches needed Sonnet. |
-| Driver for a conflict fix or a static-analysis fix (Detekt, lint baselines) | `sonnet` | Both sides' intent, or a rule's intent, must survive; these fixes needed Sonnet. |
-| Lane driver that creates or deletes devices (emulators, AVDs, simulators) | `sonnet` | Device setup and cleanup involve improvised destructive commands; a Haiku driver deleted the Android SDK (`lane-safety.md`). |
+| A static-analysis fix (Detekt, lint baselines) | `sonnet` at least | The rule's intent must survive; these fixes needed Sonnet. A conflict fix is judgment work: `opus`. |
+| Any role that creates or deletes devices (emulators, AVDs, simulators) | `sonnet` at least, never `haiku` | Device setup and cleanup involve improvised destructive commands; a Haiku agent deleted the Android SDK (`lane-safety.md`). |
 | The one independent reviewer per lane | `opus` | `SKILL.md`, "Choosing the reviewer". |
 | Concept and architecture review | `fable` | `SKILL.md`, "Choosing the reviewer". |
 
-A Haiku lane that fails its spec once is relaunched on Sonnet, as a stated decision; it is not
-resumed. Implementation itself stays with the codex implementers (`SKILL.md`, "Codex implements").
+A Haiku role that fails its checklist once is relaunched on Sonnet, and a Sonnet lane that fails
+its spec twice is relaunched on Opus, each as a stated decision; neither is resumed (`SKILL.md`,
+"Escalation").
 
-## Lane drivers
+## Lanes on gates and devices
 
-Local lane drivers (often Haiku) that wait on slow gates and drive devices need four more rules.
+Local lanes that wait on slow gates and drive devices need four more rules.
 Lane briefs and role templates state them; `roles/_common.md` rules 1 and 6 carry the first two.
 
-1. **One blocking wait per gate.** A driver runs its gate inline. When the gate must run in the
-   background (a pre-push hook, a long build), the driver waits on it with ONE background command
+1. **One blocking wait per gate.** A lane runs its gate inline. When the gate must run in the
+   background (a pre-push hook, a long build), the lane waits on it with ONE background command
    that blocks until the gate exits, in a single `run_in_background` call:
    `until grep -q EXIT= <log>; do sleep 30; done` (the gate's wrapper writes `EXIT=<code>` last).
    Never arm a repeating monitor, or a short monitor that is re-armed when it expires: each expiry
-   wakes the driver and sends the orchestrator a "stale expiry, nothing new" report. One lane
+   wakes the lane and sends the orchestrator a "stale expiry, nothing new" report. One lane
    waiting on one slow pre-push gate sent about 30 of them, roughly 1k tokens each, with no
-   information. A stopped driver is not resumed on a monitor expiry alone; the orchestrator
+   information. A stopped lane is not resumed on a monitor expiry alone; the orchestrator
    treats such a notification as noise (the "Stopping lanes" table above) and waits for the
    gate's own exit.
 2. **Confirm device ownership before acting.** The device lock records the lane's devices:
    `device-lock.sh claim --name <lane> --device <serial or UDID>` (a simulator the lane creates
    after the claim is added with `record --token <T> --device <UDID>`). Before any `adb` or
-   `simctl` command the driver runs `device-lock.sh check --name <lane> --device <id>`, with
+   `simctl` command the lane runs `device-lock.sh check --name <lane> --device <id>`, with
    `--avd <lane AVD suffix>` for an emulator (`adb -s <serial> emu avd name` must end with it) or
    `--simulator` for a simulator; exit 4 means the device is not the lane's: stop and report. One
    lane ran `cmd lock_settings` against another lane's car emulator and set and cleared a PIN

@@ -4,7 +4,9 @@ Read `{{SCRIPTS}}/../roles/_common.md` first. Your prompt names an old PR (#P), 
 and the `supersede-check.sh` output that made it a SUPERSEDED-CANDIDATE: later merges into
 `{{BASE}}` may already ship #P's behaviour under another design. Re-applying #P on top would
 reverse choices `{{BASE}}` already made, so you do NOT resolve #P's conflicts. You gather evidence
-and recommend. You close nothing, and you never push to #P's branch.
+and recommend, writing the tests (and at most the one missing guard) yourself: this is an Opus
+lane, because reading two designs against each other is judgment work. You close nothing, and you
+never push to #P's branch.
 
 1. Re-run `"{{SCRIPTS}}/supersede-check.sh" --pr P --worktree <your worktree>` after
    `git -C <worktree> fetch origin`. Exit 0 (no longer a candidate, or #P merged or closed): stop

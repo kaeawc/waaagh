@@ -14,7 +14,7 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 3. Lane worktrees are named and persistent, created by you; an auto-created isolated worktree can
    be removed if the agent returns before editing.
 4. The agent's prompt is then short: the brief's path plus this pass's inputs (PR list, holds,
-   issue numbers, lane worktree, effort), as paths and excerpts, never transcripts.
+   issue numbers, lane worktree), as paths and excerpts, never transcripts.
 5. Every pass is a fresh agent. Do not resume an earlier role or lane agent to give it the next
    task: its whole context would be re-sent. Resume one only to ask about the work it just
    returned.
@@ -43,10 +43,10 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 | Local sweep | `local-sweep.md` | `general-purpose`, `model: "sonnet"` | evidence-backed closes of bucket A; sweep and batch plan files |
 | Verify batch | `verify-batch.md` | `general-purpose`, `model: "sonnet"` | one verdict comment per issue, evidence-backed closes, issues for twice-reproduced failures |
 | Verification | `verification.md` | `general-purpose`, `model: "sonnet"` | new issues for findings |
-| Implementation lane | `implementation-lane.md` | `waaagh:codex-implementer` (routine, Luna `medium`) or `waaagh:sol-implementer` (judgment) | uncommitted diff in its worktree |
-| PR doctor | `pr-doctor.md` | `waaagh:sol-implementer`, `REASONING: high` | commits on its own PR branches; follow-up issues and thread resolves via `review-followup.sh` |
-| Conflict lane | `conflict-lane.md` | `waaagh:sol-implementer` | resolved markers, uncommitted; stops first on a `supersede-check.sh` SUPERSEDED-CANDIDATE |
-| Supersede evidence | `supersede-evidence.md` | `waaagh:sol-implementer`, `REASONING: high` | tests (and at most the one missing guard) on a fresh branch from the base; a close-as-superseded recommendation, never a close |
+| Implementation lane | `implementation-lane.md` | `general-purpose`, `model: "sonnet"` (routine, fully specified) or `model: "opus"` (judgment) | code and tests, as an uncommitted diff in its worktree; the orchestrator commits |
+| PR doctor | `pr-doctor.md` | `general-purpose`, `model: "opus"` | commits on its own PR branches; follow-up issues and thread resolves via `review-followup.sh` |
+| Conflict lane | `conflict-lane.md` | `general-purpose`, `model: "opus"` | resolved markers, uncommitted; stops first on a `supersede-check.sh` SUPERSEDED-CANDIDATE |
+| Supersede evidence | `supersede-evidence.md` | `general-purpose`, `model: "opus"` | tests (and at most the one missing guard) on a fresh branch from the base; a close-as-superseded recommendation, never a close |
 | Triage tick | `triage-tick.md` | `general-purpose`, `model: "haiku"` | one rerun per known-flake run; comments on the red-main tracking issue |
 | Reviewer | `review.md` | `general-purpose`, `model: "opus"` (one per lane) | findings file |
 | Cloud dispatch | `cloud-dispatch.md` (per-issue brief: `cloud-session-brief.md`; fixtures contract: `../device-cloud-handoff.md`; standard briefs kept in the target repo: `../briefs/implement.md`, `../briefs/repair.md`) | none: the main session runs it (subagents lack `RemoteTrigger`) | run-once routines, `cloud-sessions.tsv` |

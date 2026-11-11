@@ -112,10 +112,10 @@ close_completed() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as comp
 }
 
 @test "a close prints a stop line for each active lane on the issue; lane-claim closed finds any closed issue" {
-  printf 'wt-a\twork/5-x\t5,6\ta.ts\tcodex\tactive\nwt-b\twork/7-y\t7\tb.ts\tsol\tactive\nwt-c\twork/5-z\t5\tc.ts\tsol\tmerged\n' >"$ST/lanes.tsv"
+  printf 'wt-a\twork/5-x\t5,6\ta.ts\tsonnet\tactive\nwt-b\twork/7-y\t7\tb.ts\topus\tactive\nwt-c\twork/5-z\t5\tc.ts\topus\tmerged\n' >"$ST/lanes.tsv"
   run "$SCRIPTS/lane-claim.sh" on-issue --issues 5 --repo o/r
   [ "$status" -eq 0 ]
-  [ "$output" = "stop: lane wt-a branch work/5-x agent codex issue 5" ]
+  [ "$output" = "stop: lane wt-a branch work/5-x agent sonnet issue 5" ]
   run "$SCRIPTS/lane-claim.sh" on-issue --issues 8 --repo o/r
   [ "$status" -eq 0 ]
   [ -z "$output" ]
@@ -123,14 +123,14 @@ close_completed() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as comp
   close_completed
   [ "$status" -eq 0 ]
   [[ "$output" == *"closed 5 as completed"* ]]
-  [[ "$output" == *"stop: lane wt-a branch work/5-x agent codex issue 5"* ]]
+  [[ "$output" == *"stop: lane wt-a branch work/5-x agent sonnet issue 5"* ]]
   [[ "$output" != *"wt-c"* ]]
   # Closed some other way (here: issue 7 by its merged PR): `closed` still finds the lane.
   touch "$FX/closed-7"
   run "$SCRIPTS/lane-claim.sh" closed --repo o/r
   [ "$status" -eq 0 ]
-  [[ "$output" == *"stop: lane wt-a branch work/5-x agent codex issue 5"* ]]
-  [[ "$output" == *"stop: lane wt-b branch work/7-y agent sol issue 7"* ]]
+  [[ "$output" == *"stop: lane wt-a branch work/5-x agent sonnet issue 5"* ]]
+  [[ "$output" == *"stop: lane wt-b branch work/7-y agent opus issue 7"* ]]
   touch "$FX/unreadable-6"
   run "$SCRIPTS/lane-claim.sh" closed --repo o/r
   [ "$status" -eq 4 ]
@@ -138,7 +138,7 @@ close_completed() { run "$SCRIPTS/issue-close.sh" --repo o/r --issue 5 --as comp
   "$SCRIPTS/lane-claim.sh" set --worktree wt-a --status closed --repo o/r
   rm -f "$FX/unreadable-6"
   run "$SCRIPTS/lane-claim.sh" closed --repo o/r
-  [ "$output" = "stop: lane wt-b branch work/7-y agent sol issue 7" ]
+  [ "$output" = "stop: lane wt-b branch work/7-y agent opus issue 7" ]
 }
 
 @test "decision record posts the format once, removes needs-decision and ticks decisions.md" {

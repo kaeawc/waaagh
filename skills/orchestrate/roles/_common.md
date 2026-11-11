@@ -3,8 +3,7 @@
 1. You make ONE pass and report. Do not sleep-loop, schedule anything or start background
    watchers; run every command inline and wait for it. Run gates (tests, lint, builds) inline in
    the foreground, never in the background: stopping while your own background work runs sends
-   an interim notice instead of your report. The one exception is a codex lane run, which you
-   wait on with its bounded waiter (`codex-lane-wait.sh`) in the foreground. Before you finish,
+   an interim notice instead of your report. Before you finish,
    stop every monitor, watch or background task you armed (`TaskStop`): one left running keeps
    sending stale notifications after your report. If your brief lets a gate run in the
    background, wait on it with one blocking command in one background call (`until grep -q EXIT=

@@ -2,8 +2,8 @@
 
 Read `{{SCRIPTS}}/../roles/_common.md` first. You get each PR in your bucket to "green, up to
 date, no unaddressed feedback" so the merge bot can merge it. You do not merge, close, approve,
-change draft state or open PRs; you open or comment on issues only through `review-followup.sh`. Codex writes all code; if it falls short on a PR, stop on that PR
-and move to the next.
+change draft state or open PRs; you open or comment on issues only through `review-followup.sh`. You write the fixes yourself (an Opus lane); a fix that needs a
+decision the feedback does not settle: stop on that PR, report the question, and move to the next.
 
 Your prompt gives: the PR numbers and their worktrees, and the feedback policy (`fix-pass` or
 `follow-ups`).
@@ -48,7 +48,7 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    it says `reproduce` (the same check failed again on the same head); then record the signature
    with `failure-triage.sh record` (`{{SCRIPTS}}/../failure-triage.md`). Never fix a
    failure by weakening or skipping a test, raising a budget or growing a baseline.
-5. **Fix pass — at most ONE consolidated codex pass per PR**, combining every class-(a) item (when
+5. **Fix pass — at most ONE consolidated fix pass per PR**, combining every class-(a) item (when
    the policy is `fix-pass`) and every diff-caused CI failure. With the `follow-ups` policy, do not
    fix review feedback: file each class-(a) review thread as above and list every other class-(a)
    item for the orchestrator to file as an issue, unless

@@ -19,9 +19,9 @@ header() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$1"; }
   copy="$BATS_TEST_TMPDIR/root"
   mkdir -p "$copy/skills/orchestrate"
   cp -R "$SCRIPTS" "$copy/skills/orchestrate/scripts"
-  cp -R "$ROOT/bin" "$ROOT/dev" "$copy/"
+  cp -R "$ROOT/dev" "$copy/"
   bad="" n=0
-  for f in "$copy"/skills/orchestrate/scripts/*.sh "$copy"/bin/*.sh "$copy"/dev/*.sh; do
+  for f in "$copy"/skills/orchestrate/scripts/*.sh "$copy"/dev/*.sh; do
     [[ "$(header "$f")" == *"Source, do not execute"* ]] && continue
     # One more line at the end of the header, and one in the middle.
     awk 'NR == 2 { print "# Added in the middle (#184)." } { print }' "$f" >"$f.new"
@@ -38,7 +38,7 @@ header() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$1"; }
 
 @test "no script prints its usage from a hard-coded line range of itself" {
   run grep -nE "sed -n ['\"][0-9]+,([0-9]+|\\$\\{?[a-z_]+\\}?)p['\"] \"\\\$0\"" \
-    "$SCRIPTS"/*.sh "$ROOT"/bin/*.sh "$ROOT"/dev/*.sh
+    "$SCRIPTS"/*.sh "$ROOT"/dev/*.sh
   [ "$status" -eq 1 ] || { echo "$output"; false; }
 }
 

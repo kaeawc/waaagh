@@ -58,11 +58,9 @@ within() { # CASE COLUMN MAX
   within pr-ready-rest-100-ready rows 100
 }
 
-@test "an unchanged pr-ready --delta pass and an unchanged lane wait print one short line" {
+@test "an unchanged pr-ready --delta pass prints one short line" {
   within pr-ready-delta-unchanged stdout_bytes 80
   within pr-ready-delta-unchanged rows 1
-  within lane-wait-unchanged stdout_bytes 100
-  within lane-wait-unchanged rows 1
 }
 
 @test "triage-tick snapshot with 50 open PRs takes the count and last reviews from one snapshot call" {
@@ -102,10 +100,9 @@ col() { awk -F'\t' -v c="$1" -v col="$2" 'NR == 1 { for (i = 1; i <= NF; i++) k[
 }
 
 @test "--timing counts the scripts' jq processes, not the stub gh's" {
-  # excerpt.sh and the lane waiter start no jq; issue-candidates.sh's jq calls are counted though
-  # the stub serves its gh call with jq too.
+  # excerpt.sh starts no jq; issue-candidates.sh's jq calls are counted though the stub serves its
+  # gh call with jq too.
   [ "$(col excerpt-20k-failures jq_calls)" -eq 0 ]
-  [ "$(col lane-wait-unchanged jq_calls)" -eq 0 ]
   [ "$(col dupes-400-identical jq_calls)" -gt 0 ]
   # REST pr-ready reads per PR, so it starts more jq processes than the GraphQL path.
   [ "$(col pr-ready-rest-100-ready jq_calls)" -gt "$(col pr-ready-100-ready jq_calls)" ]

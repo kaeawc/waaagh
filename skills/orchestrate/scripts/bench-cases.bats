@@ -19,7 +19,7 @@ setup() {
   # declaring the need shows up here as a different row.
   d="$BATS_TEST_TMPDIR/alone"; mkdir -p "$d"
   cases=$(awk 'NR > 1 { print $1 }' "$FULL")
-  [ "$(printf '%s\n' "$cases" | wc -l | tr -d ' ')" -ge 13 ]
+  [ "$(printf '%s\n' "$cases" | wc -l | tr -d ' ')" -ge 12 ]
   for c in $cases; do "$SCRIPTS/bench.sh" "$c" >"$d/$c" & done
   wait
   bad=""
@@ -30,9 +30,9 @@ setup() {
 }
 
 @test "picked cases print in the full run's order, and a need runs without printing its row" {
-  run "$SCRIPTS/bench.sh" lane-wait-unchanged pr-ready-rest-100-ready excerpt-1mb-line
+  run "$SCRIPTS/bench.sh" triage-tick-50-open pr-ready-rest-100-ready excerpt-1mb-line
   [ "$status" -eq 0 ]
-  [ "$output" = "$(sed -n 1p "$FULL"; awk -F'\t' '$1 ~ /^(excerpt-1mb-line|pr-ready-rest-100-ready|lane-wait-unchanged)$/' "$FULL")" ]
+  [ "$output" = "$(sed -n 1p "$FULL"; awk -F'\t' '$1 ~ /^(excerpt-1mb-line|pr-ready-rest-100-ready|triage-tick-50-open)$/' "$FULL")" ]
   # pr-ready-rest-100-ready reads the refusal pr-ready-rest-20-ready remembered: without that pass
   # its gh call count would be one higher.
   [ "$(grep -c '^pr-ready-rest-20-ready' <<<"$output" || true)" -eq 0 ]
