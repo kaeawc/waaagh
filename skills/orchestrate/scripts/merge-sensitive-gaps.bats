@@ -19,6 +19,7 @@ case "$*" in
   "api --paginate repos/o/r/pulls/5/files"*) echo libs.toml ;;
   "api repos/o/r/pulls/5 "*) echo main ;;
   "api repos/o/r/compare/main..."*) cat "$FX/behind" ;;
+  "api repos/o/r/compare/"*"...main "*) echo libs.toml ;; # the base's drift
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 STUB
@@ -94,7 +95,7 @@ conflicting_repo() {
   conflicting_repo
   ms --head "$PRHEAD" --worktree "$BATS_TEST_TMPDIR/checkout" --check-cmd "touch $FX/ran"
   [ "$status" -eq 3 ]
-  [[ "$output" == "stale: PR 5 touches merge-sensitive libs.toml and is 1 commit(s) behind main, and the merge result conflicts (see "* ]]
+  [[ "$output" == "stale: PR 5 touches merge-sensitive libs.toml and is 1 commit(s) behind main, which touch libs.toml, and the merge result conflicts (see "* ]]
   [ ! -e "$FX/ran" ]
   [ -z "$(git -C "$BATS_TEST_TMPDIR/checkout" worktree list | awk 'NR > 1')" ]
   [ -z "$(git -C "$BATS_TEST_TMPDIR/checkout" status --porcelain)" ]
