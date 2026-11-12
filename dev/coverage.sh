@@ -25,7 +25,9 @@
 #                # comments and blank lines allowed). Fails when a script is below its floor or a
 #                measured script has no row, and names each one. A row for a script that was not
 #                measured is reported as stale but does not fail. A resultset with a subset.txt
-#                beside it is judged the same way, and the check says plainly the numbers are partial.
+#                beside it is judged the same way, and the check says plainly the numbers are partial;
+#                with a changed.txt there too (a --changed run's), only the scripts it lists are
+#                judged, as --changed itself did (#255).
 #   --resultset  the resultset --check reads (default coverage/.resultset.json)
 # Env: GITHUB_STEP_SUMMARY  when set, the table (or the check's findings) is appended to it as Markdown.
 # Needs: bashcov (gem install bashcov; not for --check), jq. Off PATH, it is looked for in gem's
@@ -166,6 +168,13 @@ check_floors() {
   bad=$(awk -F'\t' '/^[[:space:]]*(#|$)/ { next }
     NF != 2 || $2 !~ /^[0-9]+(\.[0-9]+)?$/ || $2 > 100 { print FILENAME ":" NR ": " $0 }' "$floor")
   [[ -z "$bad" ]] || { printf 'dev/coverage.sh: malformed floor row (want script<TAB>min%%):\n%s\n' "$bad" >&2; exit 4; }
+  # A --changed run's resultset (#255): subset.txt and changed.txt beside it. A plain --check of it
+  # judges only the changed scripts, as the run itself did; the rest were measured by a few suites
+  # and read low, so judging them would report false floor failures.
+  rdir=$(dirname "$resultset") from_changed=""
+  if [[ -z "$only" && -f "$rdir/subset.txt" && -s "$rdir/changed.txt" ]]; then
+    only=$(cat "$rdir/changed.txt") from_changed=yes
+  fi
   ext=$(mktemp)
   credit_extents "$resultset" "$ext" 2>/dev/null \
     || { echo "dev/coverage.sh: cannot read $resultset as a bashcov resultset" >&2; exit 4; }
@@ -185,8 +194,10 @@ check_floors() {
     || { echo "dev/coverage.sh: cannot read $resultset as a bashcov resultset" >&2; exit 4; }
   # A subset run's resultset: same verdicts, but say plainly that the numbers are partial.
   partial=""
-  if [[ -f "$(dirname "$resultset")/subset.txt" ]]; then
-    partial="partial resultset: only $(grep -c . "$(dirname "$resultset")/subset.txt" || true) suite(s) ran ($(dirname "$resultset")/subset.txt), so a script another suite exercises reads low"
+  if [[ -f "$rdir/subset.txt" ]]; then
+    partial="partial resultset: only $(grep -c . "$rdir/subset.txt" || true) suite(s) ran ($rdir/subset.txt), so a script another suite exercises reads low"
+    [[ -z "$from_changed" ]] ||
+      partial+="; from --changed: judging only the $(grep -c . <<<"$only" || true) script(s) in $rdir/changed.txt (a full dev/coverage.sh run judges every script)"
     echo "dev/coverage.sh: $partial" >&2
   fi
   report=$(awk -F'\t' '
