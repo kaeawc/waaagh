@@ -13,6 +13,7 @@ setup_file() {
 
 setup() {
   load test_helper
+  load selftest_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1790510400 ORCHESTRATE_READ_SLEEP=0
   unset MERGE_QUEUE_CHECK_CMD MERGE_QUEUE_ADMIN_EVIDENCE MERGE_QUEUE_ADMIN_CHECKS ORCHESTRATE_DIRECT_MERGE \
@@ -22,51 +23,8 @@ setup() {
   ST="$ORCHESTRATE_STATE_DIR/o__r"; mkdir -p "$ST"
   Q="$ST/merge-queue"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
-  # Fixture switches in $FX:
-  #   num-<branch>   the PR number of <branch> (default 5); the readiness list shows the PR of the
-  #                  branch last looked up by --head
-  #   merged-<n>     written by `pr merge <n>`: `pr view <n>` then reports MERGED
-  #   hold-on-view   a PR number: the first `pr view` adds a hold on it (a hold set mid-merge)
-  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
-#!/usr/bin/env bash
-all="$*"
-echo "$all" >>"$FX/calls"
-br=$(cat "$FX/branch" 2>/dev/null || true)
-head_of() { git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify "refs/heads/$br" || echo none; }
-num=$(cat "$FX/num-$br" 2>/dev/null || echo 5)
-case "$all" in
-  "api repos/o/r") echo '{"default_branch":"main"}' ;;
-  *rules/branches*) echo '[]' ;;
-  "api repos/o/r/branches/"*) echo '{"protected":false}' ;;
-  *graphql*) echo "{\"data\":{\"repository\":{\"p$num\":{\"reviewThreads\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[]}}}}}" ;;
-  "api repos/o/r/actions/runs?"*) echo '{"workflow_runs":[]}' ;;
-  "api --paginate repos/o/r/pulls/"*"/files"*) printf 'f.txt\n' ;;
-  "api repos/o/r/pulls/"*"/reviews"*) echo '[]' ;;
-  "api repos/o/r/issues/"*"/comments"*) echo '[]' ;;
-  "api repos/o/r/pulls/"*) echo main ;;
-  "api repos/o/r/compare/"*) echo 0 ;;
-  "pr list"*"--state merged"*) echo '[]' ;;
-  "pr list"*--head*) b=$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/'); echo "$b" >"$FX/branch"; br=$b
-    jq -n --arg h "$(head_of)" --argjson n "$(cat "$FX/num-$b" 2>/dev/null || echo 5)" '[{number: $n, headRefOid: $h}]' ;;
-  "pr list"*"--json number") jq -n --argjson n "$num" '[{number: $n}]' ;;
-  "pr list"*) jq -n --arg h "$(head_of)" --argjson n "$num" \
-      '[{number: $n, author: {login: "me"}, isDraft: false, isCrossRepository: false, baseRefName: "main",
-         headRefOid: $h, mergeable: "MERGEABLE", labels: [],
-         statusCheckRollup: [{name: "build", conclusion: "SUCCESS", startedAt: "2026-09-27T01:00:00Z"}]}]' ;;
-  "pr create"*) ;;
-  "pr merge"*) n=${all#pr merge }; touch "$FX/merged-${n%% *}" ;;
-  "pr view"*) n=${all#pr view }; n=${n%% *}
-    if [ -f "$FX/hold-on-view" ]; then
-      echo "$(cat "$FX/hold-on-view") until:owner since:2026-09-27T12:00:00Z fix pass started" >>"$ORCHESTRATE_STATE_DIR/o__r/holds"
-      rm "$FX/hold-on-view"
-    fi
-    if [ -f "$FX/merged-$n" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}'
-    else jq -n --arg h "$(head_of)" '{state: "OPEN", isDraft: false, isCrossRepository: false, headRefOid: $h,
-      author: {login: "me"}, mergeable: "MERGEABLE", autoMergeRequest: null}'; fi ;;
-  *) echo "unexpected gh call: $all" >&2; exit 9 ;;
-esac
-STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+  # The shared merge-path gh stub (selftest_helper.bash, #233); its fixture switches are documented there.
+  stub_gh_merge_path
   echo body >"$BATS_TEST_TMPDIR/body.md"
 }
 

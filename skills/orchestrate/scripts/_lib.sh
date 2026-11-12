@@ -15,6 +15,20 @@ orch_usage() { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; }
 # This file's directory, without a dirname process per call (#112).
 case "${BASH_SOURCE[0]}" in */*) _orch_lib_dir=${BASH_SOURCE[0]%/*} ;; *) _orch_lib_dir=. ;; esac
 
+# orch_run NAME ARGS...: run the sibling script NAME (hold.sh, pr-merge.sh, ...) with ARGS and
+# return its exit code. NAME is looked up in ORCHESTRATE_SCRIPTS_DIR first (tests only; unset by
+# default), then in this file's directory, the real tree (#233). A test points the variable at a
+# directory holding only the stubs it needs (a failing hold.sh, a pr-merge.sh with a fixed exit
+# code): every other NAME still runs from the real tree, so bashcov credits it, where a copy of
+# the tree is credited nothing. The helpers below, and the scripts whose siblings tests stub
+# (merge-queue.sh, pr-merge.sh, issue-candidates.sh), call their siblings through it.
+orch_run() {
+  local f="$_orch_lib_dir/$1"
+  [[ -z "${ORCHESTRATE_SCRIPTS_DIR:-}" || ! -x "$ORCHESTRATE_SCRIPTS_DIR/$1" ]] || f="$ORCHESTRATE_SCRIPTS_DIR/$1"
+  shift
+  "$f" "$@"
+}
+
 # orch_repo [OWNER/REPO] -> OWNER/REPO (falls back to the checkout's repository). A checkout with
 # exactly one remote, on github.com, and no `gh repo set-default` choice is read from git with no
 # API call; anything else (several remotes, a chosen default, another host) is left to gh, which
@@ -116,7 +130,7 @@ orch_default_branch() { gh api "repos/$1" | jq -r .default_branch; }
 # freeze.sh; #208) every PR is held: `#N until:freeze-end since:<iso> release freeze: <reason>`.
 orch_hold_of() {
   local rows since why f
-  rows=$("$_orch_lib_dir/hold.sh" list --repo "$1" 2>/dev/null) || return 2
+  rows=$(orch_run hold.sh list --repo "$1" 2>/dev/null) || return 2
   rows=$(awk -F'\t' -v pr="${2#\#}" '$1 == pr { printf "#%s until:%s since:%s %s\n", $1, $2, $3, $5 }' <<<"$rows")
   f="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/${1//\//__}/FREEZE"
   if [[ -z "$rows" && -f "$f" ]]; then
@@ -137,7 +151,7 @@ orch_hold_of() {
 # the default branch, GITDIR to ORCHESTRATE_GIT_DIR or the current directory.
 orch_review_hold_of() {
   local row rc=0 t p v h n s base why
-  row=$("$_orch_lib_dir/review-ledger.sh" latest --repo "$1" --pr "${2#\#}" 2>/dev/null) || rc=$?
+  row=$(orch_run review-ledger.sh latest --repo "$1" --pr "${2#\#}" 2>/dev/null) || rc=$?
   ((rc != 3)) || return 1
   ((rc == 0)) || return 2
   IFS=$'\t' read -r t p v h n s <<<"$row"
@@ -218,7 +232,7 @@ orch_read_retry() {
   shift
   if [[ "$1" == gh ]]; then
     shift
-    "$_orch_lib_dir/gh-read.sh" --tries "$n" --budget "${ORCHESTRATE_READ_BUDGET:-60}" -- "$@" 2>/dev/null
+    orch_run gh-read.sh --tries "$n" --budget "${ORCHESTRATE_READ_BUDGET:-60}" -- "$@" 2>/dev/null
     return
   fi
   for ((i = 1; i <= n; i++)); do

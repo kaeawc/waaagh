@@ -223,7 +223,7 @@ case "$cmd" in
       if [[ -n "$cs" ]]; then
         rc=0
         # shellcheck disable=SC2086  # issue numbers, one word each
-        "$here/open-blockers.sh" --repo "$repo" $cs >"$tmp/blockers" || rc=$?
+        orch_run open-blockers.sh --repo "$repo" $cs >"$tmp/blockers" || rc=$?
         case "$rc" in
           0 | 3 | 4) ;;
           *) echo "issue-candidates.sh: open-blockers.sh failed (exit $rc); C rows unverified" >&2

@@ -38,8 +38,10 @@ intake() {
 # gh stub that answers by subcommand from fixture files and records every call. It reads its
 # arguments with test_helper.bash's gh_stub_args, as stub_gh_routes does: `--include` and `-i` are
 # dropped from `gh api` calls, so a read through gh-read.sh matches the same routes as a direct gh
-# call, and $FX/calls logs the call without them (#166). A new suite should start from
-# test_helper.bash's stub_gh_routes instead of another case statement.
+# call, and $FX/calls logs the call without them (#166). Classic branch protection
+# (branches/<b>/protection/...) has its own route, $FX/protection.json or a 404, so a suite can stub
+# it apart from the branch itself (#233). A new suite should start from test_helper.bash's
+# stub_gh_routes instead of another case statement.
 stub_gh_router() {
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   {
@@ -51,6 +53,9 @@ case "$a" in
   "api user") echo '{"login":"me"}' ;;
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   *rules/branches*) [ -f "$FX/rules-fails" ] && { echo "HTTP 403: Resource not accessible" >&2; exit 1; }; cat "$FX/rules.json" ;;
+  "api repos/o/r/branches/"*"/protection"*) # classic protection, its own route (#233): served from
+    # $FX/protection.json, else the 404 a token without admin rights gets
+    [ -f "$FX/protection.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; cat "$FX/protection.json" ;;
   "api repos/o/r/branches/"*) [ -f "$FX/branch-fails" ] && { echo "HTTP 403" >&2; exit 1; }; cat "$FX/branch.json" ;;
   *graphql*) # threads.json maps PR number -> thread nodes, "null" (no data), "more" (a next page
     # without a cursor) or {"pages": [[nodes], [nodes], ...]} (served through real cursors c1, c2, ...)
@@ -124,6 +129,72 @@ STUB
   echo '{"protected":false}' >"$FX/branch.json"
   echo '[]' >"$FX/pause.json"
   echo '[]' >"$FX/prs-merged.json"
+}
+
+# stub_gh_merge_path: the gh stub for suites that run the real merge path (pr-ready.sh, pr-merge.sh,
+# merge-queue.sh) end to end against the local bare origin seed_origin_copy makes (merge-holds.bats,
+# review-holds.bats, review-head-cover.bats; #233). It reads its arguments with gh_stub_args and
+# appends each call to $FX/calls. A PR's head is origin's refs/heads/<its branch>, its one check is
+# green, it has no review threads and touches f.txt; rulesets are empty and the branch unprotected
+# (classic protection: $FX/protection.json, else a 404). Exports FX and puts the stub first on PATH.
+# Fixture switches in $FX:
+#   branch          the branch `pr view` and `pr list` answer for (`pr list --head B` writes it)
+#   num-<branch>    the PR number of <branch> (default 5)
+#   merged-<n>      written by `pr merge <n>`: `pr view <n>` then reports MERGED
+#   hold-on-view    a PR number: the first `pr view` adds a hold on it (a hold set mid-merge)
+#   review-on-view  a PR number: the first `pr view` records a fix pass on it (mid-merge)
+stub_gh_merge_path() {
+  FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
+  {
+    gh_stub_header
+    cat <<'STUB'
+gh_stub_args "$@"
+echo "$a" >>"$FX/calls"
+br=$(cat "$FX/branch" 2>/dev/null || true)
+head_of() { git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify "refs/heads/$br" || echo none; }
+num=$(cat "$FX/num-$br" 2>/dev/null || echo 5)
+st="$ORCHESTRATE_STATE_DIR/o__r"
+case "$a" in
+  "api repos/o/r") echo '{"default_branch":"main"}' ;;
+  *rules/branches*) echo '[]' ;;
+  "api repos/o/r/branches/"*"/protection"*)
+    [ -f "$FX/protection.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; cat "$FX/protection.json" ;;
+  "api repos/o/r/branches/"*) echo '{"protected":false}' ;;
+  *graphql*) jq -n --arg p "p$num" '{data: {repository: {($p): {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: []}}}}}' ;;
+  "api repos/o/r/actions/runs?"*) echo '{"workflow_runs":[]}' ;;
+  "api --paginate repos/o/r/pulls/"*"/files"*) echo f.txt ;;
+  "api repos/o/r/pulls/"*"/reviews"*) echo '[]' ;;
+  "api repos/o/r/issues/"*"/comments"*) echo '[]' ;;
+  "api repos/o/r/pulls/"*) echo main ;;
+  "api repos/o/r/compare/"*) echo 0 ;;
+  "pr list"*"--state merged"*) echo '[]' ;;
+  "pr list"*--head*) b=$(echo "$a" | sed 's/.*--head \([^ ]*\).*/\1/'); echo "$b" >"$FX/branch"; br=$b
+    jq -n --arg h "$(head_of)" --argjson n "$(cat "$FX/num-$b" 2>/dev/null || echo 5)" '[{number: $n, headRefOid: $h}]' ;;
+  "pr list"*"--json number") jq -n --argjson n "$num" '[{number: $n}]' ;;
+  "pr list"*) jq -n --arg h "$(head_of)" --argjson n "$num" \
+      '[{number: $n, author: {login: "me"}, isDraft: false, isCrossRepository: false, baseRefName: "main",
+         headRefOid: $h, mergeable: "MERGEABLE", labels: [],
+         statusCheckRollup: [{name: "build", conclusion: "SUCCESS", startedAt: "2026-09-27T01:00:00Z"}]}]' ;;
+  "pr create"*) ;;
+  "pr merge"*) n=${a#pr merge }; touch "$FX/merged-${n%% *}" ;;
+  "pr view"*) n=${a#pr view }; n=${n%% *}
+    if [ -f "$FX/hold-on-view" ]; then
+      echo "$(cat "$FX/hold-on-view") until:owner since:2026-09-27T12:00:00Z fix pass started" >>"$st/holds"
+      rm "$FX/hold-on-view"
+    fi
+    if [ -f "$FX/review-on-view" ]; then
+      printf '2026-09-27T12:00:00Z\t%s\tfixing\t-\tfix lane started\n' "$(cat "$FX/review-on-view")" >>"$st/reviews.tsv"
+      rm "$FX/review-on-view"
+    fi
+    if [ -f "$FX/merged-$n" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}'
+    else jq -n --arg h "$(head_of)" '{state: "OPEN", isDraft: false, isCrossRepository: false, headRefOid: $h,
+      baseRefName: "main", author: {login: "me"}, mergeable: "MERGEABLE", autoMergeRequest: null}'; fi ;;
+  *) echo "unexpected gh call: $a" >&2; exit 9 ;;
+esac
+STUB
+  } >"$BATS_TEST_TMPDIR/bin/gh"
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+  export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
 }
 
 pr_row() { # number author draft fork mergeable checks-json [labels-json]

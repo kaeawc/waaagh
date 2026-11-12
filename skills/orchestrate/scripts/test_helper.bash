@@ -43,6 +43,11 @@ hermetic_git
 export GH_READ_FAKE_SLEEP=1 GH_READ_JITTER=0
 # No suite paces its stubbed gh through gh-budget.sh unless it puts the shim on PATH itself.
 unset ORCHESTRATE_GH_BUDGET GH_BUDGET_ACTIVE
+# Stubbing a sibling script (#233): put an executable stub of that one name in a directory and
+# export ORCHESTRATE_SCRIPTS_DIR=<dir> (_lib.sh's orch_run); every other sibling still runs from
+# the real tree, so coverage credits it. Never copy the scripts directory: a copy is credited
+# nothing. Unset here, so no suite inherits another's stubs.
+unset ORCHESTRATE_SCRIPTS_DIR
 # No suite reaches githubstatus.com (gh-status.sh): an unreadable fixture unless a test writes it,
 # and pr-merge.sh outage waits are logged ("pr-merge: wait <s>"), not slept.
 export GITHUB_STATUS_URL="file://${BATS_TEST_TMPDIR:-$BATS_FILE_TMPDIR}/githubstatus.json" ORCHESTRATE_MERGE_FAKE_SLEEP=1
