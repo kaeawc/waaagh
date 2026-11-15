@@ -50,3 +50,4 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 | Triage tick | `triage-tick.md` | `general-purpose`, `model: "haiku"` | one rerun per known-flake run; comments on the red-main tracking issue |
 | Reviewer | `review.md` | `general-purpose`, `model: "opus"` (one per lane) | findings file |
 | Cloud dispatch | `cloud-dispatch.md` (per-issue brief: `cloud-session-brief.md`; fixtures contract: `../device-cloud-handoff.md`; standard briefs kept in the target repo: `../briefs/implement.md`, `../briefs/repair.md`) | none: the main session runs it (subagents lack `RemoteTrigger`) | run-once routines, `cloud-sessions.tsv` |
+| Cloud orchestrator (traveling mode) | `cloud-orchestrator.md` (contract: `../traveling-mode.md`) | none: owner-created routines (an hourly orchestrator plus label-triggered implement, repair and review workers) | merges by the review-status rule, labels, the state store |

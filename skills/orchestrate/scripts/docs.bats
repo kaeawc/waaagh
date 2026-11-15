@@ -61,3 +61,19 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$SKILL" "\`auto_archive_on_close: true\`"
   has "$SKILL" "needs no fix pass and no"
 }
+
+@test "traveling mode: labels start workers, one lease-held writer, verdicts as head-bound statuses" {
+  T="$ROOT/skills/orchestrate/traveling-mode.md"
+  has "$T" "A cloud session cannot start cloud sessions; labels can"
+  has "$T" "the push must fast-forward"
+  has "$T" "If the push is rejected, another writer exists. Stop without acting."
+  has "$T" "commit status \`orchestrate/review\` on the head SHA"
+  has "$T" "GitHub refuses an author's own approval"
+  has "$T" "Pushes made with Actions' \`GITHUB_TOKEN\` start no workflows"
+  has "$T" "No credential is ever written to the store or to a prompt."
+  has "$ROLES/cloud-orchestrator.md" "Exit at once, with no changes, unless it added the label cloud-dispatch"
+  has "$ROLES/cloud-orchestrator.md" "sha=<head>"
+  has "$ROLES/cloud-orchestrator.md" "No session creates, enables or fires a"
+  has "$SKILL" "\`traveling-mode.md\`"
+  has "$ROLES/README.md" "\`cloud-orchestrator.md\`"
+}
