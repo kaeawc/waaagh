@@ -445,6 +445,15 @@ against its PR's own changes.
   main in on its next pass. The strict setting is read from rulesets and classic protection; the
   classic read needs admin and may 404, and unknown counts as not strict: set
   `MERGE_QUEUE_UPDATE_BEHIND=always` there to merge every base move in.
+- **Stagger branch updates when CI shares this host** (#219). Every update-branch, base-merge push
+  or rerun starts a CI run; when the repo's CI runs on self-hosted runners on the machine that
+  hosts the lanes, a batch of them stalls the lanes. Never loop `gh pr update-branch` over a list:
+  `"$SCRIPTS/update-pace.sh" run --pr N...` (in merge order) updates them under the pacing set by
+  `ORCHESTRATE_UPDATE_CAP` (per pass), `ORCHESTRATE_UPDATE_GAP` (seconds between updates) and
+  `ORCHESTRATE_UPDATE_HOST_GATE=1` (defer while `host-load.sh` says HOLD or BACKOFF or a heavy
+  build runs), and lists the rest as `deferred` for the next pass. The merge queue and the rebase
+  bot pace their pushes the same way. Pacing is off unless set: set it for such a repo (e.g. cap 3,
+  gap 600, host gate on).
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
   every stacked merge: take the default branch's copy and regenerate it, never hand-merge.
   `"$SCRIPTS/regen-merge.sh"` does this from `<state dir>/generated-files.tsv` and refuses an
