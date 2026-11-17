@@ -35,7 +35,8 @@
 #                  here. pr-ready.sh runs only when such a PR is open; flags for it (--author ...)
 #                  come from ORCHESTRATE_PR_READY_ARGS. "unknown" when readiness could not be read.
 #       dispatch <n|unknown> next=#a,#b,#c [list=truncated@1000]     open issues (any --ready-label;
-#                  none of --exclude-label, default "blocked") with no open PR closing them, no active
+#                  none of --exclude-label, default "blocked"; never the verify-on-main label,
+#                  verify-on-main.sh) with no open PR closing them, no active
 #                  lane and no live cloud dispatch (cloud-dispatch.sh ledger; over REST a PR closes
 #                  what its body names with a closing keyword; see gh-issues.sh). list=truncated: the
 #                  issue read hit its limit, so the count may be short (#259).
@@ -149,6 +150,9 @@ while (($#)); do
   esac
 done
 [[ "$hold_hours" =~ ^[0-9]+$ ]] || { echo "triage-tick.sh: --hold-hours must be a whole number" >&2; exit 2; }
+# Issues whose fix merged without closing them wait for a check on main, not a lane (#258).
+((${#exclude[@]})) || exclude=(blocked)
+exclude+=("${ORCHESTRATE_VERIFY_ON_MAIN_LABEL:-verify-on-main}")
 case "$cmd" in
   snapshot | cron) ;;
   rerun)
