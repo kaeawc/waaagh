@@ -1,0 +1,15 @@
+# Lane-private build output defaults (#213), read by _build_dirs.sh for gate-slot.sh and
+# heavy-build-slot.sh. MATCH<TAB>KIND<TAB>NAME<TAB>VALUE: MATCH is * or tool names joined by |; KIND
+# env exports NAME=VALUE, KIND arg inserts NAME VALUE after the tool word (kept when the command
+# already passes NAME). {dir} is the lane build dir, {id} the lane id, {worktree} the worktree.
+# A repo replaces this table with <state dir>/<owner>__<repo>/build-dirs.tsv (start from a copy);
+# ORCHESTRATE_BUILD_DIRS=off turns it off. See skills/orchestrate/host-load.md.
+*	env	TMPDIR	{dir}/tmp
+*	env	XDG_CACHE_HOME	{dir}/xdg-cache
+xcodebuild	arg	-derivedDataPath	{dir}/xcode/DerivedData
+fastlane	env	SCAN_DERIVED_DATA_PATH	{dir}/xcode/DerivedData
+fastlane	env	GYM_DERIVED_DATA_PATH	{dir}/xcode/DerivedData
+gradle|gradlew	arg	--project-cache-dir	{dir}/gradle/project-cache
+# Gradle build/ dirs are under the worktree already, so lane-private; a build that writes elsewhere
+# can read ORCHESTRATE_LANE_BUILD_DIR (exported to every gate). Not on by default, since it gives up
+# the shared dependency cache: gradle|gradlew<TAB>env<TAB>GRADLE_USER_HOME<TAB>{dir}/gradle-home

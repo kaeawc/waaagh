@@ -21,7 +21,7 @@ case "${BASH_SOURCE[0]}" in */*) _orch_lib_dir=${BASH_SOURCE[0]%/*} ;; *) _orch_
 # directory holding only the stubs it needs (a failing hold.sh, a pr-merge.sh with a fixed exit
 # code): every other NAME still runs from the real tree, so bashcov credits it, where a copy of
 # the tree is credited nothing. The helpers below, and the scripts whose siblings tests stub
-# (merge-queue.sh, pr-merge.sh, issue-candidates.sh), call their siblings through it.
+# (merge-queue.sh, pr-merge.sh, issue-candidates.sh, triage-tick.sh), call their siblings through it.
 orch_run() {
   local f="$_orch_lib_dir/$1"
   [[ -z "${ORCHESTRATE_SCRIPTS_DIR:-}" || ! -x "$ORCHESTRATE_SCRIPTS_DIR/$1" ]] || f="$ORCHESTRATE_SCRIPTS_DIR/$1"
@@ -267,6 +267,26 @@ orch_read_retry() {
     if out=$("$@" 2>/dev/null); then printf '%s\n' "$out"; return 0; fi
     ((i == n)) || sleep "${ORCHESTRATE_READ_SLEEP:-2}"
   done
+  return 1
+}
+
+# orch_gql_read N [--json] gh CMD...: a bounded GraphQL read (gh-read.sh, at most N attempts) that
+# tells the caller when GitHub refused GraphQL, which orch_read_retry hides (its stderr goes to
+# /dev/null). Prints the body and returns 0; returns 1 on any other failure (nothing printed);
+# returns 2 and prints `refused` when GraphQL was refused and ORCHESTRATE_GH_API is auto, after
+# recording the refusal (orch_gh_refused) so every later read goes to REST. The caller switches to
+# its REST path on 2 (and must not treat the printed `refused` as a body). --json asks gh-read.sh
+# to check the body is JSON.
+orch_gql_read() {
+  local n=$1 rc=0 err out jsonflag=()
+  shift
+  if [[ "${1:-}" == --json ]]; then jsonflag=(--json); shift; fi
+  [[ "${1:-}" != gh ]] || shift
+  err=$(mktemp "${TMPDIR:-/tmp}/orch-gql-err.XXXXXX")
+  out=$(orch_run gh-read.sh "${jsonflag[@]+"${jsonflag[@]}"}" --tries "$n" --budget "${ORCHESTRATE_READ_BUDGET:-60}" -- "$@" 2>"$err") || rc=$?
+  if ((rc == 0)); then rm -f "$err"; printf '%s\n' "$out"; return 0; fi
+  if orch_gh_refused "$rc" "$(cat "$err" 2>/dev/null || true)"; then rm -f "$err"; echo refused; return 2; fi
+  rm -f "$err"
   return 1
 }
 

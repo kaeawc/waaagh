@@ -35,6 +35,12 @@
    each push to a PR's branch, confirm the PR is still open: `{{SCRIPTS}}/claim-check.sh open
    --repo {{REPO}} --pr <n>`. Exit 3 (merged or closed) or 4 (unreadable) means do not push: report
    it, so the work moves to a new branch on purpose instead of landing on a merged one (#206).
+   Verify every push by reading the remote, never by the push's place in a chain: a slow pre-push
+   hook can outlive the SSH connection (`send-pack: unexpected disconnect`) while the next commands
+   still print normal output (#262). Run the gates yourself, then
+   `{{SCRIPTS}}/push-verify.sh --branch <branch> --no-verify` (pushes, then compares
+   `git ls-remote origin refs/heads/<branch>` with the commit; exit 0 is the only success). Remove
+   a worktree only after it verifies; if it is already gone, `--ref <sha>` pushes by SHA.
 8. Read `{{STATE}}/lane-rules.md` if it exists and obey it; where it conflicts with this file, it
    wins.
 9. Keep long output in files under `{{STATE}}/`, never inside a checkout (it would change the

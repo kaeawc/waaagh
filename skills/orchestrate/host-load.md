@@ -54,6 +54,36 @@ worktrees (12 GB) took the load from about 120 to 32 within minutes.
   collection: start no new worktree until it is back under, and report the budget row.
 - Over budget is not a reason to remove an unfinished tree. Finish or close its PR first.
 
+## Lane-private build output
+
+Lanes on one host must never share a build output directory. An iOS lane once failed with a
+missing `.pcm` module file: its derived-data path in `/tmp` was shared with other lanes, so it
+read another lane's half-built module cache. A shared default looks like a flaky or broken build
+and costs a whole lane run to diagnose. So this is not left to each lane's judgment:
+
+- **Every gate gets a lane-private directory.** `gate-slot.sh` and `heavy-build-slot.sh` export
+  `ORCHESTRATE_LANE_BUILD_DIR` (`<state dir>/build/<lane id>`; `ORCHESTRATE_BUILD_ROOT` moves the
+  root) and point each tool's output into it. The lane id is the worktree's name plus a checksum of
+  its path, or `ORCHESTRATE_LANE_ID`. Commands that run outside the gate wrappers do not get it.
+- **Defaults ship as data**, in `scripts/build-dirs.tsv`: `TMPDIR` and `XDG_CACHE_HOME` for every
+  gate, `-derivedDataPath` for `xcodebuild` (derived data and its module cache), the fastlane
+  derived-data variables, and `--project-cache-dir` for Gradle. Gradle's `build/` directories are
+  already inside the worktree. An argument the command already passes (an explicit
+  `-derivedDataPath`) is kept, with a note on stderr; make sure it is lane-private.
+- **Per repo**, put a table at `<state dir>/<owner>__<repo>/build-dirs.tsv` (next to
+  `gate-env.sh`). It replaces the defaults, so start from a copy. Rows are
+  `MATCH<TAB>KIND<TAB>NAME<TAB>VALUE`. MATCH is `*` or tool names joined by `|`. KIND is `env`
+  (export) or `arg` (inserted after the tool word). VALUE may use `{dir}`, `{id}` and `{worktree}`.
+  `ORCHESTRATE_BUILD_DIRS=<file>` names another table, and `ORCHESTRATE_BUILD_DIRS=off` turns
+  this off. `gate-env.sh` is sourced afterwards and can override any of it.
+- A tool reached only inside a `bash -c` string gets the env rows but not the argument rows. Run
+  the tool as the gate's own command (`gate-slot.sh -- xcodebuild ...`), or have the build read
+  `$ORCHESTRATE_LANE_BUILD_DIR`.
+- **Cleanup.** `wt-cleanup.sh` lists a lane's build dir as a `build` row once its worktree is
+  gone, whether it removed the worktree or someone else did. With `--apply` it removes the dir,
+  unless a process is working inside it. Only directories under the build root that have a
+  `.worktree` marker naming a missing path are touched.
+
 ## Never remove a worktree someone is in
 
 A cleanup once removed the worktree a live orchestrator session was using as its working

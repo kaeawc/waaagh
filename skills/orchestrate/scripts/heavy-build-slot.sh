@@ -8,11 +8,16 @@
 #   --workers  org.gradle.workers.max, added to GRADLE_OPTS (default $HEAVY_BUILD_WORKERS or 2)
 #   --env-file sourced before CMD, as in gate-slot.sh
 # Do not call it from inside a gate slot: it waits for every gate to finish, its caller included.
+# The build gets lane-private output as every gate does (#213, _build_dirs.sh): Xcode derived data
+# (-derivedDataPath), Gradle's --project-cache-dir, TMPDIR and XDG_CACHE_HOME under
+# ORCHESTRATE_LANE_BUILD_DIR, from the build-dirs table, before --env-file is sourced.
 # Exit: CMD's exit code | 75 not started within --wait | 2 usage
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
+# shellcheck source=_build_dirs.sh
+source "$here/_build_dirs.sh"
 
 wait_s=${ORCHESTRATE_HEAVY_WAIT:-3600} workers=${HEAVY_BUILD_WORKERS:-2} label=heavy-build env_file=""
 gate_slots=${ORCHESTRATE_GATE_SLOTS:-3}
@@ -42,11 +47,12 @@ while [[ "$(slot_busy gate "$gate_slots")" != 0 ]]; do
   slot_sleep
 done
 export GATE_SLOT_KIND=heavy GRADLE_OPTS="${GRADLE_OPTS:+$GRADLE_OPTS }-Dorg.gradle.workers.max=$workers"
+build_dirs_apply "$@"
 rc=0
 if [[ -n "$env_file" && -f "$env_file" ]]; then
   # shellcheck disable=SC2016  # expanded by the inner bash
-  bash -c 'source "$1"; shift; "$@"' gate-env "$env_file" "$@" || rc=$?
+  bash -c 'source "$1"; shift; "$@"' gate-env "$env_file" "${BUILD_ARGV[@]}" || rc=$?
 else
-  "$@" || rc=$?
+  "${BUILD_ARGV[@]}" || rc=$?
 fi
 exit "$rc"
