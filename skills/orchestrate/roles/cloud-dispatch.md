@@ -192,6 +192,13 @@ main session fetches the runs and `cloud-dispatch.sh stalled` judges them, offli
      for a commit it never pushed (a gate moved to the background when the turn ended): a run
      whose PR head is older than the run's start is not done either. Redispatch, as for
      `stalled`, only when the log shows neither a question nor work worth keeping.
+   - `nopush #N run=R ... age=<m>m` (only with `--no-push`, which you pass for a dispatch that has no
+     branch or PR on GitHub yet): the run is still active but nothing has been pushed
+     `ORCHESTRATE_RUN_NOPUSH_MINUTES` (30) after its start, though it keeps emitting events (#216: a
+     cold dependency cache and a rate-limited registry held a finished commit for an hour). Read
+     `get_run_log`; if it is waiting on a local test run, tell it nothing (it cannot be messaged),
+     so treat it as stalled: expire and redispatch with `--note "push after the cheap checks; CI
+     runs the tests"`. A `ended ... unpushed` line means the same for an idle end.
    - `unfired #N trigger=T run_at=... late=<m>m`: the run-once trigger never started a run, more
      than `ORCHESTRATE_RUN_UNFIRED_MINUTES` (15) after `run_at`. Fire it with `RemoteTrigger run`,
      then `update {"enabled": false}` at once, so the late scheduler cannot start a second run on
