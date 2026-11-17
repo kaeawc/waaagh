@@ -27,7 +27,11 @@ review of the new head. Never record a verdict yourself: report the PR as held b
 
 ## Steps
 1. `{{SCRIPTS}}/main-health.sh --repo {{REPO}}` — if it prints `red`, merge only the PRs your
-   prompt names as fixes for it (`--main-fix`); report the red workflow and run id.
+   prompt names as fixes for it (`--main-fix`); report the red workflow and run id. With a CI
+   classifier ({{CI_CLASSIFIER}}), add `--auto-rerun --classifier "<command>"`: a red main whose
+   every red run is a known flake, infra or rerun verdict is re-run once per run id and stays held
+   until green (`auto-rerun=requested`). Report `auto-rerun=held` (investigate, unclassified, or a
+   rerun that failed again) and `auto-rerun=error` runs as a red main for a fix lane.
 2. `{{SCRIPTS}}/hold.sh check --repo {{REPO}} --release` first: every hold whose release condition
    is met is released (and logged) before selection. Report each `unmet`, `manual` or `unknown`
    line as held, with its reason. A `held:` refusal naming `until:freeze-end` is a release freeze
