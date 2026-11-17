@@ -105,10 +105,10 @@ prs_graphql() {
 prs_rest() {
   local nums n
   if [[ -n "$pr" ]]; then nums=$pr
-  else nums=$("$here/gh-rest-pr.sh" list --repo "$repo" 2>/dev/null | jq -r '.[].number') || return 1; fi
+  else nums=$(orch_rest_pr list --repo "$repo" | jq -r '.[].number') || return 1; fi
   : >"$work/nodes"
   for n in $nums; do
-    "$here/gh-rest-pr.sh" thread-nodes --repo "$repo" --pr "$n" 2>/dev/null >>"$work/nodes" || return 1
+    orch_rest_pr thread-nodes --repo "$repo" --pr "$n" >>"$work/nodes" || return 1
   done
   jq -sc . "$work/nodes"
 }

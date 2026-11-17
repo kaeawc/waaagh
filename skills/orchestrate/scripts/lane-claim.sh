@@ -81,17 +81,6 @@ with_lock() { # serialize writers; a lock older than 5 minutes is a leftover
   echo "lane-claim.sh: lanes.tsv is locked" >&2; exit 4
 }
 
-# rest_pr ARGS...: gh-rest-pr.sh ARGS; its stderr is shown only when it fails (the reason behind exit 3 was lost, #304).
-rest_pr() {
-  local err rc=0 out
-  err=$(mktemp)
-  out=$("$here/gh-rest-pr.sh" "$@" 2>"$err") || rc=$?
-  if ((rc != 0)); then echo "lane-claim.sh: gh-rest-pr.sh $1 failed (exit $rc): $(cat "$err")" >&2; fi
-  rm -f "$err"
-  printf "%s" "$out"
-  return "$rc"
-}
-
 # conflicts: prints one line per overlap with an active lane or an open PR.
 conflicts() {
   local prs rc=0 n f
@@ -102,10 +91,10 @@ conflicts() {
     elif ((rc != 0)); then echo "unreadable"; return; fi
   fi
   if [[ "$api" == rest ]]; then
-    prs=$(rest_pr list --repo "$repo" --limit 200 --tries 3) || { echo "unreadable"; return; }
+    prs=$(orch_rest_pr list --repo "$repo" --limit 200 --tries 3) || { echo "unreadable"; return; }
     if [[ -n "$files" ]]; then
       for n in $(jq -r '.[].number' <<<"$prs"); do
-        f=$(rest_pr files --repo "$repo" --pr "$n" --tries 3) || { echo "unreadable"; return; }
+        f=$(orch_rest_pr files --repo "$repo" --pr "$n" --tries 3) || { echo "unreadable"; return; }
         prs=$(jq -c --argjson n "$n" --slurpfile f <(printf '%s\n' "$f") 'map(if .number == $n then .files = $f[0] else . end)' <<<"$prs")
       done
     fi

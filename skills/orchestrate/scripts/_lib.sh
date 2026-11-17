@@ -297,7 +297,20 @@ orch_gql_read() {
   return 1
 }
 
-# orch_gh_priority high|normal|low: declare this script's GitHub budget priority (gh-budget.sh):
+# orch_rest_pr ARGS...: gh-rest-pr.sh ARGS (through orch_run). Prints its body and returns its
+# status; its stderr is shown, prefixed with the calling script and subcommand, only when it fails,
+# so the reason behind an exit 3 is not lost and a success stays quiet (#304, #310).
+orch_rest_pr() {
+  local err rc=0 out
+  err=$(mktemp "${TMPDIR:-/tmp}/orch-rest-err.XXXXXX")
+  out=$(orch_run gh-rest-pr.sh "$@" 2>"$err") || rc=$?
+  if ((rc != 0)); then echo "${0##*/}: gh-rest-pr.sh $1 failed (exit $rc): $(cat "$err" 2>/dev/null || true)" >&2; fi
+  rm -f "$err"
+  printf '%s' "$out"
+  return "$rc"
+}
+
+# orch_gh_priorityhigh|normal|low: declare this script's GitHub budget priority (gh-budget.sh):
 # high for merges and main health, normal for ticks, repairs and lanes, low for nudges, backfills
 # and sweeps. With ORCHESTRATE_GH_BUDGET=1, sourcing this file also puts the gh shim (gh-shim/gh)
 # first on PATH, so every gh call, gh-read.sh's and third-party scripts' included, is paced.
