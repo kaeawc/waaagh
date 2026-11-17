@@ -12,7 +12,7 @@
 #                        that is not a path is looked for in skills/orchestrate/scripts/, so a bare
 #                        name such as gh-read.bats works from any directory
 # Env: BATS (default bats)
-# Exit: 0 every suite passed | 1 a suite failed | 2 usage
+# Exit: 0 every suite passed | 1 a suite failed | 2 usage, or bats not found
 # Suites must not share state: each test works under its own $BATS_TEST_TMPDIR (test_helper.bash).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -41,6 +41,11 @@ for f in "$@"; do
   files+=("$f")
 done
 ((${#files[@]})) || files=("$root"/skills/orchestrate/scripts/*.bats)
+
+if ! command -v "${BATS:-bats}" >/dev/null 2>&1; then
+  echo "dev/test.sh: bats not found (BATS=${BATS:-bats}); install bats-core or set BATS to its path" >&2
+  exit 2
+fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
