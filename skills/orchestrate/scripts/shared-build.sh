@@ -108,7 +108,7 @@ collect() {
 # A tree with no fingerprint (not a checkout) cannot be shared: build privately.
 fp=""
 if shared_build_shares "$class"; then
-  fp=$("$here/fingerprint.sh" --dir "$wt" 2>/dev/null | sed -n 's/.* fingerprint=//p' || true)
+  fp=$("$here/fingerprint.sh" --dir "$wt" --fingerprint-only 2>/dev/null || true)
   [[ -n "$fp" ]] || echo "shared-build.sh: no tree fingerprint for $wt; building privately" >&2
 fi
 
