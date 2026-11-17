@@ -116,6 +116,19 @@ appends a row to `versions.tsv` (the bump rule, `../briefs/README.md`):
    session's run ended without that comment (the routine shows it finished or failed), record it
    yourself: `review-ledger.sh repaired --pr P --session <trigger> --note "run ended"`. A
    `repaired` PR still waits for a review of its final head; only that `ship` lets it merge.
+5. **One writer once a repair is sent** (#214). The session that opened P is still a writer: it
+   wakes on P's CI, review and bot events and can push after the repair session has. So `record
+   --kind repair --pr P` also posts one marker comment on P, starting `REPAIR-START session <trigger>:`
+   with the hidden key `<!-- waaagh:repairing pr=P session=<trigger> -->` (`repair-writer.sh mark`;
+   it reads P's comments over REST first and posts nothing when the key is there). The implement
+   brief (v4) reads P's comments before every push and stops at a `REPAIR-START`. Exit 10 means
+   the row and the `repairing` mark stand but the marker was not posted: run the `repair-writer.sh
+   mark` line it prints before the repair session starts. The triage tick runs `repair-writer.sh
+   check`: a `repair-writers` line names a PR under repair whose commits since the dispatch carry
+   two writers (session trailer, else author email) or whose branch was force-pushed. It cannot
+   tell two sessions apart that commit under one identity with no trailer, or see when an older
+   commit was pushed: GitHub's commit metadata names no pusher. So the marker is the guard and the
+   check is a backstop.
 
 ## Results come back only through PRs
 

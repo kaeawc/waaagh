@@ -1,4 +1,4 @@
-<!-- waaagh-brief implement v3. Installed by waaagh's cloud-dispatch.sh briefs install; change it only by PR. -->
+<!-- waaagh-brief implement v4. Installed by waaagh's cloud-dispatch.sh briefs install; change it only by PR. -->
 # Cloud lane: implement one issue in {{REPO}}
 
 The one-line prompt that sent you here names the issue (#N), your branch (`work/N-auto`) and,
@@ -13,6 +13,7 @@ orchestrator, so your PR and at most one issue comment are your only output.
 6. Open a PR to `{{BASE}}`, ready for review, not as a draft (a draft is never merged). Body starts `Closes #N` only if everything the issue asks is verified here; if any part needs a device, simulator or Xcode to verify, use `Part of #N` and list what is left to verify locally.
 7. Get CI green (fix what your change broke). Then one review round, and do not wait for a second. Each review thread: agreed, push the fix now and reply with its commit SHA; disagreed, reply "Disagree:" and why. "Agreed" or "deferred" with no push is not a fix (defer only cosmetic findings, citing a filed issue). The orchestrator resolves threads. Before stopping, list the unresolved threads: never end with an agreed but unfixed thread.
 8. Do not merge. No attribution lines (no Co-Authored-By, no "Generated with").
+9. One writer per branch: before every push once your PR is open, also when a CI, review or bot event wakes you later, read the PR's comments. If one starts "REPAIR-START" (the orchestrator posts it when it sends a repair session), that session owns BRANCH: push nothing more, post nothing, and stop. Never force-push.
 
 Processes: never pkill, killall or kill a process you did not start (it can be this session), and bound long test runs with the repository's own timeout settings.
 If blocked, comment once on #N saying what blocked you, and stop.

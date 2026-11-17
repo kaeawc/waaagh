@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Cloud dispatch bookkeeping: one no-click cloud session per cloud-ready issue, started by a
 # run-once routine (RemoteTrigger create) from the main session. This script never calls
-# RemoteTrigger or writes to GitHub; it keeps the todo queue and the dispatch ledger (both survive
+# RemoteTrigger, and its one GitHub write is the REPAIR-START marker of record --kind repair
+# (repair-writer.sh mark); it keeps the todo queue and the dispatch ledger (both survive
 # compaction), renders the short per-issue brief, builds the create payload, and paces creates.
 # The standard briefs can instead live in the target repository (.claude/briefs/implement.md and
 # repair.md, versioned and changed by PR); the dispatched prompt is then one line (--brief-ref).
@@ -85,6 +86,9 @@
 #               needs --pr P and marks the repair in flight on P (review-ledger.sh repair
 #               --session <trigger>, #212): P neither merges nor takes a ship verdict until the
 #               repair ends. Exit 9 when that mark failed (the row is written; mark it by hand).
+#               Then it posts the REPAIR-START marker on P once (repair-writer.sh mark, #214): the
+#               session that opened P reads it before any push and stops, so P keeps one writer.
+#               Exit 10 when the marker could not be posted (row and mark stand; rerun the mark).
 #   stale       live dispatches (recorded, not expired; only issues N when given) that never
 #               produced a PR (#259): dispatched more than --hours H ago (default
 #               ORCHESTRATE_DISPATCH_STALE_HOURS, 6; from run_at), the issue still open, and no open
@@ -112,7 +116,8 @@
 # Exit 9: a repair was recorded but its PR could not be marked repairing (review-ledger.sh repair).
 # Exit 3 also refuses expire (at the cap, or not stale); exit 7 also covers stale and expire when
 # the issue or its timeline could not be read.
-# Exit: 0 ok | 2 usage | 3 refused (dispatched, repair in flight) | 4 no template | 5 | 6 | 7 | 8 | 9
+# Exit 10: a repair was recorded and marked but its REPAIR-START marker was not posted.
+# Exit: 0 ok | 2 usage | 3 refused (dispatched, repair in flight) | 4 no template | 5 | 6 | 7 | 8 | 9 | 10
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_lib.sh
@@ -361,6 +366,9 @@ do_record() {
       --note "cloud repair of issue #$issue" >/dev/null ||
       { echo "cloud-dispatch.sh: PR #$pr is not marked repairing; run review-ledger.sh repair --pr $pr --session $trigger" >&2; exit 9; }
     echo "repairing PR #$pr session $trigger: held, and no ship verdict, until the repair ends"
+    # One writer (#214): the session that opened P must stop pushing; the marker tells it so.
+    "$here/repair-writer.sh" mark --repo "$repo" --pr "$pr" --session "$trigger" --issue "$issue" ||
+      { echo "cloud-dispatch.sh: PR #$pr has no REPAIR-START marker; run repair-writer.sh mark --pr $pr --session $trigger --issue $issue" >&2; exit 10; }
     return
   fi
   if dispatched "$issue"; then echo "cloud-dispatch.sh: #$issue already recorded" >&2; exit 3; fi

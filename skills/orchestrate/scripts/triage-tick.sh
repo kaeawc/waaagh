@@ -66,6 +66,9 @@
 #       rounds #<pr>=<n>,...   fix rounds per open PR (review-ledger.sh rounds, #257); omitted with
 #                  none. Then one line per PR at or past ORCHESTRATE_REVIEW_ROUND_CAP (default 2):
 #       review-loop #<pr> rounds=<n> since=<iso> hours=<h> reviewed=<sha|->
+#                  Then one line per repair in flight with a second writer since its dispatch, or
+#                  whose commits could not be read (repair-writer.sh check, #214):
+#       repair-writers two-writers|force-push|unknown #<pr> session:<id> ...
 #     Reasons: main-red, flake-rerun, rerun-pending, main-unknown, merge-loop-<state> (only while PRs
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
 #     issue-list-truncated, dispatch-stale=<n> (`cloud-dispatch.sh expire --issue N`, then dispatch
@@ -80,6 +83,8 @@
 #     hold-stale=<m> (holds past --hold-hours: check their release condition, `hold.sh check`),
 #     repaired=<n> (repairs that ended: review the final head, then record the verdict),
 #     repair-stale=<m> (check the session; if its run ended, `review-ledger.sh repaired --pr N`),
+#     repair-writers=<n> (PRs under repair with another writer: stop the other session, read the
+#     branch history, re-review the head),
 #     review-loop=<m> (PRs past the round cap: decline the optional findings, file the rest, review
 #     the delta from reviewed= at once; no further fix round, ../review-rounds.md). A part that
 #     could not be read says "unknown"; never a guess.
@@ -538,8 +543,12 @@ fi
 
 # Repairs in flight (review-ledger.sh, #212): each is settled against its closing comment, and one
 # in flight past --hold-hours is named so its session is checked. Omitted with none in flight.
-repairs_line="" stale_repairs=""
+repairs_line="" stale_repairs="" writers=""
 if fl=$("$here/review-ledger.sh" inflight --repo "$repo" 2>/dev/null) && [[ -n "$fl" ]]; then
+  # A second writer on a PR under repair (#214), checked before settle ends any of them.
+  writers=$("$here/repair-writer.sh" check --repo "$repo" 2>/dev/null | awk '$1 != "clear"') || true
+  nw=$(awk '($1 == "two-writers" || $1 == "force-push") && !s[$2]++ { c++ } END { print c + 0 }' <<<"$writers")
+  ((nw == 0)) || reasons+=("repair-writers=$nw")
   st=$("$here/review-ledger.sh" settle --repo "$repo" 2>/dev/null) || true
   cut=$(orch_iso "$((now - hold_hours * 3600))")
   repairs_line=$(awk '{ k[$1] = k[$1] (k[$1] == "" ? "" : ",") $2 }
@@ -582,3 +591,4 @@ echo "$host"
 [[ -z "$repairs_line" ]] || echo "$repairs_line"
 [[ -z "$stale_repairs" ]] || sed 's/^/repair-stale /' <<<"$stale_repairs"
 [[ -z "$rounds_lines" ]] || printf '%s\n' "$rounds_lines"
+[[ -z "$writers" ]] || sed 's/^/repair-writers /' <<<"$writers"
