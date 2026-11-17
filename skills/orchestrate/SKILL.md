@@ -506,6 +506,15 @@ A job that only passes on retry, or only from a build-cache hit, hides a red mai
 fix lane must check whether the greens were real: look for a failed first attempt, a cache restore
 that skipped the work, or a rerun, before declaring the branch healthy.
 
+**Known-flake red main reruns itself.** `main-health.sh --auto-rerun` (or
+`ORCHESTRATE_MAIN_AUTO_RERUN=1`, which also reaches the merge queue and the triage tick) classifies
+each red run with the repo's classifier (`--classifier`, else `ORCHESTRATE_CLASSIFIER_CMD`). When
+every one is rerunnable (flake, known-flake, infra, RERUN or RERUN-DONT-FIX), it re-runs each once
+per run id through `triage-tick.sh rerun` (failed jobs, or the whole run for a needs dependency
+that did not succeed; logged to `reruns.log`), and `MAIN_RED` stays until the rerun is green. An
+investigate or unclassified run, or a rerun that failed again, is named as `auto-rerun=held` and
+goes to a fix lane: a known flake that fails twice is a real red (#270).
+
 **Per-test timing budgets.** A test that breaches its own time budget (for example a 100 ms cap)
 on the default branch, and still breaches it when re-run alone, is a real red, not a flake: the
 classifier's INVESTIGATE is right. Handle it like any red main: `main-health.sh` holds merges, the

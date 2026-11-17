@@ -81,6 +81,14 @@ from memory (advisory workflows, ready label, device slot types).
      (`"{{SCRIPTS}}/campaign.sh" mode autonomous`, set by the owner) the snapshot itself marks a ship
      draft ready when no hold names it and the verdict is for its head; `mark-ready failed (...)`
      says why it could not. Never mark a draft ready yourself.
+   - `shipped-blocked=<n>`: each `shipped-blocked #<pr> verdict=<v> reason=<detail>` line is an
+     open PR whose latest internal review verdict is ship but that the merge loop passes over,
+     because only READY rows merge (#269). Report each with its reason and what clears it:
+     `threads=<k>` goes to `thread-sweep.sh` (resolve if answered, else a repair), `conflict` or
+     `behind` to the rebase bot, `fail:` to the CI classifier, `hold` to its hold, and
+     `verdict=unlisted reason=not-selected` means `pr-ready.sh` does not select it (author or base:
+     set `ORCHESTRATE_PR_READY_ARGS` to the merge loop's `--author` flags). `shipped-blocked
+     unknown`: readiness could not be read this tick; say so.
    - `hold-stale=<m>`: each `hold-stale #<pr> age=<h>h until:<event> reason=<text>` line is a
      merge-loop hold older than `--hold-hours` (default 12, `ORCHESTRATE_HOLD_STALE_HOURS`), or an
      old-format line of unknown age. Run `"{{SCRIPTS}}/hold.sh" check --repo {{REPO}} --release`:
@@ -130,6 +138,7 @@ deadline=$(( $(date +%s) + 8 * 3600 ))
 while :; do
   "$SCRIPTS/triage-tick.sh" beat --repo "$REPO" --deadline "$deadline" --pid $$
   "$SCRIPTS/merge-queue.sh" run-once --repo "$REPO"   # or one merge-bot pass
+  "$SCRIPTS/shipped-blocked.sh" --repo "$REPO" || true   # approved PRs not READY, with the reason (#269)
   if (( $(date +%s) >= deadline )); then
     if [[ "${MERGE_LOOP_RESTART:-0}" == 1 ]]; then deadline=$(( $(date +%s) + 8 * 3600 )); continue; fi
     "$SCRIPTS/triage-tick.sh" beat --repo "$REPO" --end bound
@@ -142,7 +151,9 @@ done
 
 Restart by itself (`MERGE_LOOP_RESTART=1`) only on the user's word; otherwise it ends with
 `beat --end bound`, and the next snapshot reports `merge_loop ended:bound` with the last merge,
-so the stop is seen at the next tick. A loop that dies without `--end` shows up as `stale` (no beat
+so the stop is seen at the next tick. A loop that greps only READY rows out of `pr-ready.sh` must
+still print the `shipped-blocked` lines (pass the rows with `--rows FILE` to avoid a second read):
+an approved, green PR held back by one unresolved thread is otherwise invisible in its log. A loop that dies without `--end` shows up as `stale` (no beat
 for `--loop-stale` seconds, default 1800) or `dead` (its PID is gone).
 
 **Red main from a known flake.** A known flake on `{{BASE}}` holds every merge until the failed job
