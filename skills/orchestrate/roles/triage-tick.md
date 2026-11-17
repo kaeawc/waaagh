@@ -41,7 +41,14 @@ from memory (advisory workflows, ready label, device slot types).
    - `main-unknown`: change nothing; an existing hold stays.
    - `merge-loop-<state>` (`absent`, `stale`, `dead`, `expired`, `ended`) while PRs are open: the
      merge loop is not running. Report it first; do not restart it yourself (see below).
-   - `dispatch=<n>`: report the `next=` issues and the free `slots` by type. New issues without a
+   - `dispatch=<n>`: first `"{{SCRIPTS}}/verify-on-main.sh" scan --repo {{REPO}} --apply` from
+     your checkout of `origin/{{BASE}}` (#258). It labels `verify-on-main` every open issue a merged
+     PR references without closing it ("Part of #N", "Refs #N") and no later result on a
+     default-branch SHA covers; the snapshot never counts those as dispatch work, so re-run the
+     snapshot after it labels any. Report its `verify` rows as one verify batch per platform
+     (`verify-on-main.sh batch`), its `closable` rows with their evidence links for the owner to
+     close (you close nothing), and its `failed` rows as implementation work again. Then
+     report the `next=` issues and the free `slots` by type. New issues without a
      route label go to the router first (`{{SCRIPTS}}/../routing.md`, `roles/router.md`); pass
      `--ready-label cloud-ready` so the queue holds only issues a cloud lane can take.
    - `host-hold` (in place of `dispatch=<n>`): the last line, `host HOLD|BACKOFF cause=<c>
@@ -59,6 +66,14 @@ from memory (advisory workflows, ready label, device slot types).
      and dispatch it again (`roles/cloud-dispatch.md`). A `capped=` issue reached
      `ORCHESTRATE_DISPATCH_CAP` (3) dispatches: route it to a local lane or report why its sessions
      end. `unknown=` could not be read: leave it for the next tick.
+     Under the stale hours, a dispatched issue with no PR is in flight only while its run is
+     (#260). In the main session (`list_runs` is its tool), about 15 minutes after `run_at` and
+     each tick from about an hour after, save `RemoteTrigger list_runs` for the trigger to a file
+     and run `cloud-dispatch.sh stalled --runs FILE --issue N`. `stalled`: read `get_run_log`,
+     expire with `--force` and redispatch with a new trigger, `--branch work/N-auto-2` and
+     `--note` naming what the run learned. `blocked` (`requires_action`) or `unfired`: re-fire
+     the same trigger, then disable it. `ended` (idle, no PR): read its final message first; a
+     question goes to `needs-decision`, not a redispatch. Details: `roles/cloud-dispatch.md`.
    - `cron-expiring`: the session cron dies within a day; report it so it is re-created.
    - `resolve-now=<n>`: the `threads` line's `resolve-now=` PRs have every unresolved review
      thread answered (an issue link or a pushed fix in the last reply). They are not repair
@@ -113,7 +128,8 @@ from memory (advisory workflows, ready label, device slot types).
 ## Report (under 150 words)
 The final verdict line; stale holds (PR, age, condition, reason) and any released; reruns
 requested (run id, issue noted); red runs needing a fix lane; merge loop state with `last_merge`;
-dispatch candidates by slot type; anything denied.
+dispatch candidates by slot type; verify-on-main batches by platform and closable issues with
+their evidence links; anything denied.
 
 ---
 

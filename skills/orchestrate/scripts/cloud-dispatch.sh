@@ -12,11 +12,11 @@
 #        cloud-dispatch.sh next [--count K] [--repo OWNER/REPO]
 #        cloud-dispatch.sh fixtures --issue N [--require] [--repo OWNER/REPO]
 #        cloud-dispatch.sh brief --issue N [--base B] [--gates TEXT] [--fixtures REFS] [--repo R]
-#                          [--brief-ref implement|repair [--pr P]]
+#                          [--brief-ref implement|repair [--pr P]] [--branch B] [--note TEXT]
 #        cloud-dispatch.sh payload --issue N --env ENV_ID --source URL [--model M] [--at EPOCH]
 #                          [--base B] [--gates TEXT] [--fixtures REFS|none] [--lead S]
 #                          [--stagger S] [--brief-ref implement|repair [--pr P]] [--no-blocker-check]
-#                          [--repo R]
+#                          [--branch B] [--note TEXT] [--repo R]
 #        cloud-dispatch.sh briefs install [--dir D] [--kind K] [--base B] [--gates TEXT] [--force]
 #        cloud-dispatch.sh briefs check [--dir D | --remote] [--kind K] [--base B] [--repo R]
 #        cloud-dispatch.sh created [--issue N [--kind repair --pr P]] [--response FILE]
@@ -26,6 +26,7 @@
 #        cloud-dispatch.sh record --issue N --trigger ID --run-at ISO [--kind repair --pr P] [--repo R]
 #        cloud-dispatch.sh stale [N...] [--hours H] [--cap K] [--repo OWNER/REPO]
 #        cloud-dispatch.sh expire --issue N [--hours H] [--cap K] [--force] [--repo OWNER/REPO]
+#        cloud-dispatch.sh stalled --runs FILE [--issue N] [--minutes M] [--repo OWNER/REPO]
 #        cloud-dispatch.sh status [--repo OWNER/REPO]
 #   queue add   append issues to the todo queue, skipping ones already queued or dispatched;
 #               prints "queued N" per issue added. queue list prints the issues still to dispatch;
@@ -50,6 +51,9 @@
 #               the one-line prompt instead: "Follow .claude/briefs/implement.md for issue #N
 #               (branch work/N-auto)." (repair: "... repair.md for PR #P (issue #N, branch
 #               work/N-auto)."), plus " Fixtures: REFS (commit verbatim)." when REFS name any.
+#               --branch B names another branch than work/N-auto (a redispatch after a stalled
+#               run, #260); --note TEXT appends "Note from an earlier run: TEXT" (what that run
+#               learned) to the brief or the one-line prompt.
 #   payload     one JSON object for RemoteTrigger create: name, run_once_at, and job_config.ccr
 #               {environment_id, session_context {sources [{git_repository {url}}], model}, events
 #               [{data {message: <brief>}}]}. --source may instead be a JSON object (one sources
@@ -102,6 +106,22 @@
 #               cap); exit 7 when that check could not read GitHub. Appends an "expired" row to
 #               the ledger, puts N back on the queue, and prints "expired #N dispatch K/CAP
 #               (trigger T); queued again". The next payload and record then take it as usual.
+#   stalled     judge one trigger's runs (#260), read offline from FILE: the JSON the main session
+#               saved from RemoteTrigger list_runs (an array of runs, or an object holding one as
+#               runs, data, items or results). Per run it reads id (or run_id, session_id),
+#               status, worker_status and last_event_at (also under a nested session object;
+#               ISO 8601 with or without fractions, or epoch seconds or milliseconds), and
+#               trigger_id to name the issue from the ledger (else --issue, else "#?"). Prints:
+#               "stalled #N run=R status=S/W last_event=<iso> silent=<m>m": running or active,
+#               but silent more than --minutes (default ORCHESTRATE_RUN_STALL_MINUTES, 45);
+#               "blocked #N run=R status=S/requires_action": stopped on a permission prompt;
+#               "ended #N run=R status=S/W last_event=<iso>": the run ended (idle, completed,
+#               failed): a needs-decision candidate, read its final message before anything;
+#               "unfired #N trigger=T run_at=<iso> late=<m>m": no run at all (--issue N, its
+#               live dispatch) more than ORCHESTRATE_RUN_UNFIRED_MINUTES (15) after run_at;
+#               "unknown #N run=R <what>" when a run cannot be judged (exit 7). A run still
+#               producing events, or a trigger not yet due, prints nothing. Fetch list_runs
+#               only for dispatches with no PR: stalled does not read GitHub.
 #   status      queued, dispatched, last dispatch, backoff remaining (and repairs, expired, when
 #               any); one "key value" per line.
 # Files in <state dir>: cloud-queue.txt (one issue per line), cloud-sessions.tsv (issue, trigger
@@ -115,7 +135,8 @@
 # blocker first).
 # Exit 9: a repair was recorded but its PR could not be marked repairing (review-ledger.sh repair).
 # Exit 3 also refuses expire (at the cap, or not stale); exit 7 also covers stale and expire when
-# the issue or its timeline could not be read.
+# the issue or its timeline could not be read, and stalled when FILE is not runs JSON or a run
+# could not be judged.
 # Exit 10: a repair was recorded and marked but its REPAIR-START marker was not posted.
 # Exit: 0 ok | 2 usage | 3 refused (dispatched, repair in flight) | 4 no template | 5 | 6 | 7 | 8 | 9 | 10
 set -euo pipefail
@@ -133,6 +154,8 @@ repo="" issue="" count=1 base="" gates="" env_id="" source_arg="" model="" at=""
 fixtures="" require=no brief_ref="" pr="" dir=. kind="" force=no remote=no response=""
 per_minute=5 seconds="" message="" trigger="" run_at="" blocker_check=yes
 hours=${ORCHESTRATE_DISPATCH_STALE_HOURS:-6} cap=${ORCHESTRATE_DISPATCH_CAP:-3}
+minutes=${ORCHESTRATE_RUN_STALL_MINUTES:-45} unfired=${ORCHESTRATE_RUN_UNFIRED_MINUTES:-15}
+runs_file="" branch="" note=""
 nums=()
 while (($#)); do
   case "$1" in
@@ -164,6 +187,10 @@ while (($#)); do
     --run-at) run_at=$2; shift 2 ;;
     --hours) hours=$2; shift 2 ;;
     --cap) cap=$2; shift 2 ;;
+    --minutes) minutes=$2; shift 2 ;;
+    --runs) runs_file=$2; shift 2 ;;
+    --branch) branch=$2; shift 2 ;;
+    --note) note=$2; shift 2 ;;
     -h | --help) orch_usage; exit 0 ;;
     [0-9]*) nums+=("${1#\#}"); shift ;;
     \#[0-9]*) nums+=("${1#\#}"); shift ;;
@@ -173,12 +200,13 @@ done
 case "$cmd" in
   queue) case "$sub" in add | drop | list) ;; *) usage ;; esac ;;
   briefs) case "$sub" in install | check) ;; *) usage ;; esac ;;
-  next | fixtures | brief | payload | pace | backoff | record | created | stale | expire | status) ;;
+  next | fixtures | brief | payload | pace | backoff | record | created | stale | expire | stalled | status) ;;
   -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
 is_num() { [[ "$1" =~ ^[0-9]+$ ]]; }
-for v in "$count" "$lead" "$stagger" "$per_minute" "$hours" "$cap"; do is_num "$v" || usage; done
+for v in "$count" "$lead" "$stagger" "$per_minute" "$hours" "$cap" "$minutes" "$unfired"; do is_num "$v" || usage; done
+[[ "$branch" != *[[:space:]]* ]] || usage
 ((cap >= 1)) || usage
 [[ -z "$issue" ]] || is_num "$issue" || usage
 [[ -z "$at" ]] || is_num "$at" || usage
@@ -308,13 +336,14 @@ check_blockers() {
 
 # prompt_line: the one-line prompt for a brief kept in the repository (--brief-ref).
 prompt_line() {
-  local line
+  local line b=${branch:-work/$issue-auto}
   if [[ "$brief_ref" == repair ]]; then
-    line="Follow .claude/briefs/repair.md for PR #$pr (issue #$issue, branch work/$issue-auto)."
+    line="Follow .claude/briefs/repair.md for PR #$pr (issue #$issue, branch $b)."
   else
-    line="Follow .claude/briefs/implement.md for issue #$issue (branch work/$issue-auto)."
+    line="Follow .claude/briefs/implement.md for issue #$issue (branch $b)."
   fi
   if [[ -n "$fixtures" && "$fixtures" != none ]]; then line="$line Fixtures: $fixtures (commit verbatim)."; fi
+  if [[ -n "$note" ]]; then line="$line Note from an earlier run: $note"; fi
   printf '%s\n' "$line"
 }
 
@@ -347,11 +376,14 @@ render_brief() {
   if [[ -n "$fixtures" && "$fixtures" != none ]]; then
     fix=" Commit the captured fixtures from $fixtures verbatim; never hand-write, trim or regenerate them."
   fi
-  jq -Rrs --arg repo "$repo" --arg n "$issue" --arg base "$base" --arg gates "$gates" --arg fix "$fix" '
+  jq -Rrs --arg repo "$repo" --arg n "$issue" --arg base "$base" --arg gates "$gates" --arg fix "$fix" \
+    --arg branch "$branch" --arg note "$note" '
     (if $fix != "" and (test("\\{\\{FIXTURES\\}\\}") | not) then sub("\n*$"; "\n" + ($fix | ltrimstr(" ")) + "\n") else . end)
     | gsub("\\{\\{REPO\\}\\}"; $repo) | gsub("\\{\\{ISSUE\\}\\}"; $n)
     | gsub("\\{\\{BASE\\}\\}"; $base) | gsub("\\{\\{GATES\\}\\}"; $gates)
-    | gsub("\\{\\{FIXTURES\\}\\}"; $fix)' "$tpl"
+    | gsub("\\{\\{FIXTURES\\}\\}"; $fix)
+    | (if $branch != "" then split("work/" + $n + "-auto") | join($branch) else . end)
+    | (if $note != "" then sub("\n*$"; "\nNote from an earlier run: " + $note + "\n") else . end)' "$tpl"
 }
 
 do_record() {
@@ -570,6 +602,72 @@ case "$cmd" in
     printf '%s\t%s\t%s\t%s\texpired\n' "$issue" "$trig" "$ra" "$(orch_iso "$now")" >>"$ledger"
     grep -qxF "$issue" "$queue" || printf '%s\n' "$issue" >>"$queue"
     echo "expired #$issue dispatch $k/$cap (trigger $trig); queued again"
+    ;;
+  stalled)
+    [[ -n "$runs_file" ]] || { echo "cloud-dispatch.sh: stalled needs --runs FILE (saved from RemoteTrigger list_runs)" >&2; exit 2; }
+    # One row per run, unit-separated so empty fields do not collapse: kind id status worker
+    # last_iso silent_min trigger_id what. Missing fields read as empty; kind is stalled,
+    # blocked, ended, running or unknown.
+    rows=$(jq -r --argjson now "$now" --argjson lim "$((minutes * 60))" '
+      def g($k): [.[$k]?, (.session? | objects | .[$k]?)] | map(select(. != null and . != "")) | .[0];
+      def ts: if type == "number" then (if . > 1e12 then . / 1000 else . end | floor)
+        elif type == "string" then (sub("\\.[0-9]+"; "") | sub("[+-]00:?00$"; "Z")
+          | try fromdateiso8601 catch null) else null end;
+      def low: if . == null then "" else tostring | ascii_downcase end;
+      (if type == "array" then .
+       elif type == "object" then (.runs // .data // .items // .results
+         // (if has("id") or has("status") or has("worker_status") then [.] else null end))
+       else null end) as $runs
+      | if ($runs | type) != "array" then error("no runs") else $runs[] end
+      | select(type == "object")
+      | ((g("id") // g("run_id") // g("session_id") // "?") | tostring) as $id
+      | (g("status") | low) as $st | (g("worker_status") | low) as $w
+      | (g("last_event_at") | ts) as $last
+      | ((g("trigger_id") // g("routine_id") // "") | tostring) as $trig
+      | (if $last == null then "" else ($last | todate) end) as $iso
+      | (if $last == null then "" else ((($now - $last) / 60) | floor | tostring) end) as $silent
+      | (if $w == "requires_action" or $st == "requires_action" then ["blocked", ""]
+         elif ($w | IN("idle", "stopped", "ended", "terminated", "exited"))
+           or ($st | IN("idle", "completed", "complete", "succeeded", "success", "failed", "error",
+                        "errored", "ended", "archived", "terminated", "cancelled", "canceled", "expired"))
+           then ["ended", ""]
+         elif $w == "running" or ($st | IN("running", "active", "in_progress", "started")) then
+           (if $last == null then ["unknown", "no last_event_at"]
+            elif $now - $last > $lim then ["stalled", ""] else ["running", ""] end)
+         else ["unknown", "status \(if $st == "" then "-" else $st end)/\(if $w == "" then "-" else $w end)"] end) as $k
+      | [$k[0], $id, $st, $w, $iso, $silent, $trig, $k[1]] | map(gsub("[\u001f\n]"; " ")) | join("\u001f")' "$runs_file" 2>/dev/null) ||
+      { echo "cloud-dispatch.sh: $runs_file is not list_runs JSON (an array of runs, or an object holding one)" >&2; exit 7; }
+    bad=0
+    while IFS=$'\x1f' read -r k id st w iso silent trig what; do
+      [[ -n "$k" ]] || continue
+      n=$issue
+      if [[ -z "$n" && -n "$trig" ]]; then
+        n=$(awk -F'\t' -v t="$trig" '$2 == t && $5 != "expired" { n = $1 } END { print n }' "$ledger")
+      fi
+      sw="${st:--}/${w:--}"
+      case "$k" in
+        stalled) echo "stalled #${n:-?} run=$id status=$sw last_event=$iso silent=${silent}m" ;;
+        blocked) echo "blocked #${n:-?} run=$id status=${st:--}/requires_action" ;;
+        ended) echo "ended #${n:-?} run=$id status=$sw last_event=${iso:--}" ;;
+        unknown) echo "unknown #${n:-?} run=$id $what"; bad=1 ;;
+      esac
+    done <<<"$rows"
+    if [[ -z "$rows" ]]; then
+      # No run at all: a run-once trigger that never fired (#260). Judge it from the ledger.
+      row=""
+      if [[ -n "$issue" ]]; then row=$(live | awk -F'\t' -v n="$issue" '$1 == n'); fi
+      if [[ -z "$row" ]]; then
+        echo "unknown #${issue:-?} no runs, and no live dispatch to judge them by (pass --issue N)"; bad=1
+      else
+        IFS=$'\t' read -r _ trig ra _ <<<"$row"
+        if e=$(iso_epoch "$ra" 2>/dev/null) && ((now - e > unfired * 60)); then
+          echo "unfired #$issue trigger=$trig run_at=$ra late=$(((now - e) / 60))m"
+        elif [[ -z "${e:-}" ]]; then
+          echo "unknown #$issue no runs, unreadable run_at $ra"; bad=1
+        fi
+      fi
+    fi
+    if ((bad)); then exit 7; fi
     ;;
   status)
     until_t=0
