@@ -54,6 +54,30 @@ only the gate job, which read the same `abandoned` result and failed again: a CI
   self-hosted on the base branch, self-hosted runners offline (`gh api repos/O/R/actions/runners`),
   or a hosted-runner outage on githubstatus. Report it once for all the PRs, not once per PR.
 
+## A package mirror outage: one outage, one fix
+
+Measured once: an Ubuntu apt mirror stalled for over an hour. Two required checks ran a plain
+`apt-get update && apt-get install`, so main and 15 open PRs went red together and the merge queue
+stopped. The one job with a bounded install helper and fallback mirror was classified rerun; the
+plain-apt steps had no signature, came back "unknown", and every rerun failed the same way.
+
+- `decide --log` recognises a failed package fetch (`failure-triage.sh mirror`: apt `Failed to fetch`,
+  `Temporary failure resolving`, `Unable to connect to ...ubuntu.com`, `Hash Sum mismatch`, `Could not
+  get lock`; pip, npm and Maven/Gradle network errors) before any verdict. It prints `rerun
+  mirror-outage mirror=<kind>` once; a second failure on the same head prints `triage
+  mirror-outage-persists`: the install path is the fix, not the PR's code. Each hit is logged to
+  `mirror-hits.tsv`.
+- `failure-triage.sh outage` prints `mirror-outage suspect prs=<N,...>` when two or more PRs hit it
+  within the hour, and `decide` adds `pool=suspect prs=...`. Report it as one line, hold the
+  per-PR reruns, fix the install path once (one PR), then rerun the failed PRs in a batch.
+- **Required checks must not depend on a live public mirror.** Prefer, in order: a tool preinstalled
+  on the runner image; a pinned release download with a checksum (and a cache); or one shared,
+  bounded install helper (retries, timeouts, a fallback mirror) that every job calls instead of
+  plain `apt-get`. A plain `apt-get update && apt-get install` in a required check is a defect to
+  fix once the outage is over.
+- waaagh's own `test.yml` follows this: bats comes from a pinned, commit-checked clone, and
+  shellcheck and jq are on the runner image; nothing in it apt-installs.
+
 A pass after a rerun does not make a check healthy forever: a check that needs reruns on more than
 one PR is a flaky gate, worth an issue. A green that came only from a rerun still counts as a
 rerun under Main health in `SKILL.md`.
