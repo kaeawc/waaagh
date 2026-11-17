@@ -33,7 +33,9 @@ The orchestrator settles answered threads from the local checkout:
 
 A thread counts as answered when its last comment is a reply from someone other than the thread's
 starter and it either links an issue (`#N` or an issues URL, not the PR's own number) or names a
-commit that is on the PR (a 7-40 character sha or a commit URL). Everything else stays `open`: no
+commit that is on the PR (a 7-40 character sha or a commit URL), or, on a thread whose first
+comment carries an optional marker, starts "Optional" or "Declined" (`declined`: an optional
+finding answered without a fix after the fix round, `review-rounds.md`). Everything else stays `open`: no
 reply yet, the reviewer spoke last (the answer was disputed), or a reply that names neither.
 `resolve` runs `thread-resolve.sh` per answered thread, which calls GraphQL
 `resolveReviewThread`, reads the thread back, and logs it to `<state dir>/thread-actions.log`; it

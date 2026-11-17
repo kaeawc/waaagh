@@ -105,7 +105,7 @@ JSON
   [ "${lines[0]}" = "$(printf 'first\tPRRT_first\ta.sh:3\tclaude\tu1\tOff by one')" ]
   [ "${lines[1]}" = "$(printf 'later\tPRRT_later\tb.sh:9\tclaude\tu2\tNit: page dropped')" ]
   [[ "${lines[2]}" == own$'\t'PRRT_own* ]]
-  [ "$stderr" = "pr=7 unresolved=3 first=1 later=1 own=1 round-end=2026-11-04T10:00:00Z" ]
+  [ "$stderr" = "pr=7 unresolved=3 first=1 later=1 own=1 optional=0 round-end=2026-11-04T10:00:00Z" ]
 }
 
 @test "list: --round-end moves the round boundary" {
@@ -114,7 +114,7 @@ JSON
   [ "$status" -eq 0 ]
   [[ "${lines[1]}" == first$'\t'PRRT_later* ]]
   stderr=$(cat "$FX/err")
-  [[ "$stderr" == *"first=2 later=0 own=1 round-end=2026-11-04T15:30:00Z" ]]
+  [[ "$stderr" == *"first=2 later=0 own=1 optional=0 round-end=2026-11-04T15:30:00Z" ]]
 }
 
 @test "list: follows further pages of review threads" {

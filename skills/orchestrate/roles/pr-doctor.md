@@ -32,8 +32,13 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    `follow-up #N` on the thread, resolves it, and routes the issue `cloud-ready` (an appended
    issue keeps its route). Exit 5 or 9: rerun the same command once; it reconciles and never
    files twice.
+   **Optional findings after the fix round** (`{{SCRIPTS}}/../review-rounds.md`). An `optional`
+   thread (an optional marker: yellow or purple circle, "(optional)") after round 1 is answered,
+   not fixed: `{{SCRIPTS}}/review-followup.sh decline --repo {{REPO}} --pr <n> --thread <id>
+   --reason "<why it can wait>"` replies and resolves it. Never start a second fix round for one.
 3. **Base.** Branch conflicts with or lacks `{{BASE}}` and its checks ran on a stale base: merge
-   `origin/{{BASE}}` in (never rebase, never force-push). Generated-file conflicts
+   `origin/{{BASE}}` in (never rebase, never force-push), locally, so it goes out in the fix
+   pass's one push (step 6), never as a push of its own. Generated-file conflicts
    ({{GENERATED_FILES}}): take `{{BASE}}`'s side and regenerate. Anything else: resolve only when
    both sides' intent is unambiguous, otherwise abort and report.
 4. **CI failures.** Get each failed job's log with `{{SCRIPTS}}/job-log.sh --repo {{REPO}} --pr <n>
@@ -62,13 +67,15 @@ Your prompt gives: the PR numbers and their worktrees, and the feedback policy (
    first edit of a pass, hold the PR: `{{SCRIPTS}}/review-ledger.sh fix --repo {{REPO}} --pr <n>
    --note "<what the pass fixes>"`, so the merge loop cannot merge it under you (#206); only the
    orchestrator's next `ship` verdict releases it.
-6. **Commit and push** after green local gates and a clean, intended-files-only status. Right
-   before each push, `{{SCRIPTS}}/claim-check.sh open --repo {{REPO}} --pr <n>`: anything but exit
+6. **Commit and push ONCE** after green local gates and a clean, intended-files-only status: the
+   pass's fixes and the base merge leave in one batched push, never thread by thread, because a
+   reviewer bot re-reviews every push (`{{SCRIPTS}}/../review-rounds.md`). Right
+   before the push, `{{SCRIPTS}}/claim-check.sh open --repo {{REPO}} --pr <n>`: anything but exit
    0 (merged, closed, or unreadable) means do not push; report it. Plain push; a rejected push
    means someone else is writing — stop on that PR.
 7. **Reply** in one short comment per PR saying what changed, and one line for each class-(c)
    item worth a reason. Do not resolve threads you did not address. End each thread reply with
-   `fixed in <sha>` (pushed) or `follow-up #N`; then `{{SCRIPTS}}/thread-sweep.sh resolve --repo
+   `fixed in <sha>` (pushed), `follow-up #N`, or `Optional, not fixed: <reason>`; then `{{SCRIPTS}}/thread-sweep.sh resolve --repo
    {{REPO}} --pr <n>` resolves the answered threads (`{{SCRIPTS}}/../thread-resolution.md`).
 
 ## Report (under 450 words)

@@ -33,7 +33,7 @@
 #            resolved flag, or any other shape, is unreadable (exit 3), never "0".
 #   thread-nodes  the PR as the GraphQL pull request node thread-sweep.sh classifies: {number,
 #            commits{nodes[{commit{oid,committedDate}}]}, reviewThreads{pageInfo{hasNextPage:false},
-#            nodes[{id, isResolved, isOutdated, starter{nodes[{author{login},url}]}, latest{totalCount,
+#            nodes[{id, isResolved, isOutdated, starter{nodes[{author{login},url,body}]}, latest{totalCount,
 #            nodes[{author{login},body,createdAt}]}, comments{nodes[{body}]} (the last 100)}]}}. Flags come
 #            from ccr/review_threads as in threads; bodies and authors from GET pulls/<n>/comments,
 #            commits from GET pulls/<n>/commits (neither is read when the PR has no thread). A
@@ -212,7 +212,7 @@ thread_nodes() {
          | (if $m == null then error("thread names no comment of the PR") else ($m.in_reply_to_id // $m.id) end) as $root
          | ([$all[] | select((.in_reply_to_id // .id) == $root)] | sort_by(.created_at // "", .id)) as $c
          | {id: ($root | tostring), isResolved: ._r, isOutdated: ._o,
-            starter: {nodes: [{author: {login: ($c[0] | login)}, url: ($c[0].html_url // "-")}]},
+            starter: {nodes: [{author: {login: ($c[0] | login)}, url: ($c[0].html_url // "-"), body: ($c[0].body // "")}]},
             latest: {totalCount: ($c | length), nodes: [{author: {login: ($c[-1] | login)}, body: ($c[-1].body // ""), createdAt: ($c[-1].created_at // null)}]},
             comments: {nodes: [$c[-100:][] | {body: (.body // "")}]}}]}}' 2>/dev/null ||
     unreadable "PR $pr: review threads could not be tied to their comments"

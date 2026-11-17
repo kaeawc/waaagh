@@ -10,6 +10,10 @@
 #            open PR, or on PR N:   pr  thread-id  answer  ref  url
 #            answer: issue  the last reply links an issue (`#N` or an issues/N URL; not the PR itself)
 #                  | fix    the last reply names a commit of the PR (a 7-40 hex sha or a commit URL)
+#                  | declined  an optional finding answered without a fix (#257): the starter's
+#                           comment carries an optional marker (review-followup.sh list) and the
+#                           last reply starts "Optional" or "Declined" (review-followup.sh
+#                           decline writes "Optional, not fixed: <reason>"); ref `optional`
 #                  | stalled  our own account replied last, after the PR's head commit, and the
 #                           reply names neither: an "agreed, proposed fix" reply with no push (#209).
 #                           A reply that starts "Disagree" is a stated disagreement and stays open.
@@ -67,7 +71,7 @@ trap 'rm -rf "$work"' EXIT
 
 fields='number commits(last:100){nodes{commit{oid committedDate}}}
   reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated
-    starter: comments(first:1){nodes{author{login} url}}
+    starter: comments(first:1){nodes{author{login} url body}}
     latest: comments(last:1){totalCount nodes{author{login} body createdAt}}}}'
 # prs_graphql -> a JSON array of pull request nodes (every open PR, or PR $pr). A failed read
 # returns gh-read.sh's exit code, with its stderr in $work/err.
@@ -148,7 +152,9 @@ fi
 
 # One TSV row per unresolved, current thread, then a "TRUNC<TAB>n" row per PR whose threads did
 # not fit in one page.
-rows=$(jq -r --arg self "$self" "$defs"'
+# The optional-finding markers: the same pattern as review-followup.sh's optional_re.
+optional_re='🟡|🟣|\(optional\)|<!--\s*severity:\s*(nit|optional|pre-existing)\s*-->'
+rows=$(jq -r --arg self "$self" --arg re "$optional_re" "$defs"'
   def answer($n; $oids; $h):
     (.latest.nodes[0] // {}) as $l
     | if (.latest.totalCount // 0) < 2 or (($l.author.login // "") == (.starter.nodes[0].author.login // "")) then ["open", "-"]
@@ -158,6 +164,8 @@ rows=$(jq -r --arg self "$self" "$defs"'
       | ([$b | scan("\\b[0-9a-fA-F]{7,40}\\b") | ascii_downcase | . as $s
           | select(any($oids[]; startswith($s)))] | first) as $sha
       | if $iss then ["issue", "#\($iss)"] elif $sha then ["fix", $sha[0:12]]
+        elif ((.starter.nodes[0].body // "") | test($re; "i"))
+          and ($b | test("^[\\s*_>]*(optional|declined)\\b"; "i")) then ["declined", "optional"]
         elif $self != "" and ($l.author.login // "") == $self and late($h)
           and ($b | test("^[\\s*_>]*disagree"; "i") | not) then ["stalled", "-"]
         else ["open", "-"] end
