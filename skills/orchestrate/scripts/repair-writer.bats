@@ -184,6 +184,10 @@ calls() { cat "$FX/calls" 2>/dev/null || true; }
   B="$SCRIPTS/../briefs/implement.md"
   has "$B" '"REPAIR-START"'
   has "$B" "Never force-push."
+  R="$SCRIPTS/../briefs/repair.md"
+  has "$R" "newer REPAIR-START"
+  has "$R" "merge-base --is-ancestor"
+  has "$SCRIPTS/../roles/cloud-session-brief.md" '"REPAIR-START"'
   has "$SCRIPTS/../roles/cloud-dispatch.md" "repair-writer.sh"
   has "$SCRIPTS/../roles/triage-tick.md" "repair-writers=<n>"
   has "$SCRIPTS/../SKILL.md" "repair-writer.sh mark"

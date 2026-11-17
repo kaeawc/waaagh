@@ -76,8 +76,8 @@ issue then gets a local route for that remainder (`issue-route.sh set`), never a
 - **Echo cost.** Every create response repeats the prompt about four times (derived_state,
   job_config, session_request, events): a 900-character brief costs about 3k tokens of orchestrator
   context per dispatch, a one-line `--brief-ref` prompt about 100. So dispatch with `--brief-ref`
-  once the briefs are in the repository; otherwise keep the brief short (the template is under 1500
-  characters; `cloud-dispatch.bats` holds it there). Never paste a response anywhere and keep only
+  once the briefs are in the repository; otherwise keep the brief short (the template is far under the 65,536-character limit on a routine run's text;
+  `cloud-dispatch.bats` holds it to half that). Never paste a response anywhere and keep only
   the trigger id: a response that reaches you as text or a file (an API call rather than the tool)
   goes through `cloud-dispatch.sh created --issue N`, which prints `created <trigger> <run_at>`,
   records it and drops the echoed prompt.
@@ -121,7 +121,7 @@ appends a row to `versions.tsv` (the bump rule, `../briefs/README.md`):
    --kind repair --pr P` also posts one marker comment on P, starting `REPAIR-START session <trigger>:`
    with the hidden key `<!-- waaagh:repairing pr=P session=<trigger> -->` (`repair-writer.sh mark`;
    it reads P's comments over REST first and posts nothing when the key is there). The implement
-   brief (v4) reads P's comments before every push and stops at a `REPAIR-START`. Exit 10 means
+   brief (v4) reads P's comments before every push and stops at a `REPAIR-START`; the repair brief (v8) stops at a newer one and also at a head that is not the dispatched SHA or a descendant of it. Exit 10 means
    the row and the `repairing` mark stand but the marker was not posted: run the `repair-writer.sh
    mark` line it prints before the repair session starts. The triage tick runs `repair-writer.sh
    check`: a `repair-writers` line names a PR under repair whose commits since the dispatch carry

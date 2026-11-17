@@ -4,7 +4,8 @@ Cloud lane for {{REPO}} issue #{{ISSUE}}. One pass; you cannot message the orche
 3. Branch `work/{{ISSUE}}-auto` from `origin/{{BASE}}`. Implement the issue, with tests.{{FIXTURES}}
 4. Gates, all passing before you push: {{GATES}}.
 5. Open a PR to `{{BASE}}`, ready for review, not as a draft (a draft is never merged). Body starts `Closes #{{ISSUE}}` only if everything the issue asks is verified here; if any part needs a device, simulator or Xcode to verify, use `Part of #{{ISSUE}}` and list what is left to verify locally.
-6. Get CI green (fix what your change broke). Then one review round: address the review comments once and stop.
-7. Do not merge. No attribution lines (no Co-Authored-By, no "Generated with").
+6. One writer per branch: before every push once your PR is open, also when a CI, review or bot event wakes you later, read the PR's comments. If one starts "REPAIR-START", a repair session owns the branch: push nothing more, post nothing, and stop. Never force-push.
+7. Get CI green (fix what your change broke). Then one review round: address the review comments once and stop.
+8. Do not merge. No attribution lines (no Co-Authored-By, no "Generated with").
 If blocked, comment once on #{{ISSUE}} saying what blocked you, and stop.
 Never kill by pattern (no `pkill`, `pkill -f`, `killall`, `kill $(pgrep ...)`): it can match your own shell. Kill only PIDs you started. The container is small: if local tests hit their wall timeout, apply the container settings in your gates (longer timeout, fewer workers) before calling it a failure.
