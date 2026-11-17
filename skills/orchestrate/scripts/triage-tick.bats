@@ -161,6 +161,15 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   [ "$status" -eq 2 ]
 }
 
+@test "red main classified RERUN_DONT_FIX is a rerun candidate, like main-health (#275)" {
+  red_runs; echo '[]' >"$FX/issues.json"
+  echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
+  echo "RERUN_DONT_FIX: transient" >"$FX/class-11"
+  run snap --classifier classify
+  [ "${lines[0]}" = "verdict act flake-rerun" ]
+  [ "$(snap_line main)" = "main red bbbbbbbbb runs=11:rerun-dont-fix action=rerun" ]
+}
+
 @test "red main with a classified known flake asks for a rerun; anything else asks for a fix lane" {
   red_runs; echo '[]' >"$FX/issues.json"
   echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"

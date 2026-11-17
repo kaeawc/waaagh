@@ -299,3 +299,20 @@ if [[ "${ORCHESTRATE_GH_BUDGET:-0}" == 1 ]]; then
   _orch_shim="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gh-shim"
   case ":$PATH:" in *":$_orch_shim:"*) ;; *) export PATH="$_orch_shim:$PATH" ;; esac
 fi
+
+# --- Rerun verdicts and reruns.log (#275): one definition for main-health, triage-tick and
+# failure-triage, so they cannot disagree about what a classifier verdict means. ---
+# orch_verdict_rerunnable VERDICT: exit 0 when the verdict says "re-run, do not fix". Case-insensitive,
+# `_` read as `-`.
+orch_verdict_rerunnable() {
+  local v
+  v=$(printf '%s' "${1-}" | tr '[:upper:]_' '[:lower:]-')
+  case "$v" in flake | known-flake | infra | rerun | rerun-dont-fix) return 0 ;; esac
+  return 1
+}
+# orch_rerun_seen RUN_ID: exit 0 when the run's latest record in the log file named by the caller's
+# $reruns (its state dir's reruns.log) is anything but a refused rerun. An `intent` with no outcome
+# (the answer was lost) counts as re-run: reconciled by the snapshot, never replayed.
+orch_rerun_seen() {
+  [[ -f "${reruns:-}" ]] && awk -F'\t' -v r="run=$1" '$2 == r { last = $NF } END { exit !(last != "" && last !~ /^(full-)?failed/) }' "$reruns"
+}
