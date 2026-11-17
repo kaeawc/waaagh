@@ -14,7 +14,8 @@
 #   linked worktrees (count, and size via du when --max-gb is given) and exit 3 when over it.
 #   Lane build dirs (#213, _build_dirs.sh): a lane-private build output dir whose worktree no
 #   longer exists (removed here or by hand) is listed as a build row and, with --apply, removed,
-#   unless a process is working inside it. Skipped when processes cannot be read.
+#   unless a process is working inside it. Shared per-commit builds (#215, shared-build.sh) that are
+#   partial or past the keep / size cap are build rows too. Skipped when processes cannot be read.
 # Output (TSV): verdict  path  reason      verdict: remove | removed | keep | build | budget
 # Removal is `git worktree remove <path>` (no --force); a refusal is reported as keep. Process
 # working directories are read with lsof, else /proc (proc_cwds in _slots.sh), and read again

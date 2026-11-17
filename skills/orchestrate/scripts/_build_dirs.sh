@@ -22,7 +22,12 @@
 #              id ORCHESTRATE_LANE_ID, else the worktree's basename and a checksum of its path. The
 #              dir holds .worktree (the worktree path); wt-cleanup.sh removes a lane dir once its
 #              worktree is gone. lane_build_dir is the one place the directory is derived: keep it
-#              that way (verification lanes sharing one build per commit, #215, extend it there).
+#              that way.
+#   shared     shared_build_dir (#215): verification and device lanes on one tree fingerprint share
+#              one build of their artifacts, <root>/shared/<fingerprint>--<name> (shared-build.sh).
+#              Only artifacts are shared: TMPDIR and tool caches stay in the lane dir.
+#              shared_builds_sweep prunes partial builds and builds past the keep / size cap, as
+#              build rows in wt-cleanup.sh.
 # The per-repo gate environment (gate-env.sh) is sourced after these exports and can override them.
 
 _build_dirs_here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -152,5 +157,110 @@ build_dirs_sweep() {
       printf 'build\t%s\tremovable: worktree %s is gone (dry run: --apply removes it)\n' "$d" "$wt"
     fi
   done
+  shared_builds_sweep "$apply" "$cwds"
+  return 0
+}
+
+# --- Shared builds per tree fingerprint (#215) ---
+# A shared build is <shared root>/<fingerprint>--<name>: the artifacts at their worktree-relative
+# paths, read-only, plus .done (TAB rows: fingerprint, name, built_at, lane) and .used (the epoch
+# of its last reuse). It is built in <key>.tmp-<builder PID> and renamed into place once .done is
+# written, so a directory without .done is a failed or partial build. <key>.lock is the build lock.
+
+shared_build_root() { echo "$(build_root)/shared"; }
+
+# shared_build_dir FINGERPRINT NAME: the shared artifacts directory for one build of one tree.
+shared_build_dir() { echo "$(shared_build_root)/$1--$2"; }
+
+# shared_build_shares CLASS: 0 when lanes of CLASS share builds per commit. The sharing classes are
+# ORCHESTRATE_BUILD_SHARE (space or comma separated; default "verify device"; off / none / 0: none).
+# Every other class (implementation lanes: impl) keeps the lane-private build of #213.
+shared_build_shares() {
+  local c=${1:-} s=${ORCHESTRATE_BUILD_SHARE-verify device}
+  case "$s" in off | none | 0) return 1 ;; esac
+  [[ -n "$c" && " ${s//,/ } " == *" $c "* ]]
+}
+
+# shared_build_complete DIR FINGERPRINT: DIR holds a finished build of FINGERPRINT.
+shared_build_complete() {
+  [[ -f "$1/.done" ]] || return 1
+  [[ "$(awk -F'\t' '$1 == "fingerprint" { print $2; exit }' "$1/.done" 2>/dev/null || true)" == "$2" ]]
+}
+
+# _sb_last_use DIR: the epoch DIR was last built or reused (0 when unknown).
+_sb_last_use() {
+  local u
+  u=$(sed -n 1p "$1/.used" 2>/dev/null || true)
+  [[ "$u" =~ ^[0-9]+$ ]] || u=$(awk -F'\t' '$1 == "built_at" { print $2; exit }' "$1/.done" 2>/dev/null || true)
+  [[ "$u" =~ ^[0-9]+$ ]] || u=0
+  echo "$u"
+}
+
+# shared_build_remove DIR: remove a shared build; its files are read-only, so make them writable first.
+shared_build_remove() {
+  chmod -R u+w "$1" 2>/dev/null || true
+  rm -rf "$1" 2>/dev/null && [[ ! -e "$1" ]]
+}
+
+# _sb_drop APPLY CWDS DIR REASON: one build row for DIR, removed with APPLY = yes unless in use.
+_sb_drop() {
+  if printf '%s\n' "$2" | awk -v d="$3" '$0 == d || index($0, d "/") == 1 { f = 1 } END { exit !f }'; then
+    printf 'build\t%s\tkeep: a process is working inside it (%s)\n' "$3" "$4"
+  elif [[ "$1" == yes ]]; then
+    if shared_build_remove "$3"; then
+      printf 'build\t%s\tremoved: %s\n' "$3" "$4"
+    else
+      printf 'build\t%s\tkeep: could not remove it (%s)\n' "$3" "$4"
+    fi
+  else
+    printf 'build\t%s\tremovable: %s (dry run: --apply removes it)\n' "$3" "$4"
+  fi
+}
+
+# shared_builds_sweep APPLY CWDS [PIN]: build rows for shared builds to drop, removed with APPLY = yes
+# unless a process works inside one (CWDS as in build_dirs_sweep). Dropped: a staging dir whose
+# builder is gone and a dir with no .done (failed or partial builds); and finished builds beyond the
+# cap, newest use first: the newest is always kept, then up to ORCHESTRATE_SHARED_BUILD_KEEP builds
+# (default 3) while their total size stays within ORCHESTRATE_SHARED_BUILD_MAX_MB (default 20480).
+# PIN (a build just made) counts as the newest. Locks and a live builder's staging dir are left alone.
+shared_builds_sweep() {
+  local apply=$1 cwds=$2 root d name pid list="" keep cap n=0 total=0 size use
+  root=$(shared_build_root)
+  [[ -d "$root" ]] || return 0
+  keep=${ORCHESTRATE_SHARED_BUILD_KEEP:-3} cap=${ORCHESTRATE_SHARED_BUILD_MAX_MB:-20480}
+  [[ "$keep" =~ ^[0-9]+$ ]] || keep=3
+  [[ "$cap" =~ ^[0-9]+$ ]] || cap=20480
+  for d in "$root"/*; do
+    [[ -d "$d" ]] || continue
+    name=${d##*/}
+    case "$name" in
+      *.lock) continue ;;
+      *.tmp-*)
+        pid=${name##*.tmp-}
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then continue; fi
+        _sb_drop "$apply" "$cwds" "$d" "partial shared build, builder $pid is gone"
+        continue
+        ;;
+    esac
+    if [[ ! -f "$d/.done" ]]; then
+      _sb_drop "$apply" "$cwds" "$d" "shared build with no completion marker"
+      continue
+    fi
+    use=$(_sb_last_use "$d")
+    [[ "$d" != "${3:-}" ]] || use=99999999999 # the build just made sorts first: never pruned
+    list+="$use"$'\t'"$d"$'\n'
+  done
+  [[ -n "$list" ]] || return 0
+  while IFS=$'\t' read -r use d; do
+    [[ -n "$d" ]] || continue
+    n=$((n + 1))
+    size=$(du -sk "$d" 2>/dev/null | awk '{ print $1 }' || true)
+    [[ "$size" =~ ^[0-9]+$ ]] || size=0
+    if ((n == 1)) || { ((n <= keep)) && ((total + size <= cap * 1024)); }; then
+      total=$((total + size))
+      continue
+    fi
+    _sb_drop "$apply" "$cwds" "$d" "shared build over the cap ($keep builds, $cap MB; last used $use)"
+  done < <(printf '%s' "$list" | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2r)
   return 0
 }

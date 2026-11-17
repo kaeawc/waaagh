@@ -84,6 +84,38 @@ and costs a whole lane run to diagnose. So this is not left to each lane's judgm
   unless a process is working inside it. Only directories under the build root that have a
   `.worktree` marker naming a missing path are touched.
 
+## One build per commit for verification lanes
+
+A manual-test round once started four device lanes on the same main commit. Each built its own
+copy in its own worktree: two or three built the same Android debug APK, plus the iOS runner. Host
+load reached 161 on 16 CPUs, which slowed every lane and the CI runners on the host. Lanes that
+verify the same tree need its artifacts once, not once each:
+
+- **Build through `scripts/shared-build.sh`** in verification and device lanes:
+  `shared-build.sh --class device --name android-debug --artifact app/build/outputs/apk/debug --
+  gate-slot.sh -- ./gradlew assembleDebug`. The last stdout line is
+  `shared-build<TAB>built|reused|private<TAB><dir>`; point the test at `<dir>` (an APK path
+  override, a prebuilt runner path). `--copy DEST` gives a writable copy for a tool that writes
+  next to its inputs.
+- **Keyed by tree fingerprint** (`fingerprint.sh`: commit plus any uncommitted diff) and a build
+  name: `<state dir>/build/shared/<fingerprint>--<name>`. A lane on another commit, or with local
+  changes, builds its own.
+- **The first lane builds, under a lock**, into a staging dir, and renames it into place after
+  writing the `.done` marker. Later lanes wait (bounded, `--wait`; exit 75) for the marker, then
+  reuse the read-only artifacts without running the build. A failed build, a missing `--artifact`
+  or a killed builder leaves no marker, so the next lane rebuilds. A lock whose holder died, or
+  older than `ORCHESTRATE_SHARED_BUILD_MAX_AGE` (2 h), is broken.
+- **Opt-in per class.** `--class` (or `ORCHESTRATE_LANE_CLASS`) names the lane's class; the
+  classes in `ORCHESTRATE_BUILD_SHARE` (default `verify device`) share. Implementation lanes
+  (`impl`, the default) build into their private lane dir as above, since their trees differ
+  anyway. Only artifacts are shared: TMPDIR and tool caches stay lane-private.
+- **Cleanup and a disk cap.** After each build, and in `wt-cleanup.sh` as `build` rows, shared
+  builds past `ORCHESTRATE_SHARED_BUILD_KEEP` (3, by last use) or `ORCHESTRATE_SHARED_BUILD_MAX_MB`
+  (20480) are removed, as are partial builds; the newest and any a process is working inside stay.
+  A lane that runs long on a reused build should take `--copy`.
+- **Stagger device boots.** Start the build first, then boot devices one at a time rather than
+  every emulator at once.
+
 ## Never remove a worktree someone is in
 
 A cleanup once removed the worktree a live orchestrator session was using as its working
