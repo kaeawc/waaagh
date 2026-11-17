@@ -106,22 +106,17 @@ verdict=$(jq -r --argjson only "$(json_list ${only[@]+"${only[@]}"})" \
 # once per run id through triage-tick.sh rerun (same reruns.log, same needs rule), and stays held.
 if [[ "$auto" == yes && "$verdict" == red* ]]; then
   reruns="$state/reruns.log"
-  # seen ID: the run's latest reruns.log record is anything but a refused rerun (triage-tick.sh).
-  seen() { [[ -f "$reruns" ]] && awk -F'\t' -v r="run=$1" '$2 == r { last = $NF } END { exit !(last != "" && last !~ /^(full-)?failed/) }' "$reruns"; }
   held="" ok=""
   for id in $(grep -oE '=[a-z_]+\([0-9]+\)' <<<"$verdict" | tr -dc '0-9\n'); do
     attempt=$(jq -r --argjson id "$id" '[.[] | select(.databaseId == $id) | .runAttempt] | max // 1' <<<"$runs")
     if ((attempt > 1)); then cls=rerun-failed
-    elif seen "$id"; then cls=rerun-pending
+    elif orch_rerun_seen "$id"; then cls=rerun-pending
     elif [[ -n "$classifier" ]]; then
       cls=$(bash -c "$classifier"' "$@"' _ --repo "$repo" --run "$id" 2>/dev/null </dev/null |
         awk 'NR == 1 { v = tolower($1); gsub(/_/, "-", v); gsub(/[^a-z-]/, "", v); print v }') || cls=""
       [[ -n "$cls" ]] || cls=unclassified
     else cls=unclassified; fi
-    case "$cls" in
-      flake | known-flake | infra | rerun | rerun-dont-fix) ok="$ok $id" ;;
-      *) held="${held:+$held,}$id:$cls" ;;
-    esac
+    if orch_verdict_rerunnable "$cls"; then ok="$ok $id"; else held="${held:+$held,}$id:$cls"; fi
   done
   if [[ -n "$held" ]]; then
     verdict="$verdict auto-rerun=held runs=$held"

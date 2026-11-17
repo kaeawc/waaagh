@@ -323,11 +323,12 @@ if [[ -n "$log" ]] && kind=$(mirror_sig "$log"); then
   exit 0
 fi
 
+if orch_verdict_rerunnable "$v"; then
+  if [[ -n "$prev" ]]; then echo "reproduce second-failure verdict=$v rerun=$prev"
+  else echo "rerun classified verdict=$v"; fi
+  exit 0
+fi
 case "$v" in
-  flake | known-flake | infra)
-    if [[ -n "$prev" ]]; then echo "reproduce second-failure verdict=$v rerun=$prev"
-    else echo "rerun classified verdict=$v"; fi
-    exit 0 ;;
   unknown) ;;
   *) echo "triage classified verdict=$v"; exit 0 ;;
 esac
