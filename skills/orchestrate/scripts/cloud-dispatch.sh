@@ -23,6 +23,8 @@
 #        cloud-dispatch.sh pace [--per-minute N] [--repo OWNER/REPO]
 #        cloud-dispatch.sh backoff [--seconds S] [--message TEXT] [--repo OWNER/REPO]
 #        cloud-dispatch.sh record --issue N --trigger ID --run-at ISO [--kind repair --pr P] [--repo R]
+#        cloud-dispatch.sh stale [N...] [--hours H] [--cap K] [--repo OWNER/REPO]
+#        cloud-dispatch.sh expire --issue N [--hours H] [--cap K] [--force] [--repo OWNER/REPO]
 #        cloud-dispatch.sh status [--repo OWNER/REPO]
 #   queue add   append issues to the todo queue, skipping ones already queued or dispatched;
 #               prints "queued N" per issue added. queue list prints the issues still to dispatch;
@@ -83,16 +85,33 @@
 #               needs --pr P and marks the repair in flight on P (review-ledger.sh repair
 #               --session <trigger>, #212): P neither merges nor takes a ship verdict until the
 #               repair ends. Exit 9 when that mark failed (the row is written; mark it by hand).
-#   status      queued, dispatched, last dispatch, backoff remaining (and repairs, when any); one
-#               "key value" per line.
+#   stale       live dispatches (recorded, not expired; only issues N when given) that never
+#               produced a PR (#259): dispatched more than --hours H ago (default
+#               ORCHESTRATE_DISPATCH_STALE_HOURS, 6; from run_at), the issue still open, and no open
+#               or merged PR cross-references it (the issue and its timeline, REST through
+#               gh-read.sh: two reads per dispatch past H). Prints one line per such issue,
+#               "stale #N dispatches=K/CAP since=<run_at> age=<h>h" while it may be dispatched
+#               again, "capped #N ..." once K reached --cap (default ORCHESTRATE_DISPATCH_CAP, 3
+#               dispatches per issue), and "unknown #N <what>" when it could not be read (exit 7).
+#   expire      end issue N's live dispatch so it can be dispatched again: refused (exit 3) at the
+#               cap, or unless the stale check finds it stale (--force skips that check, not the
+#               cap); exit 7 when that check could not read GitHub. Appends an "expired" row to
+#               the ledger, puts N back on the queue, and prints "expired #N dispatch K/CAP
+#               (trigger T); queued again". The next payload and record then take it as usual.
+#   status      queued, dispatched, last dispatch, backoff remaining (and repairs, expired, when
+#               any); one "key value" per line.
 # Files in <state dir>: cloud-queue.txt (one issue per line), cloud-sessions.tsv (issue, trigger
-# id, run_at, created_at[, repair]; ISO times), cloud-backoff (epoch until which creates wait).
+# id, run_at, created_at[, repair|expired]; ISO times; an expired row repeats the trigger and
+# run_at of the dispatch it ends, created_at being when it was expired), cloud-backoff (epoch
+# until which creates wait).
 # Exit 5 refuses an issue whose fixtures are missing (route it back to its lane); exit 7 means the
 # issue, its comments, its timeline, its blockers or (repair) the review ledger could not be read
 # (do not dispatch it), or for created that the response holds no trigger id; exit 6 is a missing
 # or outdated brief in the repository; exit 8 refuses an issue blocked by an open issue (route the
 # blocker first).
 # Exit 9: a repair was recorded but its PR could not be marked repairing (review-ledger.sh repair).
+# Exit 3 also refuses expire (at the cap, or not stale); exit 7 also covers stale and expire when
+# the issue or its timeline could not be read.
 # Exit: 0 ok | 2 usage | 3 refused (dispatched, repair in flight) | 4 no template | 5 | 6 | 7 | 8 | 9
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -108,6 +127,7 @@ if [[ "$cmd" == queue || "$cmd" == briefs ]]; then sub=${1:-}; if [[ -n "$sub" ]
 repo="" issue="" count=1 base="" gates="" env_id="" source_arg="" model="" at="" lead=60 stagger=20
 fixtures="" require=no brief_ref="" pr="" dir=. kind="" force=no remote=no response=""
 per_minute=5 seconds="" message="" trigger="" run_at="" blocker_check=yes
+hours=${ORCHESTRATE_DISPATCH_STALE_HOURS:-6} cap=${ORCHESTRATE_DISPATCH_CAP:-3}
 nums=()
 while (($#)); do
   case "$1" in
@@ -137,6 +157,8 @@ while (($#)); do
     --message) message=$2; shift 2 ;;
     --trigger) trigger=$2; shift 2 ;;
     --run-at) run_at=$2; shift 2 ;;
+    --hours) hours=$2; shift 2 ;;
+    --cap) cap=$2; shift 2 ;;
     -h | --help) orch_usage; exit 0 ;;
     [0-9]*) nums+=("${1#\#}"); shift ;;
     \#[0-9]*) nums+=("${1#\#}"); shift ;;
@@ -146,12 +168,13 @@ done
 case "$cmd" in
   queue) case "$sub" in add | drop | list) ;; *) usage ;; esac ;;
   briefs) case "$sub" in install | check) ;; *) usage ;; esac ;;
-  next | fixtures | brief | payload | pace | backoff | record | created | status) ;;
+  next | fixtures | brief | payload | pace | backoff | record | created | stale | expire | status) ;;
   -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
 is_num() { [[ "$1" =~ ^[0-9]+$ ]]; }
-for v in "$count" "$lead" "$stagger" "$per_minute"; do is_num "$v" || usage; done
+for v in "$count" "$lead" "$stagger" "$per_minute" "$hours" "$cap"; do is_num "$v" || usage; done
+((cap >= 1)) || usage
 [[ -z "$issue" ]] || is_num "$issue" || usage
 [[ -z "$at" ]] || is_num "$at" || usage
 [[ -z "$seconds" ]] || is_num "$seconds" || usage
@@ -172,14 +195,46 @@ queue="$state/cloud-queue.txt" ledger="$state/cloud-sessions.tsv" backoff_file="
 touch "$queue" "$ledger"
 now=$(orch_now)
 
-# Repair rows (fifth column "repair") are creates, but never count as an issue's dispatch.
-dispatched() { awk -F'\t' -v n="$1" '$1 == n && $5 != "repair" { f = 1 } END { exit !f }' "$ledger"; }
-pending() { # queued issues not yet in the ledger, in queue order
-  awk -F'\t' 'FILENAME == ARGV[1] { if ($5 != "repair") d[$1] = 1; next }
+# Repair rows (fifth column "repair") are creates, but never count as an issue's dispatch. An
+# "expired" row ends the issue's dispatch before it (#259): the issue may be dispatched again.
+dispatched() {
+  awk -F'\t' -v n="$1" '$1 != n || $5 == "repair" { next } { f = ($5 != "expired") } END { exit !f }' "$ledger"
+}
+pending() { # queued issues not dispatched (or whose dispatch expired), in queue order
+  awk -F'\t' 'FILENAME == ARGV[1] { if ($5 == "expired") delete d[$1]; else if ($5 != "repair") d[$1] = 1; next }
     $1 != "" && !($1 in d) && !s[$1]++ { print $1 }' "$ledger" "$queue"
+}
+# live: "issue trigger run_at dispatches" (tab-separated, ledger order) for each issue whose last
+# dispatch has not expired; dispatches counts every dispatch of the issue, expired ones included.
+live() {
+  awk -F'\t' -v OFS='\t' '$1 == "" || $5 == "repair" { next }
+    !($1 in seen) { seen[$1] = 1; ord[++m] = $1 }
+    $5 == "expired" { delete t[$1]; next }
+    { t[$1] = $2; r[$1] = $3; c[$1]++ }
+    END { for (i = 1; i <= m; i++) { k = ord[i]; if (k in t) print k, t[k], r[k], c[k] } }' "$ledger"
 }
 iso_epoch() { jq -rn --arg t "$1" '$t | fromdateiso8601'; }
 need_issue() { [[ -n "$issue" ]] || { echo "cloud-dispatch.sh: $cmd needs --issue" >&2; exit 2; }; }
+
+# stale_of N RUN_AT: whether issue N's dispatch at RUN_AT produced anything (#259). Prints young
+# (under --hours), closed, "pr <url>" (an open or merged PR cross-references it), stale, or
+# "unknown <what>". Reads (only past --hours) go through gh-read.sh.
+stale_of() {
+  local n=$1 e iss st tl url
+  e=$(iso_epoch "$2" 2>/dev/null) || { echo "unknown run_at"; return; }
+  if ((now - e < hours * 3600)); then echo young; return; fi
+  iss=$(orch_read_retry 3 gh api "repos/$repo/issues/$n") || iss=""
+  st=$(jq -r '.state // empty' <<<"$iss" 2>/dev/null) || st=""
+  [[ -n "$st" ]] || { echo "unknown issue"; return; }
+  if [[ "$st" != open ]]; then echo closed; return; fi
+  tl=$(orch_read_retry 3 gh api --paginate "repos/$repo/issues/$n/timeline?per_page=100") ||
+    { echo "unknown timeline"; return; }
+  url=$(jq -rs 'if all(.[]; type == "array") then . else error("not a timeline") end
+    | [.[][] | select(.event == "cross-referenced") | .source.issue // empty
+      | select(.pull_request != null and (.state == "open" or .pull_request.merged_at != null))
+      | .html_url] | first // ""' <<<"$tl" 2>/dev/null) || { echo "unknown timeline"; return; }
+  if [[ -n "$url" ]]; then echo "pr $url"; else echo stale; fi
+}
 
 # check_fixtures: the device-to-cloud handoff check. Prints the fixture URLs (space-separated) or
 # "none"; exits 5 (needed, missing) or 7 (unreadable). Reads go through gh-read.sh.
@@ -398,14 +453,14 @@ case "$cmd" in
         exit 3
       fi
     elif dispatched "$issue"; then
-      echo "cloud-dispatch.sh: #$issue already dispatched: $(awk -F'\t' -v n="$issue" '$1 == n && $5 != "repair" { print $2 " at " $3 }' "$ledger")" >&2
+      echo "cloud-dispatch.sh: #$issue already dispatched: $(live | awk -F'\t' -v n="$issue" '$1 == n { print $2 " at " $3 }')" >&2
       exit 3
     fi
     if [[ "$brief_ref" != repair && "$blocker_check" == yes ]]; then check_blockers; fi
     if [[ -z "$fixtures" ]]; then fixtures=$(check_fixtures); fi
     if [[ -z "$at" ]]; then
       at=$((now + lead))
-      last=$(awk -F'\t' '$3 != "" { print $3 }' "$ledger" | sort | awk 'END { print }')
+      last=$(awk -F'\t' '$3 != "" && $5 != "expired" { print $3 }' "$ledger" | sort | awk 'END { print }')
       if [[ -n "$last" ]]; then
         slot=$(($(iso_epoch "$last") + stagger))
         ((slot <= at)) || at=$slot
@@ -431,7 +486,7 @@ case "$cmd" in
     if [[ -s "$backoff_file" ]]; then until_t=$(awk 'NR == 1 { print $1 + 0 }' "$backoff_file"); fi
     wait_b=$((until_t > now ? until_t - now : 0))
     # Creates in the last 60 s; the oldest of the last per_minute of them sets when a slot frees.
-    recent=$(awk -F'\t' '$4 != "" { print $4 }' "$ledger" | sort | while read -r t; do
+    recent=$(awk -F'\t' '$4 != "" && $5 != "expired" { print $4 }' "$ledger" | sort | while read -r t; do
       e=$(iso_epoch "$t"); ((e > now - 60)) && echo "$e"; done || true)
     wait_r=0
     n_recent=$(printf '%s' "$recent" | awk 'NF { c++ } END { print c + 0 }')
@@ -465,14 +520,59 @@ case "$cmd" in
     echo "created $trigger ${run_at:--}"
     if [[ -n "$issue" ]]; then do_record >/dev/null; fi
     ;;
+  stale)
+    rows=$(live)
+    if ((${#nums[@]})); then
+      rows=$(awk -F'\t' -v want=" ${nums[*]} " 'index(want, " " $1 " ")' <<<"$rows")
+    fi
+    bad=0
+    # fd 3: the reads in stale_of must not eat the rows.
+    while IFS=$'\t' read -r n _ ra k <&3; do
+      [[ -n "$n" ]] || continue
+      v=$(stale_of "$n" "$ra")
+      case "$v" in
+        stale)
+          what=stale
+          ((k < cap)) || what=capped
+          echo "$what #$n dispatches=$k/$cap since=$ra age=$(((now - $(iso_epoch "$ra")) / 3600))h" ;;
+        unknown*) echo "unknown #$n ${v#unknown }"; bad=1 ;;
+      esac
+    done 3<<<"$rows"
+    if ((bad)); then exit 7; fi
+    ;;
+  expire)
+    need_issue
+    row=$(live | awk -F'\t' -v n="$issue" '$1 == n')
+    [[ -n "$row" ]] || { echo "cloud-dispatch.sh: #$issue has no live dispatch in the ledger" >&2; exit 3; }
+    IFS=$'\t' read -r _ trig ra k <<<"$row"
+    if ((k >= cap)); then
+      echo "cloud-dispatch.sh: #$issue reached the dispatch cap ($k/$cap): route it to a local lane, or read why its sessions ended" >&2
+      exit 3
+    fi
+    if [[ "$force" != yes ]]; then
+      v=$(stale_of "$issue" "$ra")
+      case "$v" in
+        stale) ;;
+        young) echo "cloud-dispatch.sh: #$issue was dispatched at $ra, under ${hours}h ago; not stale yet" >&2; exit 3 ;;
+        closed) echo "cloud-dispatch.sh: #$issue is closed; nothing to dispatch again" >&2; exit 3 ;;
+        pr\ *) echo "cloud-dispatch.sh: #$issue has a PR (${v#pr }); repair that instead" >&2; exit 3 ;;
+        *) echo "cloud-dispatch.sh: #$issue: the stale check could not read the ${v#unknown }; do not expire it" >&2; exit 7 ;;
+      esac
+    fi
+    printf '%s\t%s\t%s\t%s\texpired\n' "$issue" "$trig" "$ra" "$(orch_iso "$now")" >>"$ledger"
+    grep -qxF "$issue" "$queue" || printf '%s\n' "$issue" >>"$queue"
+    echo "expired #$issue dispatch $k/$cap (trigger $trig); queued again"
+    ;;
   status)
     until_t=0
     if [[ -s "$backoff_file" ]]; then until_t=$(awk 'NR == 1 { print $1 + 0 }' "$backoff_file"); fi
     echo "queued $(pending | awk 'END { print NR }')"
-    echo "dispatched $(awk -F'\t' '$1 != "" && $5 != "repair" { c++ } END { print c + 0 }' "$ledger")"
+    echo "dispatched $(awk -F'\t' '$1 != "" && $5 != "repair" && $5 != "expired" { c++ } END { print c + 0 }' "$ledger")"
     repairs=$(awk -F'\t' '$5 == "repair" { c++ } END { print c + 0 }' "$ledger")
     if ((repairs)); then echo "repairs $repairs"; fi
-    echo "last $(awk -F'\t' '$1 != "" { l = "#" $1 " " $2 " " $3 } END { print (l == "" ? "-" : l) }' "$ledger")"
+    expired=$(awk -F'\t' '$5 == "expired" { c++ } END { print c + 0 }' "$ledger")
+    if ((expired)); then echo "expired $expired"; fi
+    echo "last $(awk -F'\t' '$1 != "" && $5 != "expired" { l = "#" $1 " " $2 " " $3 } END { print (l == "" ? "-" : l) }' "$ledger")"
     echo "backoff $((until_t > now ? until_t - now : 0))"
     ;;
 esac

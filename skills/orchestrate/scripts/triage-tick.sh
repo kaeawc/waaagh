@@ -34,9 +34,15 @@
 #                  approved PR blocked by e.g. an unresolved thread (reason=threads=1) is named
 #                  here. pr-ready.sh runs only when such a PR is open; flags for it (--author ...)
 #                  come from ORCHESTRATE_PR_READY_ARGS. "unknown" when readiness could not be read.
-#       dispatch <n|unknown> next=#a,#b,#c     open issues (any --ready-label; none of
-#                  --exclude-label, default "blocked") with no open PR closing them and no active lane
-#                  (over REST a PR closes what its body names with a closing keyword; see gh-issues.sh)
+#       dispatch <n|unknown> next=#a,#b,#c [list=truncated@1000]     open issues (any --ready-label;
+#                  none of --exclude-label, default "blocked") with no open PR closing them, no active
+#                  lane and no live cloud dispatch (cloud-dispatch.sh ledger; over REST a PR closes
+#                  what its body names with a closing keyword; see gh-issues.sh). list=truncated: the
+#                  issue read hit its limit, so the count may be short (#259).
+#       dispatch-stale redispatch=#a,...|- capped=#b,...|- unknown=#c,...|-   live cloud dispatches
+#                  past ORCHESTRATE_DISPATCH_STALE_HOURS (6) whose issue is open with no PR
+#                  (cloud-dispatch.sh stale): redispatch ones may be expired and sent again, capped
+#                  ones reached ORCHESTRATE_DISPATCH_CAP (3) dispatches. Omitted with none.
 #       slots <type>=<busy>/<n>,... | slots none
 #       cron <none|age=<h>h expires_in=<h>h>
 #       threads none | threads unknown
@@ -59,6 +65,8 @@
 #       repair-stale #<pr> session:<id> since:<iso>
 #     Reasons: main-red, flake-rerun, rerun-pending, main-unknown, merge-loop-<state> (only while PRs
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
+#     issue-list-truncated, dispatch-stale=<n> (`cloud-dispatch.sh expire --issue N`, then dispatch
+#     it again), dispatch-capped=<m> (route it to a local lane, or read why its sessions ended),
 #     host-hold (in place of dispatch=<n> while the host line is HOLD or BACKOFF; "host unknown"
 #     holds nothing), cron-expiring (under 24h left), resolve-now=<n> (PRs whose threads only need
 #     resolving: the local orchestrator resolves them, they are not repair targets), stalled=<n> (PRs
@@ -297,7 +305,7 @@ esac
 # review-gate.sh check reads), and the dispatch queue (one PR read for closing references, one
 # issue read, both through gh-issues.sh: GraphQL, or REST where it is refused). Should the PR read fail
 # where GraphQL is refused, the count is the snapshot's.
-open=unknown dispatch=unknown next="-" reviews=""
+open=unknown dispatch=unknown next="-" reviews="" suspect=""
 lanes_tsv=""
 [[ ! -f "$state/lanes.tsv" ]] || lanes_tsv=$(cat "$state/lanes.tsv")
 snap_rc=0
@@ -311,20 +319,57 @@ fi
 if ((pr_rc == 0)); then
   open=$(jq -r 'if length >= 300 then "300+" else length end' <<<"$prs")
   ((${#exclude[@]})) || exclude=(blocked)
-  if issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 300 --fields number,labels 2>/dev/null); then
+  # Cloud dispatches still live in cloud-dispatch.sh's ledger (issue, run_at): in flight, so not
+  # waiting; one past ORCHESTRATE_DISPATCH_STALE_HOURS with no PR closing it is checked below (#259).
+  cloud_live=""
+  [[ ! -f "$state/cloud-sessions.tsv" ]] || cloud_live=$(awk -F'\t' -v OFS='\t' '$1 == "" || $5 == "repair" { next }
+    $5 == "expired" { delete r[$1]; next } { r[$1] = $3 } END { for (k in r) print k, r[k] }' "$state/cloud-sessions.tsv")
+  stale_cut=$(orch_iso "$((now - ${ORCHESTRATE_DISPATCH_STALE_HOURS:-6} * 3600))")
+  # 1000, not 300: a limit under the open count hid the newest issues (#259); a full list says so.
+  if issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 1000 --fields number,labels 2>/dev/null); then
     q=$(jq -r --slurpfile prs <(printf '%s\n' "$prs") --rawfile lanes <(printf '%s' "$lanes_tsv") \
+      --rawfile cloud <(printf '%s' "$cloud_live") --arg cut "$stale_cut" \
       --argjson ready "$(json_list ${ready[@]+"${ready[@]}"})" --argjson exclude "$(json_list "${exclude[@]}")" '
       def has_any($set): any(.[]; . as $l | $set | index($l));
       ([$prs[0][] | (.closingIssuesReferences // [])[] | .number]) as $in_pr
       | ([$lanes | split("\n")[] | select(length > 0 and (startswith("#") | not)) | split("\t")
           | select(length >= 6 and (.[5] | IN("done", "merged", "closed", "abandoned") | not))
           | .[2] | split(",")[] | gsub("[^0-9]"; "") | select(length > 0) | tonumber]) as $laned
+      | ([$cloud | split("\n")[] | split("\t") | select(length >= 2 and (.[0] | test("^[0-9]+$")))
+          | {n: (.[0] | tonumber), at: .[1]}]) as $live
+      | (length >= 1000) as $full
+      | [.[].number] as $open
+      | [$live[] | select(.at < $cut) | .n
+         | select(. as $n | ($open | index($n)) and ($in_pr | index($n) | not) and ($laned | index($n) | not))]
+        as $suspect
       | [.[] | ([(.labels // [])[].name]) as $l
          | select(($ready | length) == 0 or ($l | has_any($ready)))
          | select($l | has_any($exclude) | not)
-         | .number | select(. as $n | ($in_pr | index($n) | not) and ($laned | index($n) | not))]
-      | sort | "\(length) \(if length == 0 then "-" else (.[0:3] | map("#\(.)") | join(",")) end)"' <<<"$issues")
+         | .number | select(. as $n | ($in_pr | index($n) | not) and ($laned | index($n) | not)
+             and ([$live[].n] | index($n) | not))]
+      | sort | "\(length) \(if length == 0 then "-" else (.[0:3] | map("#\(.)") | join(",")) end)"
+        + (if $full then " list=truncated@1000" else "" end)
+        + "\t\($suspect | sort | map(tostring) | join(" "))"' <<<"$issues")
+    suspect=${q#*$'\t'} q=${q%%$'\t'*}
     dispatch=${q%% *} next=${q#* }
+  fi
+fi
+[[ "$next" != *" list=truncated@"* ]] || reasons+=("issue-list-truncated")
+# Stale cloud dispatches (#259): each suspect above gets cloud-dispatch.sh stale (REST reads).
+dstale=""
+if [[ -n "${suspect:-}" ]]; then
+  st_rc=0
+  # shellcheck disable=SC2086 # issue numbers, one word each
+  st=$("$here/cloud-dispatch.sh" stale --repo "$repo" $suspect 2>/dev/null) || st_rc=$?
+  ((st_rc == 0 || st_rc == 7)) || st=$(printf 'unknown #%s\n' $suspect)
+  dstale=$(awk '$1 ~ /^(stale|capped|unknown)$/ { k[$1] = k[$1] (k[$1] == "" ? "" : ",") $2; n[$1]++ }
+    END { if (n["stale"] + n["capped"] + n["unknown"] > 0)
+      printf "dispatch-stale redispatch=%s capped=%s unknown=%s\t%d %d", (k["stale"] == "" ? "-" : k["stale"]),
+        (k["capped"] == "" ? "-" : k["capped"]), (k["unknown"] == "" ? "-" : k["unknown"]), n["stale"], n["capped"] }' <<<"$st")
+  if [[ -n "$dstale" ]]; then
+    ds_n=${dstale#*$'\t'} dstale=${dstale%%$'\t'*}
+    ((${ds_n% *} == 0)) || reasons+=("dispatch-stale=${ds_n% *}")
+    ((${ds_n#* } == 0)) || reasons+=("dispatch-capped=${ds_n#* }")
   fi
 fi
 if [[ "$open" != unknown && "$open" != 0 ]]; then
@@ -508,6 +553,7 @@ echo "prs open=$open${reviews:+ $reviews}"
 echo "merge_loop $loop$loop_extra $last"
 [[ -z "$shipped_lines" ]] || printf '%s\n' "$shipped_lines"
 echo "dispatch $dispatch next=$next"
+[[ -z "$dstale" ]] || echo "$dstale"
 echo "slots $slots"
 echo "cron $cron"
 echo "$threads"

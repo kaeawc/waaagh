@@ -132,7 +132,7 @@ case "$cmd" in
     }
     paused=no
     for label in "${pause_labels[@]}"; do
-      n=$(count "issues labelled $label" issues --label "$label" --limit 1)
+      n=$(count "issues labelled $label" issues --label "$label" --limit 1 --no-limit-warning)
       [[ "$n" == 0 ]] || paused="yes($label)"
     done
     open=$(count "open pull requests" prs-open --limit 300)

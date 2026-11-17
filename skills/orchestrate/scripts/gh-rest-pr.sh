@@ -16,6 +16,8 @@
 #            isDraft isCrossRepository baseRefName headRefName headRefOid labels createdAt
 #            updatedAt url closingIssuesReferences, with mergeable and mergeStateStatus "UNKNOWN"
 #            and an empty statusCheckRollup (the list endpoint carries none; use view --checks).
+#            Stopped at --limit with a full page read, it warns on stderr that the list may be
+#            incomplete (#259).
 #   view     one PR (GET pulls/<n>) in the same shape, with mergeable read (true MERGEABLE, false
 #            CONFLICTING, null UNKNOWN), mergeStateStatus from mergeable_state upper-cased
 #            (behind BEHIND, clean CLEAN, ...; absent UNKNOWN) and state OPEN|CLOSED|MERGED;
@@ -118,6 +120,8 @@ list_prs() {
     ((n == 100 && m < limit)) || break
     page=$((page + 1))
   done
+  ((n < 100 || m < limit)) ||
+    echo "gh-rest-pr.sh: warning: list stopped at --limit $limit after a full page; the list may be incomplete" >&2
   printf '%s\n' "$rows"
 }
 
