@@ -18,7 +18,7 @@ setup() {
 
 rl() { "$SCRIPTS/review-ledger.sh" record --repo o/r --pr "$1" --verdict "$2" ${3:+--head "$3"} >/dev/null; }
 sb() { "$SCRIPTS/shipped-blocked.sh" --repo o/r "$@"; }
-head_of() { echo "abcdef0123456789$1"; }   # the head pr_row gives PR N
+head_of() { local b=abcdef0123456789abcdef0123456789abcdef01; echo "${b:0:$((40 - ${#1}))}$1"; }   # the head pr_row gives PR N
 stub_pr_ready() { # a pr-ready.sh that prints $FX/rows.tsv, or exits with $FX/ready-rc
   mkdir -p "$BATS_TEST_TMPDIR/stubs"
   printf '#!/usr/bin/env bash\necho "pr-ready $*" >>"%s/ready-calls"\n[ ! -f "%s/ready-rc" ] || exit "$(cat "%s/ready-rc")"\ncat "%s/rows.tsv" 2>/dev/null || true\n' \

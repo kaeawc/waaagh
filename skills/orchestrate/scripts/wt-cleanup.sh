@@ -14,7 +14,10 @@
 #   only for otherwise-removable trees; --repo defaults to the checkout's repository).
 #   --max-count / --max-gb: the worktree budget. After the run, print a budget row with the live
 #   linked worktrees (count, and size via du when --max-gb is given) and exit 3 when over it.
-# Output (TSV): verdict  path  reason      verdict: remove | removed | keep | budget
+#   Lane build dirs (#213, _build_dirs.sh): a lane-private build output dir whose worktree no
+#   longer exists (removed here or by hand) is listed as a build row and, with --apply, removed,
+#   unless a process is working inside it. Skipped when processes cannot be read.
+# Output (TSV): verdict  path  reason      verdict: remove | removed | keep | build | budget
 # Removal is `git worktree remove <path>` (no --force); a refusal is reported as keep. Process
 # working directories are read with lsof, else /proc (proc_cwds in _slots.sh), and read again
 # right before each removal; when neither can be read nothing is removed. A session that must keep
@@ -24,6 +27,8 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
+# shellcheck source=_build_dirs.sh
+source "$here/_build_dirs.sh"
 
 repo_dir=. hours=24 apply=no pr_closed=no repo="" max_count="" max_gb=""
 protect=()
@@ -129,6 +134,15 @@ done < <(git -C "$repo_dir" worktree list --porcelain | awk '
   /^detached/ { b = "(detached)" }
   /^locked/ { l = "yes" }
   END { if (p != "") print p "\t" b "\t" l }')
+
+# Lane build dirs of worktrees that are gone, with the working directories read again when removing.
+if [[ "$can_check" == yes ]]; then
+  if [[ "$apply" != yes ]]; then
+    build_dirs_sweep no "$cwds"
+  elif fresh=$(proc_cwds | cut -f2-); then
+    build_dirs_sweep yes "$fresh"
+  fi
+fi
 
 [[ -n "$max_count$max_gb" ]] || exit 0
 over="" summary="live $live worktrees${max_count:+ (max $max_count)}"
