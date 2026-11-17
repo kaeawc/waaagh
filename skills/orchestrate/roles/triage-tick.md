@@ -90,7 +90,14 @@ from memory (advisory workflows, ready label, device slot types).
      as released unless `hold.sh` printed `released:`.
    - `repaired=<n>`: the `repairs` line's `settled=` PRs had a repair session in flight that has
      now posted its closing comment (`review-ledger.sh settle` recorded `repaired`). Report them:
-     each needs a review of its final head before a `ship` verdict lets it merge (#212).
+     each needs a review of its final head before a `ship` verdict lets it merge (#212). Review
+     only the delta from the `rounds` command's `reviewed=` head, and do it in this tick, before
+     the bot reviewer posts on the new head (`{{SCRIPTS}}/../review-rounds.md`).
+   - `review-loop=<m>`: each `review-loop #<pr> rounds=<n> since=<iso> hours=<h> reviewed=<sha>`
+     line is an open PR with at least `ORCHESTRATE_REVIEW_ROUND_CAP` (default 2) fix rounds: each
+     push draws a new review round (#257). Dispatch no further fix round. Report it; its optional
+     threads are declined (`review-followup.sh decline`), the rest filed as follow-ups, and the
+     delta from `reviewed=` reviewed at once (`{{SCRIPTS}}/../review-rounds.md`).
    - `repair-stale=<m>`: each `repair-stale #<pr> session:<id> since:<iso>` line is a repair in
      flight longer than `--hold-hours` with no closing comment. Report it; the orchestrator checks
      the session and, if its run ended, records `review-ledger.sh repaired --pr <pr> --session

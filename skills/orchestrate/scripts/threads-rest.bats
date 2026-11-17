@@ -170,7 +170,7 @@ STUB
   out=$(tn '[{"isResolved":false,"comments":{"nodes":[{"id":"PRRC_x","databaseId":11}]}},{"is_resolved":true,"root_comment_id":"20"}]')
   jq -e '.number == 5 and .commits.nodes == [{commit: {oid: "abc", committedDate: null}}]
     and .reviewThreads.nodes[0] == {id: "11", isResolved: false, isOutdated: false,
-      starter: {nodes: [{author: {login: "bot"}, url: "u11"}]},
+      starter: {nodes: [{author: {login: "bot"}, url: "u11", body: "finding"}]},
       latest: {totalCount: 3, nodes: [{author: {login: "bot"}, body: "no", createdAt: "2026-01-01T00:00:03Z"}]},
       comments: {nodes: [{body: "finding"}, {body: "follow-up #9"}, {body: "no"}]}}
     and (.reviewThreads.nodes[1] | .id == "20" and .isResolved and .latest.totalCount == 1)' <<<"$out"

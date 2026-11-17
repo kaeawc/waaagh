@@ -627,6 +627,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
    cannot, so cloud briefs say reply on each thread and do not resolve; after each repair,
    `scripts/thread-sweep.sh resolve` settles threads whose last reply links an issue or names a
    pushed fix.
+   **Review rounds** (`review-rounds.md`, #257): a bot reviewer re-reviews every push, so a fix
+   round is one batched push with the base merge in it; after it, optional findings are declined
+   with a reason and resolved (`review-followup.sh decline`), the new head's delta is reviewed at
+   once, and the tick's `review-loop` line names a PR past the round cap.
    **Regression gates** (`regression-gates.md`): before resolving or filing any review finding,
    check whether it is a regression of existing behaviour; if so, hold the PR and fix it first.
    A PR fixing a device-found regression carries `needs-device-recheck` until a device run on its
