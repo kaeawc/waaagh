@@ -121,6 +121,7 @@ while :; do
   "$SCRIPTS/triage-tick.sh" beat --repo "$REPO" --deadline "$deadline" --pid $$
   "$SCRIPTS/merge-queue.sh" run-once --repo "$REPO"   # or one merge-bot pass
   "$SCRIPTS/shipped-blocked.sh" --repo "$REPO" || true   # approved PRs not READY, with the reason (#269)
+  "$SCRIPTS/pr-footer.sh" --cloud --repo "$REPO" || true  # cloud PRs: drop the harness footer (#261)
   if (( $(date +%s) >= deadline )); then
     if [[ "${MERGE_LOOP_RESTART:-0}" == 1 ]]; then deadline=$(( $(date +%s) + 8 * 3600 )); continue; fi
     "$SCRIPTS/triage-tick.sh" beat --repo "$REPO" --end bound
