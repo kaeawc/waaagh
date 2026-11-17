@@ -712,7 +712,7 @@ verification batch, check the device lock those routines use; never start a batc
 the main session (subagents lack `RemoteTrigger`) creates one run-once routine per issue, paced and
 recorded through `"$SCRIPTS/cloud-dispatch.sh"`: `roles/cloud-dispatch.md`. Results come back only
 as PRs and issue comments, which the triage loop reads; a dispatch with no PR after 6 h is stale
-and is expired and sent again, up to a cap (`cloud-dispatch.sh stale`/`expire`, #259); a run silent for 45 min, stuck on a permission prompt or never fired is caught sooner from a saved `list_runs` (`cloud-dispatch.sh stalled`, #260). A cloud-ready follow-up split from local
+and is expired and sent again, up to a cap (`cloud-dispatch.sh stale`/`expire`, #259); a run silent for 45 min, stuck on a permission prompt or never fired is caught sooner from a saved `list_runs` (`cloud-dispatch.sh stalled`, #260), as is one active but unpushed after 30 min (`--no-push`, #216). The standard briefs give a cloud session's local test run a 10-minute budget, then push and let CI verify; build-heavy fixes that need tests before review (a cold dependency cache is the usual stall) go to a local lane with a warm cache instead. A cloud-ready follow-up split from local
 work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
 `device-cloud-handoff.md`. The standard implement and repair briefs live in the target repository
 (`.claude/briefs/`, installed from `briefs/`, changed by PR), so each dispatched prompt is one line.

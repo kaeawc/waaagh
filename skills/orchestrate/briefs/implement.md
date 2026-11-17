@@ -1,4 +1,4 @@
-<!-- waaagh-brief implement v4. Installed by waaagh's cloud-dispatch.sh briefs install; change it only by PR. -->
+<!-- waaagh-brief implement v5. Installed by waaagh's cloud-dispatch.sh briefs install; change it only by PR. -->
 # Cloud lane: implement one issue in {{REPO}}
 
 The one-line prompt that sent you here names the issue (#N), your branch (`work/N-auto`) and,
@@ -9,7 +9,7 @@ orchestrator, so your PR and at most one issue comment are your only output.
 2. If an open PR already references #N, stop without changes.
 3. Create BRANCH from `origin/{{BASE}}`. Implement the issue, with tests.
 4. If the prompt names fixtures, commit the captured fixtures from those URLs verbatim (check the sha256 their summary gives); never hand-write, trim or regenerate them. Missing or mismatched fixtures mean you are blocked.
-5. Gates, all passing before you push: {{GATES}}.
+5. Gates, all passing before you push: {{GATES}}. Time-box the slow ones: run the cheap checks (format, compile) first, and give the local test run a budget of 10 minutes (or the number the prompt names). A cold dependency cache or a rate-limited registry can stall it for an hour. When the budget runs out, stop the run and push anyway: CI is the test verifier. Say in the PR body which gates did not finish here and why.
 6. Open a PR to `{{BASE}}`, ready for review, not as a draft (a draft is never merged). Body starts `Closes #N` only if everything the issue asks is verified here; if any part needs a device, simulator or Xcode to verify, use `Part of #N` and list what is left to verify locally.
 7. Get CI green (fix what your change broke). Then one review round, and do not wait for a second. Each review thread: agreed, push the fix now and reply with its commit SHA; disagreed, reply "Disagree:" and why. "Agreed" or "deferred" with no push is not a fix (defer only cosmetic findings, citing a filed issue). The orchestrator resolves threads. Before stopping, list the unresolved threads: never end with an agreed but unfixed thread.
 8. Do not merge. No attribution lines (no Co-Authored-By, no "Generated with").
