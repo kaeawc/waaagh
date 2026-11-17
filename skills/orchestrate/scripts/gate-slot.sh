@@ -9,7 +9,8 @@
 #   --env-file  sourced before CMD runs, for worker/timeout/retry caps every gate should carry even
 #               when a lane forgot them (default $ORCHESTRATE_GATE_ENV, else
 #               <state dir>/<owner>__<repo>/gate-env.sh for this checkout's origin, if present)
-# A command whose words include gradle, gradlew, xcodebuild or fastlane goes to heavy-build-slot.sh.
+# A command whose words include gradle, gradlew, xcodebuild or fastlane goes to heavy-build-slot.sh,
+# with the same gate environment passed as --env-file.
 # While a heavy build holds its slot, no new gate starts: a Node gate and a Gradle/Xcode build never
 # run at once. A slot whose holder died (or whose PID was reused) is reclaimed; nothing is killed.
 # Every gate runs with lane-private build output (#213): ORCHESTRATE_LANE_BUILD_DIR, and TMPDIR,
@@ -39,15 +40,16 @@ done
 (($#)) || { awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0" >&2; exit 2; }
 [[ "$slots" =~ ^[1-9][0-9]*$ && "$wait_s" =~ ^[0-9]+$ ]] || { echo "gate-slot.sh: bad --slots or --wait" >&2; exit 2; }
 
-for word in "$@"; do
-  case "$(basename -- "${word%% *}")" in
-    gradle | gradlew | xcodebuild | fastlane) exec "$here/heavy-build-slot.sh" ${pass[@]+"${pass[@]}"} -- "$@" ;;
-  esac
-done
-
-# The per-repo gate environment, found without any network call.
+# The per-repo gate environment, found without any network call. Resolved before routing, so heavy
+# builds (which most need the repo JDK/SDK settings) get it too (#288).
 if [[ -z "$env_file" ]] && sd=$(repo_state_dir); then env_file="$sd/gate-env.sh"; fi
 [[ -z "$env_file" || -f "$env_file" ]] || env_file=""
+
+for word in "$@"; do
+  case "$(basename -- "${word%% *}")" in
+    gradle | gradlew | xcodebuild | fastlane) exec "$here/heavy-build-slot.sh" ${pass[@]+"${pass[@]}"} ${env_file:+--env-file "$env_file"} -- "$@" ;;
+  esac
+done
 
 deadline=$(($(date +%s) + wait_s)) slot="" said=no
 while :; do
