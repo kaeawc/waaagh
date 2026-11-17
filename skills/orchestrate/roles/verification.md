@@ -16,7 +16,10 @@ verify, and a regression surface to sweep.
    verify-<batch> --device <id>` before any `adb` or `simctl` command; exit 4: not yours, stop.
 2. Build and run from a fresh detached checkout of `origin/{{BASE}}` in your own worktree. Never
    use, restart or signal a daemon, server or app instance you did not start; isolate your own
-   (own sockets, ports, data directory) as `lane-rules.md` describes.
+   (own sockets, ports, data directory) as `lane-rules.md` describes. Build through
+   `{{SCRIPTS}}/shared-build.sh --class device --name <what> --artifact <path> -- <build cmd>` and
+   test the artifacts in the directory it prints: lanes on the same commit build once
+   (`host-load.md`). Boot one device at a time.
 3. Every device call names its device (or runs in a session you hold): a sessionless call can
    auto-target the user's own device. Never read a device-listing resource that probes all attached
    devices. Capture crash/ANR evidence (logs, screenshot) before dismissing a system dialog, and
