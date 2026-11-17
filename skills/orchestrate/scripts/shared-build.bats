@@ -42,7 +42,7 @@ teardown() {
 sb() { "$SCRIPTS/shared-build.sh" "$@"; }
 runs() { if [[ -f "$COUNT" ]]; then wc -l <"$COUNT" | tr -d ' '; else echo 0; fi; }
 row() { printf '%s\n' "$output" | awk -F'\t' '$1 == "shared-build"' | tail -n 1; }
-fp() { "$SCRIPTS/fingerprint.sh" --dir "$1" | sed -n 's/.* fingerprint=//p'; }
+fp() { "$SCRIPTS/fingerprint.sh" --dir "$1" --fingerprint-only; }
 
 @test "two verify lanes on one commit build once; the second reuses the read-only artifacts" {
   run sb --class verify --name apk --dir "$T/a" --artifact out/app.apk --artifact out/sub -- mkapk
