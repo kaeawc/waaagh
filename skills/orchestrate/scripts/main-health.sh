@@ -15,7 +15,9 @@
 #                      re-run once through `triage-tick.sh rerun` (failed jobs, or the whole run
 #                      when its log shows a needs dependency that did not succeed), logged to
 #                      reruns.log. A run already in reruns.log, or already past its first attempt,
-#                      is never re-run here: it failed again (#270). Also on with
+#                      is never re-run here: it failed again (#270). A run with no usable verdict
+#                      (unknown or unclassified) is also rerunnable when the log tail of each of its
+#                      failed jobs shows a package-mirror fetch failure (#297). Also on with
 #                      ORCHESTRATE_MAIN_AUTO_RERUN=1.
 # Policy: each workflow is judged by its newest COMPLETED run (cancelled and skipped runs aside),
 # not by a run on the current head; the output names the SHA each verdict comes from. A run is
@@ -104,6 +106,25 @@ verdict=$(jq -r --argjson only "$(json_list ${only[@]+"${only[@]}"})" \
 
 # Auto-rerun (#270): a red main whose every red run the classifier calls rerunnable is re-run
 # once per run id through triage-tick.sh rerun (same reruns.log, same needs rule), and stays held.
+# run_mirror_outage ID: exit 0 when the run has failed jobs and the bounded log tail (job-log.sh,
+# last 400 lines) of every one of them shows the package-mirror signature (orch_mirror_sig, shared
+# with failure-triage.sh). Any unreadable log or non-mirror failure is a no.
+run_mirror_outage() {
+  local jid out path n=0 tmp
+  tmp=$(mktemp "${TMPDIR:-/tmp}/main-health-log.XXXXXX")
+  for jid in $("$here/gh-read.sh" -- api "repos/$repo/actions/runs/$1/jobs?filter=latest&per_page=100" \
+    --jq '.jobs[] | select(.conclusion == "failure") | .id' 2>/dev/null </dev/null || true); do
+    out=$("$here/job-log.sh" --repo "$repo" --job "$jid" 2>/dev/null </dev/null) || { rm -f "$tmp"; return 1; }
+    path=$(awk 'NR == 1 && $1 == "available" { print $2 }' <<<"$out")
+    [[ -n "$path" && -f "$path" ]] || { rm -f "$tmp"; return 1; }
+    tail -n 400 "$path" >"$tmp"
+    orch_mirror_sig "$tmp" >/dev/null || { rm -f "$tmp"; return 1; }
+    n=$((n + 1))
+  done
+  rm -f "$tmp"
+  ((n > 0))
+}
+
 if [[ "$auto" == yes && "$verdict" == red* ]]; then
   export reruns="$state/reruns.log" # read by orch_rerun_seen (_lib.sh)
   held="" ok=""
@@ -116,6 +137,9 @@ if [[ "$auto" == yes && "$verdict" == red* ]]; then
         awk 'NR == 1 { v = tolower($1); gsub(/_/, "-", v); gsub(/[^a-z-]/, "", v); print v }') || cls=""
       [[ -n "$cls" ]] || cls=unclassified
     else cls=unclassified; fi
+    # No usable verdict: read the failed jobs' log tails; a package-mirror fetch failure in every
+    # one is infrastructure, so it counts as rerunnable (#297).
+    case "$cls" in unknown | unclassified | "") run_mirror_outage "$id" && cls=infra ;; esac
     if orch_verdict_rerunnable "$cls"; then ok="$ok $id"; else held="${held:+$held,}$id:$cls"; fi
   done
   if [[ -n "$held" ]]; then
