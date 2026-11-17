@@ -175,7 +175,7 @@ case "$cmd" in
         elif . == "macos-xcode" then "macos" else . end;
       def keywords: {android: "android|emulator|pixel", ios: "\\bios\\b|simulator|iphone|ipad",
         macos: "macos|xcode|\\bmac\\b"}[.] // .;
-      def verdict_re: "^[\\s>*_-]*device (?:verification|evidence)[*_]*\\s*:\\s*[*_]*(?<v>pass|fail)\\b(?<rest>.*)$";
+      def verdict_re: "^[\\s>*_-]*device (?:verification|evidence)[*_]*\\s*:\\s*[*_]*\\s*(?<v>pass|fail)\\b(?<rest>.*)$";
       def epoch: sub("\\.[0-9]+"; "") | fromdateiso8601;
       ([$prs[] | {ref: "#\(.number)", t: (.mergedAt | epoch),
           closes: ([(.closingIssuesReferences // [])[].number] + ((.body // "") | closes)),
