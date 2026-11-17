@@ -35,7 +35,8 @@
 #                  here. pr-ready.sh runs only when such a PR is open; flags for it (--author ...)
 #                  come from ORCHESTRATE_PR_READY_ARGS. "unknown" when readiness could not be read.
 #       dispatch <n|unknown> next=#a,#b,#c [list=truncated@1000]     open issues (any --ready-label;
-#                  none of --exclude-label, default "blocked") with no open PR closing them, no active
+#                  none of --exclude-label, default "blocked"; never the verify-on-main label,
+#                  verify-on-main.sh) with no open PR closing them, no active
 #                  lane and no live cloud dispatch (cloud-dispatch.sh ledger; over REST a PR closes
 #                  what its body names with a closing keyword; see gh-issues.sh). list=truncated: the
 #                  issue read hit its limit, so the count may be short (#259).
@@ -63,6 +64,9 @@
 #                  their closing comment and now need a review of the final head; omitted with
 #                  none in flight. Then one line per repair in flight longer than --hold-hours:
 #       repair-stale #<pr> session:<id> since:<iso>
+#       rounds #<pr>=<n>,...   fix rounds per open PR (review-ledger.sh rounds, #257); omitted with
+#                  none. Then one line per PR at or past ORCHESTRATE_REVIEW_ROUND_CAP (default 2):
+#       review-loop #<pr> rounds=<n> since=<iso> hours=<h> reviewed=<sha|->
 #     Reasons: main-red, flake-rerun, rerun-pending, main-unknown, merge-loop-<state> (only while PRs
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
 #     issue-list-truncated, dispatch-stale=<n> (`cloud-dispatch.sh expire --issue N`, then dispatch
@@ -76,7 +80,9 @@
 #     threads, or report why it cannot merge),
 #     hold-stale=<m> (holds past --hold-hours: check their release condition, `hold.sh check`),
 #     repaired=<n> (repairs that ended: review the final head, then record the verdict),
-#     repair-stale=<m> (check the session; if its run ended, `review-ledger.sh repaired --pr N`). A part that
+#     repair-stale=<m> (check the session; if its run ended, `review-ledger.sh repaired --pr N`),
+#     review-loop=<m> (PRs past the round cap: decline the optional findings, file the rest, review
+#     the delta from reviewed= at once; no further fix round, ../review-rounds.md). A part that
 #     could not be read says "unknown"; never a guess.
 #     Device slots: an active lanes.tsv row whose agent column reads "<type>:<agent>" holds one
 #     <type> slot. Types and sizes: --device-slots or ORCHESTRATE_DEVICE_SLOTS (e.g.
@@ -144,6 +150,9 @@ while (($#)); do
   esac
 done
 [[ "$hold_hours" =~ ^[0-9]+$ ]] || { echo "triage-tick.sh: --hold-hours must be a whole number" >&2; exit 2; }
+# Issues whose fix merged without closing them wait for a check on main, not a lane (#258).
+((${#exclude[@]})) || exclude=(blocked)
+exclude+=("${ORCHESTRATE_VERIFY_ON_MAIN_LABEL:-verify-on-main}")
 case "$cmd" in
   snapshot | cron) ;;
   rerun)
@@ -546,6 +555,20 @@ if fl=$("$here/review-ledger.sh" inflight --repo "$repo" 2>/dev/null) && [[ -n "
   [[ -z "$stale_repairs" ]] || reasons+=("repair-stale=$(awk 'END { print NR }' <<<"$stale_repairs")")
 fi
 
+# Fix rounds per open PR (#257, review-ledger.sh rounds): one at or past the cap is looping, each
+# push drawing a new review round. Omitted when no open PR has had a fix round.
+rounds_lines="" cap=${ORCHESTRATE_REVIEW_ROUND_CAP:-2}
+if [[ -n "$snap" && "$cap" =~ ^[1-9][0-9]*$ ]] && rr=$("$here/review-ledger.sh" rounds --repo "$repo" 2>/dev/null) && [[ -n "$rr" ]]; then
+  rounds_lines=$(jq -r --rawfile rr <(printf '%s\n' "$rr") --argjson cap "$cap" '[.[].number | tostring] as $open
+    | [$rr | split("\n")[] | select(length > 0) | split("\t") | select(.[0] | IN($open[]))] as $r
+    | select($r | length > 0)
+    | ("rounds " + ($r | map("#\(.[0])=\(.[1])") | join(","))),
+      ($r[] | select((.[1] | tonumber) >= $cap)
+        | "review-loop #\(.[0]) rounds=\(.[1]) since=\(.[2]) hours=\(.[3]) reviewed=\(.[4][0:12])")' <<<"$snap") || rounds_lines=""
+  nl=$(grep -c '^review-loop ' <<<"$rounds_lines" || true)
+  ((nl == 0)) || reasons+=("review-loop=$nl")
+fi
+
 if ((${#reasons[@]})); then echo "verdict act $(IFS=,; echo "${reasons[*]}")"; else echo "verdict ok"; fi
 echo "$main_line"
 echo "prs open=$open${reviews:+ $reviews}"
@@ -562,3 +585,4 @@ echo "$host"
 [[ -z "$stale_holds" ]] || sed 's/^/hold-stale /' <<<"$stale_holds"
 [[ -z "$repairs_line" ]] || echo "$repairs_line"
 [[ -z "$stale_repairs" ]] || sed 's/^/repair-stale /' <<<"$stale_repairs"
+[[ -z "$rounds_lines" ]] || printf '%s\n' "$rounds_lines"

@@ -32,6 +32,25 @@ verify, and a regression surface to sweep.
 - Then one representative call per feature family in the regression surface.
 - Time-box each item (about 15 minutes); mark what you cannot finish `BLOCKED` with the reason.
 
+## Verify-on-main issues (#258)
+An open issue whose fix merged in a PR that did not close it ("Part of #N": the lane's device check
+ran on a branch, not on `{{BASE}}`) carries the `verify-on-main` label
+(`{{SCRIPTS}}/verify-on-main.sh scan --apply`) and is never implementation work. They come to you as
+one batch per platform: `{{SCRIPTS}}/verify-on-main.sh batch --repo {{REPO}}` prints `batch
+<platform> #a,#b <fix refs>` rows, plus `closable` rows.
+- **Evidence first.** A `closable` row already has a PASS on a default-branch SHA posted after the
+  fix (the evidence column links it): boot no device for it; report it with that link.
+- **One pass, no code.** For each issue of your platform's batch, confirm the fix on a fresh
+  device from current `origin/{{BASE}}`, or name what is still missing. You implement nothing.
+- **Record the result where the scan reads it**: one issue comment whose first line is
+  `Device verification: PASS|FAIL on <platform> (<device>, <OS or API level>) at <tested SHA>`
+  (the line `roles/verify-batch.md` defines; `device-recheck.sh` markers count too). A PASS on a
+  SHA on `{{BASE}}` makes the issue `closable` on the next scan; a FAIL takes the label off and
+  sends it back to implementation; something still missing is a FAIL with the missing part named.
+- **Closing is the owner's** under the close policy (`{{SCRIPTS}}/../owner-decisions.md`, #87).
+  Nothing closes an issue automatically: `verify-on-main.sh` only reports `closable`. Close only
+  where your prompt allows it, through `{{SCRIPTS}}/issue-close.sh`, citing the main-SHA result.
+
 ## Reporting
 - `{{STATE}}/verify/<batch>/REPORT.md`: tested SHA, devices, then
   `item | PR/issue | FIXED / PASS / NOT-FIXED / REGRESSED / BLOCKED | decisive evidence | file`.

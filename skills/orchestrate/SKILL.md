@@ -627,6 +627,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
    cannot, so cloud briefs say reply on each thread and do not resolve; after each repair,
    `scripts/thread-sweep.sh resolve` settles threads whose last reply links an issue or names a
    pushed fix.
+   **Review rounds** (`review-rounds.md`, #257): a bot reviewer re-reviews every push, so a fix
+   round is one batched push with the base merge in it; after it, optional findings are declined
+   with a reason and resolved (`review-followup.sh decline`), the new head's delta is reviewed at
+   once, and the tick's `review-loop` line names a PR past the round cap.
    **Regression gates** (`regression-gates.md`): before resolving or filing any review finding,
    check whether it is a regression of existing behaviour; if so, hold the PR and fix it first.
    A PR fixing a device-found regression carries `needs-device-recheck` until a device run on its
@@ -691,7 +695,7 @@ verification batch, check the device lock those routines use; never start a batc
 the main session (subagents lack `RemoteTrigger`) creates one run-once routine per issue, paced and
 recorded through `"$SCRIPTS/cloud-dispatch.sh"`: `roles/cloud-dispatch.md`. Results come back only
 as PRs and issue comments, which the triage loop reads; a dispatch with no PR after 6 h is stale
-and is expired and sent again, up to a cap (`cloud-dispatch.sh stale`/`expire`, #259). A cloud-ready follow-up split from local
+and is expired and sent again, up to a cap (`cloud-dispatch.sh stale`/`expire`, #259); a run silent for 45 min, stuck on a permission prompt or never fired is caught sooner from a saved `list_runs` (`cloud-dispatch.sh stalled`, #260). A cloud-ready follow-up split from local
 work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
 `device-cloud-handoff.md`. The standard implement and repair briefs live in the target repository
 (`.claude/briefs/`, installed from `briefs/`, changed by PR), so each dispatched prompt is one line.
