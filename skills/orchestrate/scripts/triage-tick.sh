@@ -26,6 +26,14 @@
 #                  or REST where GraphQL is refused; read back) and logged to <state dir>/drafts.log.
 #       merge_loop <absent|alive|stale|dead|expired|ended:REASON> [beat_age=<s>] [deadline=<iso>]
 #                  last_merge=<iso|-> pr=<n|-> merges_24h=<n>
+#       shipped-blocked #<pr> verdict=<BLOCK|WAIT|BEHIND|SKIP|unlisted> reason=<detail>
+#                  | shipped-blocked unknown
+#                  one line per open, non-draft PR whose latest internal review verdict is ship
+#                  (review-ledger.sh shipped) but whose pr-ready.sh row is not READY
+#                  (shipped-blocked.sh, #269): the merge loop selects only READY rows, so an
+#                  approved PR blocked by e.g. an unresolved thread (reason=threads=1) is named
+#                  here. pr-ready.sh runs only when such a PR is open; flags for it (--author ...)
+#                  come from ORCHESTRATE_PR_READY_ARGS. "unknown" when readiness could not be read.
 #       dispatch <n|unknown> next=#a,#b,#c [list=truncated@1000]     open issues (any --ready-label;
 #                  none of --exclude-label, default "blocked") with no open PR closing them, no active
 #                  lane and no live cloud dispatch (cloud-dispatch.sh ledger; over REST a PR closes
@@ -64,6 +72,8 @@
 #     resolving: the local orchestrator resolves them, they are not repair targets), stalled=<n> (PRs
 #     with an agreed but unpushed thread: dispatch a repair now, no session is still on it),
 #     reviewed-draft=<n> (reviewed-draft lines not marked ready: mark them ready, or say why not),
+#     shipped-blocked=<n> (shipped-blocked PR lines: clear each reason, e.g. resolve or repair its
+#     threads, or report why it cannot merge),
 #     hold-stale=<m> (holds past --hold-hours: check their release condition, `hold.sh check`),
 #     repaired=<n> (repairs that ended: review the final head, then record the verdict),
 #     repair-stale=<m> (check the session; if its run ended, `review-ledger.sh repaired --pr N`). A part that
@@ -440,6 +450,26 @@ if [[ -f "$state/merges.log" ]]; then
 fi
 if [[ "$loop" != alive && "$open" != unknown && "$open" != 0 ]]; then reasons+=("merge-loop-${loop%%:*}"); fi
 
+# Approved PRs the merge loop passes over (#269): open, non-draft, latest verdict ship, but not
+# READY. pr-ready.sh runs only when there is such a candidate, so a campaign without one pays nothing.
+shipped_lines=""
+if [[ -n "$snap" ]] && sh_rows=$("$here/review-ledger.sh" shipped --repo "$repo" 2>/dev/null) && [[ -n "$sh_rows" ]]; then
+  cands=$(jq -r --rawfile sh <(printf '%s\n' "$sh_rows") '
+    ([$sh | split("\n")[] | select(length > 0) | split("\t")[0]]) as $s
+    | [.[] | select(.draft != true) | .number | tostring | select(IN($s[]))] | unique_by(tonumber) | .[]' <<<"$snap")
+  if [[ -n "$cands" ]]; then
+    sb_args=(--repo "$repo")
+    for c in $cands; do sb_args+=(--pr "$c"); done
+    read -r -a pr_ready_args <<<"${ORCHESTRATE_PR_READY_ARGS:-}"
+    [[ -z "$branch" ]] || pr_ready_args+=(--base "$branch")
+    if shipped_lines=$(orch_run shipped-blocked.sh "${sb_args[@]}" -- ${pr_ready_args[@]+"${pr_ready_args[@]}"} 2>/dev/null); then
+      [[ -z "$shipped_lines" ]] || reasons+=("shipped-blocked=$(awk 'END { print NR }' <<<"$shipped_lines")")
+    else
+      shipped_lines="shipped-blocked unknown"
+    fi
+  fi
+fi
+
 # Free device slots by type.
 slots="none" free=no
 if [[ -n "$device" ]]; then
@@ -521,6 +551,7 @@ echo "$main_line"
 echo "prs open=$open${reviews:+ $reviews}"
 [[ -z "$drafts" ]] || printf '%s' "$drafts"
 echo "merge_loop $loop$loop_extra $last"
+[[ -z "$shipped_lines" ]] || printf '%s\n' "$shipped_lines"
 echo "dispatch $dispatch next=$next"
 [[ -z "$dstale" ]] || echo "$dstale"
 echo "slots $slots"
