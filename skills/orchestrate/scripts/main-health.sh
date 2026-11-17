@@ -105,7 +105,7 @@ verdict=$(jq -r --argjson only "$(json_list ${only[@]+"${only[@]}"})" \
 # Auto-rerun (#270): a red main whose every red run the classifier calls rerunnable is re-run
 # once per run id through triage-tick.sh rerun (same reruns.log, same needs rule), and stays held.
 if [[ "$auto" == yes && "$verdict" == red* ]]; then
-  reruns="$state/reruns.log"
+  export reruns="$state/reruns.log" # read by orch_rerun_seen (_lib.sh)
   held="" ok=""
   for id in $(grep -oE '=[a-z_]+\([0-9]+\)' <<<"$verdict" | tr -dc '0-9\n'); do
     attempt=$(jq -r --argjson id "$id" '[.[] | select(.databaseId == $id) | .runAttempt] | max // 1' <<<"$runs")
