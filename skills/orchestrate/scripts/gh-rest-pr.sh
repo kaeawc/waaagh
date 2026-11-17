@@ -36,7 +36,8 @@
 #            optionally isOutdated/is_outdated/outdated (absent: current). A thread without a
 #            resolved flag, or any other shape, is unreadable (exit 3), never "0".
 #   thread-nodes  the PR as the GraphQL pull request node thread-sweep.sh classifies: {number,
-#            commits{nodes[{commit{oid,committedDate}}]}, reviewThreads{pageInfo{hasNextPage:false},
+#            commits{nodes[{commit{oid,committedDate,parents{totalCount},committer{email}}}]},
+#            reviewThreads{pageInfo{hasNextPage:false},
 #            nodes[{id, isResolved, isOutdated, starter{nodes[{author{login},url,body}]}, latest{totalCount,
 #            nodes[{author{login},body,createdAt}]}, comments{nodes[{body}]} (the last 100)}]}}. Flags come
 #            from ccr/review_threads as in threads; bodies and authors from GET pulls/<n>/comments,
@@ -53,6 +54,8 @@
 # resolve(s|d) #N" (or OWNER/REPO#N naming this repository). GraphQL also counts issues linked by
 # hand in the Development sidebar; REST cannot see those. This script never tries GraphQL; when to
 # use it is the callers' choice, made with orch_gh_api / orch_gh_refused (_lib.sh).
+# --tries N (any command) bounds every gh-read.sh read at N attempts (default: its own, 4), as
+# orch_read_retry N does for callers that wrap gh directly.
 # Exit: 0 ok | 2 usage | 3 unreadable (the gh-read.sh line or the reason is on stderr)
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -64,7 +67,7 @@ usage() { orch_usage; }
 case "${1:-}" in -h | --help) usage; exit 0 ;; -*) echo "gh-rest-pr.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
-repo="" limit=300 asc=no pr="" sha="" checks=no
+repo="" limit=300 asc=no pr="" sha="" checks=no tries=""
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -73,6 +76,7 @@ while (($#)); do
     --pr) pr=$2; shift 2 ;;
     --sha) sha=$2; shift 2 ;;
     --checks) checks=yes; shift ;;
+    --tries) tries=$2; shift 2 ;;
     -h | --help) usage; exit 0 ;;
     *) echo "gh-rest-pr.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -83,9 +87,10 @@ case "$cmd" in
   rollup) [[ "$sha" =~ ^[0-9a-fA-F]+$ ]] || { usage >&2; exit 2; } ;;
   *) usage >&2; exit 2 ;;
 esac
+[[ -z "$tries" || "$tries" =~ ^[1-9][0-9]*$ ]] || { echo "gh-rest-pr.sh: --tries must be a positive number" >&2; exit 2; }
 repo=$(orch_repo "$repo")
 
-ghr() { "$here/gh-read.sh" --json -- "$@"; }
+ghr() { "$here/gh-read.sh" --json ${tries:+--tries "$tries"} -- "$@"; }
 unreadable() { echo "gh-rest-pr: $*" >&2; exit 3; }
 
 # The `gh pr list --json` shape of one REST pull request object.
@@ -213,7 +218,8 @@ thread_nodes() {
     def login: (.user.login // "") | sub("\\[bot\\]$"; "");
     def items: if type == "array" then .[] else error("not a list") end;
     [$cm[] | items] as $all
-    | {number: $n, commits: {nodes: [$co[] | items | {commit: {oid: .sha, committedDate: (.commit.committer.date // null)}}]},
+    | {number: $n, commits: {nodes: [$co[] | items | {commit: {oid: .sha, committedDate: (.commit.committer.date // null),
+         parents: {totalCount: ((.parents // []) | length)}, committer: {email: (.commit.committer.email // null)}}}]},
        reviewThreads: {pageInfo: {hasNextPage: false}, nodes: [$t[0][]
          | ([.root_comment_id, .rootCommentId, .comment_id, .commentId, .first_comment_id, .firstCommentId,
              ((.comments // null) | cmts | (.[0] // {}) | (.databaseId // .database_id // .id))]

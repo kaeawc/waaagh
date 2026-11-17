@@ -8,7 +8,7 @@ setup() {
   ROOT="$(cd "$SCRIPTS/../../.." && pwd)"
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
-  export ORCHESTRATE_NOW=1793880000   # 2026-11-05T10:40:00Z
+  export ORCHESTRATE_NOW=1793880000   # 2026-11-05T12:00:00Z
   # One review thread lives in $FX: its PR ($FX/thread-pr), resolved flag ($FX/resolved) and
   # replies ($FX/replies.json). One issue: state ($FX/istate), labels ($FX/labels, one per line)
   # and comments ($FX/icomments.json). Every write is logged to $FX/writes.

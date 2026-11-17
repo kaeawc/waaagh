@@ -119,11 +119,10 @@ log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "${h
 # gql_read ARGS...: a bounded GraphQL read (gh-read.sh) into $got. Returns 0 on success; 1 when
 # it failed for another reason; 2 when GitHub refused GraphQL (then api=rest from here on).
 gql_read() {
-  local rc=0 err="$state/.gql-err-$$"
-  got=$(orch_run gh-read.sh --tries 3 --budget "${ORCHESTRATE_READ_BUDGET:-60}" -- "$@" 2>"$err") || rc=$?
-  if ((rc == 0)); then rm -f "$err"; return 0; fi
-  if orch_gh_refused "$rc" "$(cat "$err" 2>/dev/null || true)"; then rm -f "$err"; api=rest; return 2; fi
-  rm -f "$err"; return 1
+  local rc=0
+  got=$(orch_gql_read 3 gh "$@") || rc=$?
+  if ((rc == 2)); then got=""; api=rest; fi
+  return "$rc"
 }
 # pr_view FIELDS: the PR as `gh pr view --json FIELDS` gives it, into $got (bounded reads). Over
 # REST it is gh-rest-pr.sh view, which carries every field read here.
@@ -134,7 +133,7 @@ pr_view() {
     ((grc != 0)) || return 0
     ((grc == 2)) || return 1
   fi
-  got=$(orch_run gh-rest-pr.sh view --repo "$repo" --pr "$pr" 2>/dev/null)
+  got=$(orch_run gh-rest-pr.sh view --repo "$repo" --pr "$pr" --tries 3 2>/dev/null)
 }
 
 # Merge-sensitive locks owned by this PR are released on exit, except while the merge may still be
@@ -222,7 +221,7 @@ if [[ "$admin" == yes ]]; then
     over=${ORCHESTRATE_FAST_PATH_OVER:-20}
     open="" lrc=0
     if [[ "$api" != rest ]]; then gql_read pr list --repo "$repo" --state open --limit 300 --json number || lrc=$?; fi
-    if [[ "$api" == rest ]]; then lrc=0; got=$(orch_run gh-rest-pr.sh list --repo "$repo" --limit 300 2>/dev/null) || lrc=1; fi
+    if [[ "$api" == rest ]]; then lrc=0; got=$(orch_run gh-rest-pr.sh list --repo "$repo" --limit 300 --tries 3 2>/dev/null) || lrc=1; fi
     if ((lrc != 0)) || ! open=$(jq length <<<"$got" 2>/dev/null) || [[ ! "$open" =~ ^[0-9]+$ ]]; then
       echo "unverified: the open PR count could not be read for the --admin fast-path check; nothing was attempted"; exit 9
     fi

@@ -77,7 +77,9 @@ to Opus or split the task, as a stated decision.
 - Launch independent lanes in one message. Agents that poll in the background stall: every role
   is single-pass, and you relaunch it when its inputs change.
 - Every lane brief names its worktree as an absolute path, and the lane works only there (the
-  lane-safety hook refuses deletions and shell writes outside it).
+  lane-safety hook refuses deletions and shell writes outside it). It also names your own checkout
+  as forbidden (`{{FORBIDDEN}}`, listed in `lane-forbidden`; `lane-safety.md` rule 7): a subagent
+  starts in your cwd and must not edit it.
 
 **Choosing the reviewer.** One independent Opus reviewer per lane. Tiny or mechanical diff: review
 it yourself. Add a second lens only for a risk surface one reviewer cannot cover (concurrency,
@@ -93,6 +95,12 @@ review on every poll or push.
   `git worktree` a jj checkout.
 - **One writer per branch or overlapping file set.** Parallel lanes get disjoint file scopes and
   separate worktrees. Every brief names its scope and the files other lanes own.
+- **That holds across sessions too** (#214). A cloud session that opened a PR stays a live writer
+  while the PR is open: idle is not done, and it wakes on the PR's CI, review and bot events.
+  `cloud-dispatch.sh record --kind repair` therefore posts one `REPAIR-START` marker on the PR
+  (`repair-writer.sh mark`), and the implement brief stops before any push once one is there. The
+  tick's `repair-writer.sh check` flags a second writer the commit metadata shows
+  (`repair-writers=<n>`); re-read the head SHA right before recording a review verdict.
 - Implementation lanes leave changes uncommitted and run no mutating VCS commands; you commit and
   push. (The PR doctor and supersede-evidence roles commit on their own branches, per their briefs.)
 - **A device belongs to one agent at a time.** Anything that drives an emulator, simulator or
@@ -578,7 +586,7 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   lane reproduces it; a reproduction is spent only when it fails again on the same head, and the
   signature is then recorded. A check that failed only because a job it needs was abandoned,
   cancelled or skipped is re-run in full (`rerun --full`), never `--failed`, and several PRs
-  hitting that within the hour is a runner-pool problem (`"$SCRIPTS/failure-triage.sh"`,
+  hitting that within the hour is a runner-pool problem; a package install that could not reach its public mirror is infrastructure too, and several PRs hitting it is one outage to fix once (`"$SCRIPTS/failure-triage.sh"`,
   `failure-triage.md`, which also
   covers what to put in cloud briefs: container knobs and never killing by pattern).
 - GitHub reads in the scripts go through `"$SCRIPTS/gh-read.sh"`: bounded retries for network and
@@ -711,7 +719,7 @@ verification batch, check the device lock those routines use; never start a batc
 the main session (subagents lack `RemoteTrigger`) creates one run-once routine per issue, paced and
 recorded through `"$SCRIPTS/cloud-dispatch.sh"`: `roles/cloud-dispatch.md`. Results come back only
 as PRs and issue comments, which the triage loop reads; a dispatch with no PR after 6 h is stale
-and is expired and sent again, up to a cap (`cloud-dispatch.sh stale`/`expire`, #259); a run silent for 45 min, stuck on a permission prompt or never fired is caught sooner from a saved `list_runs` (`cloud-dispatch.sh stalled`, #260). A cloud-ready follow-up split from local
+and is expired and sent again, up to a cap (`cloud-dispatch.sh stale`/`expire`, #259); a run silent for 45 min, stuck on a permission prompt or never fired is caught sooner from a saved `list_runs` (`cloud-dispatch.sh stalled`, #260), as is one active but unpushed after 30 min (`--no-push`, #216). The standard briefs give a cloud session's local test run a 10-minute budget, then push and let CI verify; build-heavy fixes that need tests before review (a cold dependency cache is the usual stall) go to a local lane with a warm cache instead. A cloud-ready follow-up split from local
 work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
 `device-cloud-handoff.md`. The standard implement and repair briefs live in the target repository
 (`.claude/briefs/`, installed from `briefs/`, changed by PR), so each dispatched prompt is one line.

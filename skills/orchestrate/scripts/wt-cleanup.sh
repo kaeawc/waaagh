@@ -6,7 +6,9 @@
 #                      [--repo OWNER/REPO] [--max-count N] [--max-gb G] [--apply]
 #   removable only when ALL hold: not the main worktree, not locked; clean (no changes, no
 #   untracked files); no process has its working directory inside it; untouched for N hours
-#   (default 24; index and directory times); HEAD is on a remote branch (nothing unpushed); its
+#   (default 24; index and directory times); HEAD is on a remote branch (nothing unpushed) and
+#   `git ls-remote origin` shows the branch at HEAD or beyond it (a stale tracking ref is not
+#   trusted; an unreadable remote keeps the worktree, #262); its
 #   branch matches no --protect glob (default main, master, develop, release/*, release-*); with
 #   --pr-closed, its branch has a PR and every PR for it is merged or closed (one gh read each,
 #   only for otherwise-removable trees; --repo defaults to the checkout's repository).
@@ -93,6 +95,18 @@ while IFS=$'\t' read -r path branch locked; do
   if inside "$cwds" "$real"; then keep "a process is working inside it"; continue; fi
   ((age >= hours)) || { keep "touched ${age}h ago (< ${hours}h)"; continue; }
   [[ -n "$(git -C "$real" branch -r --contains HEAD 2>/dev/null)" ]] || { keep "HEAD is not on any remote branch (unpushed work)"; continue; }
+  # A remote-tracking ref can be stale (a push that died mid-hook never moved it, and an old fetch
+  # can make HEAD look pushed): ask the remote itself that the branch holds HEAD (#262).
+  case "$branch" in
+    "(detached)" | -) ;;
+    *)
+      head_sha=$(git -C "$real" rev-parse HEAD 2>/dev/null || true)
+      remote_line=$(git -C "$real" ls-remote origin "refs/heads/$branch" 2>/dev/null) || { keep "cannot read the remote branch (ls-remote failed)"; continue; }
+      remote_sha=$(printf '%s\n' "$remote_line" | awk 'NR == 1 { print $1 }')
+      if [[ -n "$remote_sha" && "$remote_sha" != "$head_sha" ]] && ! git -C "$real" merge-base --is-ancestor "$head_sha" "$remote_sha" 2>/dev/null; then
+        keep "remote $branch is ${remote_sha:0:12}, HEAD ${head_sha:0:12} is not on it (push-verify.sh)"; continue
+      fi ;;
+  esac
   if [[ "$pr_closed" == yes ]]; then
     case "$branch" in "(detached)" | -) keep "no branch to match a PR"; continue ;; esac
     states=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --head "$branch" --state all --limit 20 --json state 2>/dev/null |

@@ -4,8 +4,16 @@ name: Coverage
 # floor in dev/coverage-floor.tsv or a script has no row there. It runs on pushes to main, by hand,
 # and on pull requests that change a script, a suite, dev/ or this workflow (#157): the floors sit 1
 # point under each script's credited coverage, so a PR that adds an untested branch would otherwise
-# pass PR CI and turn this job red on main for every later commit. A run takes about 9 minutes; it is
-# its own workflow, so the fast `scripts` check in test.yml does not wait for it.
+# pass PR CI and turn this job red on main for every later commit. It is its own workflow, so the
+# fast `scripts` check in test.yml does not wait for it.
+#
+# One run of every suite under bashcov passed 30 minutes at about 940 tests (#287), and bashcov
+# cannot run suites in parallel on one runner (#194). So the suites are split into shards (#295):
+# each `shard` job runs bashcov at -j 1 on its share (dev/coverage.sh --shard K/N, balanced by
+# dev/coverage-weights.tsv; a new suite lands in some shard by itself) and uploads its resultset.
+# The `coverage` job (the check name branch protection knows) merges them, prints the table and
+# judges the floors on the merged numbers. To add a shard, add it to the matrix and raise N in the
+# --shard line together.
 on:
   push:
     branches: [main]
@@ -26,9 +34,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  coverage:
+  shard:
+    name: coverage shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       # bats from its pinned release (commit checked), as in test.yml.
@@ -47,8 +60,36 @@ jobs:
         run: |
           git config --global commit.gpgsign true
           git config --global gpg.program false
-      - name: Coverage (every suite under bashcov)
-        run: dev/coverage.sh
+      - name: Coverage (this shard's suites under bashcov)
+        run: dev/coverage.sh --shard ${{ matrix.shard }}/4
+      # The resultset, subset.txt and test.log, for the merge (and test.log for --weights).
+      - name: Upload shard coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: coverage/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  coverage:
+    needs: shard
+    # Merge whatever the shards wrote even when one failed, so the table still prints; the last step
+    # fails this check whenever a shard did not succeed.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # One directory per shard: shards/coverage-shard-K/.resultset.json.
+      - name: Download shard coverage
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-shard-*
+          path: shards
+      - name: Merge the shards
+        run: dev/coverage.sh --merge shards/*
       - name: Coverage floors
         if: ${{ !cancelled() && hashFiles('coverage/.resultset.json') != '' }}
         run: dev/coverage.sh --check dev/coverage-floor.tsv
@@ -60,3 +101,8 @@ jobs:
           path: coverage/
           include-hidden-files: true
           if-no-files-found: warn
+      - name: Every shard succeeded
+        if: ${{ !cancelled() && needs.shard.result != 'success' }}
+        run: |
+          echo "a coverage shard did not succeed (${{ needs.shard.result }}): see its job log" >&2
+          exit 1
