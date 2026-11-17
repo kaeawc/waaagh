@@ -317,6 +317,19 @@ orch_verdict_rerunnable() {
   case "$v" in flake | known-flake | infra | rerun | rerun-dont-fix) return 0 ;; esac
   return 1
 }
+# orch_mirror_sig FILE -> kind (apt, pip, npm or maven) when FILE shows a package install that could
+# not reach its public mirror (#217, #297): infrastructure, so a rerun is right and a code fix is not.
+# The one definition, shared by failure-triage.sh and main-health.sh.
+orch_mirror_sig() {
+  local kind=""
+  if grep -Eqi -e 'Failed to fetch https?://|Temporary failure resolving|Unable to connect to [^ ]*(ubuntu|debian|archive|security)|Could not resolve .(archive|security|deb)[^ ]*|Hash Sum mismatch|Could not get lock /var/lib/(apt|dpkg)|Some index files failed to download|Connection failed \[IP' "$1"; then kind=apt
+  elif grep -Eqi -e 'Could not fetch URL https://pypi|(Read timed out|Connection (to|aborted)|Max retries exceeded).*(pypi|files\.pythonhosted)' "$1"; then kind=pip
+  elif grep -Eqi -e 'npm (ERR!|error) (code )?(ETIMEDOUT|ECONNRESET|EAI_AGAIN|ENOTFOUND)|npm (ERR!|error) network' "$1"; then kind=npm
+  elif grep -Eqi -e 'Could not transfer artifact|Could not (GET|HEAD) .https://(repo|plugins)\.(maven|gradle)' "$1"; then kind=maven
+  fi
+  [[ -n "$kind" ]] || return 1
+  echo "$kind"
+}
 # orch_rerun_seen RUN_ID: exit 0 when the run's latest record in the log file named by the caller's
 # $reruns (its state dir's reruns.log) is anything but a refused rerun. An `intent` with no outcome
 # (the answer was lost) counts as re-run: reconciled by the snapshot, never replayed.

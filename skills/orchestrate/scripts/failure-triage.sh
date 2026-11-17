@@ -192,19 +192,6 @@ needs_sig() {
   printf '?\t?\n'
 }
 
-# mirror_sig FILE -> kind (apt, pip, npm or maven) when FILE shows a package install that could not
-# reach its public mirror (#217): infrastructure, so a rerun is right and a code fix is not.
-mirror_sig() {
-  local kind=""
-  if grep -Eqi -e 'Failed to fetch https?://|Temporary failure resolving|Unable to connect to [^ ]*(ubuntu|debian|archive|security)|Could not resolve .(archive|security|deb)[^ ]*|Hash Sum mismatch|Could not get lock /var/lib/(apt|dpkg)|Some index files failed to download|Connection failed \[IP' "$1"; then kind=apt
-  elif grep -Eqi -e 'Could not fetch URL https://pypi|(Read timed out|Connection (to|aborted)|Max retries exceeded).*(pypi|files\.pythonhosted)' "$1"; then kind=pip
-  elif grep -Eqi -e 'npm (ERR!|error) (code )?(ETIMEDOUT|ECONNRESET|EAI_AGAIN|ENOTFOUND)|npm (ERR!|error) network' "$1"; then kind=npm
-  elif grep -Eqi -e 'Could not transfer artifact|Could not (GET|HEAD) .https://(repo|plugins)\.(maven|gradle)' "$1"; then kind=maven
-  fi
-  [[ -n "$kind" ]] || return 1
-  echo "$kind"
-}
-
 # pool_prs [PR] -> "<prs csv>\t<hits>": the distinct PRs with needs-dependency hits in the window
 # (PR, the one being decided, counts too), and how many hits.
 pool_prs() {
@@ -231,7 +218,7 @@ case "$cmd" in
     echo "needs ${dep%%$'\t'*} ${dep#*$'\t'}"
     exit 0 ;;
   mirror)
-    kind=$(mirror_sig "$log") || { echo none; exit 1; }
+    kind=$(orch_mirror_sig "$log") || { echo none; exit 1; }
     echo "mirror $kind"
     exit 0 ;;
   outage)
@@ -310,7 +297,7 @@ fi
 
 # A package mirror that could not be reached is infrastructure whatever the classifier says: rerun
 # once; when it fails again the install path is the fix (once, for every PR), not a reproduction.
-if [[ -n "$log" ]] && kind=$(mirror_sig "$log"); then
+if [[ -n "$log" ]] && kind=$(orch_mirror_sig "$log"); then
   if [[ ! -f "$mhits" ]] || ! awk -F'\t' -v p="pr=$pr" -v h="head=$head" -v c="check=$check" \
     '$3 == p && $5 == c && (index($4, h) == 1 || index(h, $4) == 1) { f = 1 } END { exit !f }' "$mhits"; then
     printf '%s\t%s\tpr=%s\thead=%s\tcheck=%s\tmirror=%s\n' "$now" "$(orch_iso "$now")" "$pr" "$head" "$check" "$kind" >>"$mhits"
