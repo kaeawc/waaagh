@@ -55,7 +55,8 @@ orch_repo() {
 # lookup is never cached.
 orch_author() {
   if [[ -n "${ORCHESTRATE_AUTHOR:-}" ]]; then echo "$ORCHESTRATE_AUTHOR"; return; fi
-  local root="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}" host="${GH_HOST:-github.com}"
+  local root host="${GH_HOST:-github.com}"
+  root=$(orch_state_root)
   local ttl="${ORCHESTRATE_AUTHOR_TTL:-3600}" now key login t h k l
   local cache="$root/.author" hosts="${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml"
   now=$(orch_now)
@@ -75,9 +76,14 @@ orch_author() {
   echo "$login"
 }
 
+# orch_state_root -> the root of all durable campaign state: ORCHESTRATE_STATE_DIR, default ~/.claude/orchestrate.
+# The one place that default is spelled (#304).
+orch_state_root() { echo "${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}"; }
+
 # orch_state_dir OWNER/REPO -> the repo's durable campaign directory (created on demand).
 orch_state_dir() {
-  local d="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/${1//\//__}"
+  local d
+  d="$(orch_state_root)/${1//\//__}"
   [[ -d "$d" ]] || mkdir -p "$d"
   echo "$d"
 }
@@ -98,7 +104,7 @@ orch_gh_api() {
     auto) ;;
     *) echo "$1: ORCHESTRATE_GH_API must be auto, rest or graphql" >&2; return 2 ;;
   esac
-  memo="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/gh-no-graphql"
+  memo="$(orch_state_root)/gh-no-graphql"
   if read -r at 2>/dev/null <"$memo" && [[ "$at" =~ ^[0-9]+$ ]] && (($(orch_now) - at < 43200)); then
     echo rest
   else
@@ -112,7 +118,8 @@ orch_gh_api() {
 # allows the fallback (auto). Then it records the refusal for orch_gh_api. Any other failure is
 # the caller's to report.
 orch_gh_refused() {
-  local root="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}"
+  local root
+  root=$(orch_state_root)
   [[ "${ORCHESTRATE_GH_API:-auto}" == auto && "$1" == 5 && "$2" == *GraphQL* ]] || return 1
   if mkdir -p "$root" 2>/dev/null && orch_now >"$root/gh-no-graphql.tmp.$$" 2>/dev/null; then
     mv "$root/gh-no-graphql.tmp.$$" "$root/gh-no-graphql" 2>/dev/null || rm -f "$root/gh-no-graphql.tmp.$$"
@@ -132,7 +139,7 @@ orch_hold_of() {
   local rows since why f
   rows=$(orch_run hold.sh list --repo "$1" 2>/dev/null) || return 2
   rows=$(awk -F'\t' -v pr="${2#\#}" '$1 == pr { printf "#%s until:%s since:%s %s\n", $1, $2, $3, $5 }' <<<"$rows")
-  f="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/${1//\//__}/FREEZE"
+  f="$(orch_state_root)/${1//\//__}/FREEZE"
   if [[ -z "$rows" && -f "$f" ]]; then
     IFS=$'\t' read -r since why <"$f" || true
     rows="#${2#\#} until:freeze-end since:${since:-unknown} release freeze: ${why:--}"

@@ -79,7 +79,7 @@ if [[ -z "$path" ]]; then
   elif r=$(orch_repo "$repo" 2>/dev/null) && [[ -n "$r" ]]; then
     path="$(orch_state_dir "$r")/device.lock"
   else
-    d=${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}
+    d=$(orch_state_root)
     mkdir -p "$d"
     path="$d/device.lock"
   fi

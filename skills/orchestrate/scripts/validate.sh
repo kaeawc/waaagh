@@ -32,7 +32,7 @@ case "${1:-}" in -h | --help) orch_usage; exit 0 ;; -*) echo "validate.sh: unkno
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 dir="" vcmd="" runner="" independent=no max_age=86400
-store=${ORCHESTRATE_VALIDATE_DIR:-${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/validate}
+store=${ORCHESTRATE_VALIDATE_DIR:-$(orch_state_root)/validate}
 envargs=()
 while (($#)); do
   case "$1" in
