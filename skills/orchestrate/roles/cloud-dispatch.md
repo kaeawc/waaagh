@@ -142,3 +142,44 @@ leaves its issue in the ledger with nothing to show for it, and both the queue a
   refuses (exit 3) a dispatch that is not stale yet, has a PR (repair that instead) or is closed;
   `--force` skips that check when you know the session died. It always refuses at the cap: an issue
   whose sessions keep ending without a PR is re-routed or handed to a local lane instead.
+
+## Stalled runs (#260)
+
+Six hours is too long to wait on a run that died early. A routine run can go silent while it still
+reports `status: active, worker_status: running`, stop on a permission prompt nobody will answer,
+end its turn with no PR, or never start at all. Only the main session can see this:
+`RemoteTrigger list_runs` and `get_run_log` are its tools, not commands a script can call. So the
+main session fetches the runs and `cloud-dispatch.sh stalled` judges them, offline:
+
+1. **When to look.** Each tick, for every live dispatch whose issue has no PR yet: about 15
+   minutes after its `run_at`, then from about an hour after it, call `RemoteTrigger list_runs`
+   for its trigger and save the JSON to a file in the state directory (one file per trigger;
+   never paste it into a brief or a comment).
+2. `cloud-dispatch.sh stalled --runs FILE --issue N` prints one line per run that needs you, and
+   nothing for a run still producing events or a trigger not yet due. It reads `status`,
+   `worker_status` and `last_event_at` and tolerates missing fields; a run it cannot judge is
+   `unknown` (exit 7): look at it yourself.
+   - `stalled #N run=R ... silent=<m>m`: running, but no event for more than `--minutes` (default
+     `ORCHESTRATE_RUN_STALL_MINUTES`, 45). Read `get_run_log` for what the run learned (for
+     example: the target file was at its size cap, so start from a separate module). Then
+     `cloud-dispatch.sh expire --issue N --force` (the run is dead though it is under the stale
+     hours) and dispatch again with a **new trigger and a new branch**: `payload --issue N ...
+     --brief-ref implement --branch work/N-auto-2 --note "<what it learned, one line>"`, then
+     `record` the new trigger as usual. The new branch keeps a run that wakes up late from
+     pushing over the new one. The cap still holds.
+   - `blocked #N run=R status=.../requires_action`: the run stopped on a permission prompt
+     (`get_run_log` ends with a `permission prompt` event) and will sit until it expires. Treat
+     it as dead. It wrote nothing, so re-fire the same trigger (`RemoteTrigger run`, then
+     `update {"enabled": false}`); no second writer lands on the branch. When the prompt was for
+     a compound command, tell the next dispatch in `--note`: one plain command per Bash call, no
+     globs outside the repository.
+   - `ended #N run=R status=.../idle`: the run ended cleanly with no PR. **Read its final message
+     first** (`get_run_log`): it often stopped on a real question, which goes to
+     `needs-decision` (post the question on the issue), not to a redispatch. Check the log also
+     for a commit it never pushed (a gate moved to the background when the turn ended): a run
+     whose PR head is older than the run's start is not done either. Redispatch, as for
+     `stalled`, only when the log shows neither a question nor work worth keeping.
+   - `unfired #N trigger=T run_at=... late=<m>m`: the run-once trigger never started a run, more
+     than `ORCHESTRATE_RUN_UNFIRED_MINUTES` (15) after `run_at`. Fire it with `RemoteTrigger run`,
+     then `update {"enabled": false}` at once, so the late scheduler cannot start a second run on
+     the same branch.
