@@ -55,6 +55,16 @@ from memory (advisory workflows, ready label, device slot types).
      Report the `dispatch` queue as waiting on the host, with the cause; for `cause=indexing` the
      owner action from `host-load.sh` (fewer worktrees, Spotlight exclusion). `host unknown` (the
      read failed) holds nothing: dispatch is reported as usual.
+   - `issue-list-truncated`: the `dispatch` line ends `list=truncated@1000`; the issue read hit its
+     limit, so the count may be short. Report it; do not read it as "nothing left to dispatch".
+   - `dispatch-stale=<n>` / `dispatch-capped=<m>` (#259): the `dispatch-stale redispatch=… capped=…
+     unknown=…` line names cloud dispatches older than `ORCHESTRATE_DISPATCH_STALE_HOURS` (6) whose
+     issue is still open with no open or merged PR referencing it. A live dispatch is left out of
+     `dispatch`, so without this line it would hide its issue forever. For each `redispatch=` issue,
+     read its comments (a blocked session leaves one), then `cloud-dispatch.sh expire --issue N`
+     and dispatch it again (`roles/cloud-dispatch.md`). A `capped=` issue reached
+     `ORCHESTRATE_DISPATCH_CAP` (3) dispatches: route it to a local lane or report why its sessions
+     end. `unknown=` could not be read: leave it for the next tick.
    - `cron-expiring`: the session cron dies within a day; report it so it is re-created.
    - `resolve-now=<n>`: the `threads` line's `resolve-now=` PRs have every unresolved review
      thread answered (an issue link or a pushed fix in the last reply). They are not repair
