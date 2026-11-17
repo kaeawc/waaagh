@@ -86,7 +86,7 @@ graphql_tries() { [ -f "$FX/rest-calls" ] || { echo 0; return; }; grep -cE '^(pr
   echo no-readback >"$FX/rest-merge"
   pm
   [ "$status" -eq 9 ]
-  [[ "$output" == "unverified: the merge of PR 1 may or may not have happened (exit 1, readback failed)"* ]]
+  [[ "$output" == *"gh-rest-pr.sh view failed"*"unverified: the merge of PR 1 may or may not have happened (exit 1, readback failed)"* ]]
   [ "$(jq -r .state "$J")" = unknown ]
   rm "$FX/rest-view-fails"
   pm

@@ -133,7 +133,7 @@ pr_view() {
     ((grc != 0)) || return 0
     ((grc == 2)) || return 1
   fi
-  got=$(orch_run gh-rest-pr.sh view --repo "$repo" --pr "$pr" --tries 3 2>/dev/null)
+  got=$(orch_rest_pr view --repo "$repo" --pr "$pr" --tries 3)
 }
 
 # Merge-sensitive locks owned by this PR are released on exit, except while the merge may still be
@@ -221,7 +221,7 @@ if [[ "$admin" == yes ]]; then
     over=${ORCHESTRATE_FAST_PATH_OVER:-20}
     open="" lrc=0
     if [[ "$api" != rest ]]; then gql_read pr list --repo "$repo" --state open --limit 300 --json number || lrc=$?; fi
-    if [[ "$api" == rest ]]; then lrc=0; got=$(orch_run gh-rest-pr.sh list --repo "$repo" --limit 300 --tries 3 2>/dev/null) || lrc=1; fi
+    if [[ "$api" == rest ]]; then lrc=0; got=$(orch_rest_pr list --repo "$repo" --limit 300 --tries 3) || lrc=1; fi
     if ((lrc != 0)) || ! open=$(jq length <<<"$got" 2>/dev/null) || [[ ! "$open" =~ ^[0-9]+$ ]]; then
       echo "unverified: the open PR count could not be read for the --admin fast-path check; nothing was attempted"; exit 9
     fi
