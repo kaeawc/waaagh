@@ -178,7 +178,7 @@ orch_review_hold_of() {
 # (it also lists the base's own squash commits); it first fetches BASE and refs/pull/PR/head
 # from origin into GITDIR, quietly, and reads what is there if that fails.
 orch_review_covers() {
-  local d=$1 pr=$2 r=$3 h=$4 base=$5 c ps cn ce p ok tree want after
+  local d=$1 pr=$2 r=$3 h=$4 base=$5 c ps cn ce after
   [[ "$r" != "$h" ]] || return 0
   [[ -n "$base" ]] || { echo "cannot verify: no base branch"; return 1; }
   git -C "$d" fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" </dev/null >/dev/null 2>&1 || true
@@ -194,20 +194,48 @@ orch_review_covers() {
     { echo "cannot verify: git log ${r:0:9}..${h:0:9} failed in $d"; return 1; }
   while IFS=$'\t' read -r c ps cn ce; do
     [[ -n "$c" ]] || continue
-    # shellcheck disable=SC2086 # the parent list splits on spaces on purpose
-    set -- $ps
-    (($# == 2)) || { echo "${c:0:9} is not a merge"; return 1; }
-    [[ "$cn" == GitHub && "$ce" == noreply@github.com ]] || { echo "${c:0:9} is a merge made by hand ($cn <$ce>)"; return 1; }
-    ok=no
-    for p in "$1" "$2"; do
-      ! git -C "$d" merge-base --is-ancestor "$p" "refs/remotes/origin/$base" 2>/dev/null || ok=yes
-    done
-    [[ "$ok" == yes ]] || { echo "${c:0:9} does not merge $base"; return 1; }
-    want=$(git -C "$d" merge-tree --write-tree "$1" "$2" 2>/dev/null) || { echo "${c:0:9} is not a clean merge of its parents (or git is older than 2.38)"; return 1; }
-    tree=$(git -C "$d" rev-parse "$c^{tree}")
-    [[ "${want%%$'\n'*}" == "$tree" ]] || { echo "${c:0:9} changes more than the merge of $base"; return 1; }
+    orch_update_merge "$d" "$base" "$c" "$ps" "$cn" "$ce" || return 1
   done <<<"$after"
   return 0
+}
+
+# orch_update_merge GITDIR BASE COMMIT "PARENTS" COMMITTER-NAME COMMITTER-EMAIL: is COMMIT a merge
+# GitHub made from update-branch (#210)? The test orch_review_covers and orch_last_write share: two
+# parents, committer GitHub <noreply@github.com>, one parent on origin/BASE (already fetched), and
+# a tree equal to the clean automatic merge of its parents. Returns 0, or 1 and prints why. The
+# caller passes the fields from its own `git log --format='%H%x09%P%x09%cn%x09%ce'`.
+orch_update_merge() {
+  local d=$1 base=$2 c=$3 ps=$4 cn=$5 ce=$6 p ok want tree
+  # shellcheck disable=SC2086 # the parent list splits on spaces on purpose
+  set -- $ps
+  (($# == 2)) || { echo "${c:0:9} is not a merge"; return 1; }
+  [[ "$cn" == GitHub && "$ce" == noreply@github.com ]] || { echo "${c:0:9} is a merge made by hand ($cn <$ce>)"; return 1; }
+  ok=no
+  for p in "$1" "$2"; do
+    ! git -C "$d" merge-base --is-ancestor "$p" "refs/remotes/origin/$base" 2>/dev/null || ok=yes
+  done
+  [[ "$ok" == yes ]] || { echo "${c:0:9} does not merge $base"; return 1; }
+  want=$(git -C "$d" merge-tree --write-tree "$1" "$2" 2>/dev/null) || { echo "${c:0:9} is not a clean merge of its parents (or git is older than 2.38)"; return 1; }
+  tree=$(git -C "$d" rev-parse "$c^{tree}")
+  [[ "${want%%$'\n'*}" == "$tree" ]] || { echo "${c:0:9} changes more than the merge of $base"; return 1; }
+}
+
+# orch_last_write GITDIR HEAD BASE: the newest real write on a branch (#242), for "was this PR
+# pushed recently" guards. GitHub's update-branch merge gives a PR a fresh head without anyone
+# writing to it, so the head's time says nothing about a second writer. Prints
+# `<sha><TAB><committer epoch><TAB><merges skipped>` for the commit with the newest committer time
+# among those in `git log HEAD --not origin/BASE` that are not such a merge (orch_update_merge; a
+# merge made by hand, a conflict resolution, is a write), or `-<TAB>-<TAB><n>` when there is none.
+# origin/BASE must be fetched. Returns 1 when git cannot list HEAD's commits.
+orch_last_write() {
+  local d=$1 h=$2 base=$3 log c ps cn ce ct best=- bt=- skipped=0
+  log=$(git -C "$d" log --format='%H%x09%P%x09%cn%x09%ce%x09%ct' "$h" "^refs/remotes/origin/$base" 2>/dev/null) || return 1
+  while IFS=$'\t' read -r c ps cn ce ct; do
+    [[ -n "$c" ]] || continue
+    if orch_update_merge "$d" "$base" "$c" "$ps" "$cn" "$ce" >/dev/null; then skipped=$((skipped + 1)); continue; fi
+    if [[ "$bt" == - ]] || ((ct > bt)); then best=$c bt=$ct; fi
+  done <<<"$log"
+  printf '%s\t%s\t%s\n' "$best" "$bt" "$skipped"
 }
 
 # orch_hold_hint HOLD -> what lifts a hold orch_hold_of printed: freeze.sh end, or hold.sh release.
