@@ -195,7 +195,7 @@ case "$cmd" in
       line="beat=$now deadline=$deadline pid=${pid:-$PPID}"
     fi
     orch_journal "$beatf" "$line"
-    "$here/loops.sh" heartbeat merge-loop --repo "$repo" ${end:+--end "$end"} --pid "${pid:-$PPID}" --every 600 >/dev/null || true
+    orch_run loops.sh heartbeat merge-loop --repo "$repo" ${end:+--end "$end"} --pid "${pid:-$PPID}" --every 600 >/dev/null || true
     echo "$line"
     exit 0 ;;
   cron)
@@ -209,13 +209,13 @@ case "$cmd" in
     if [[ -z "$logf" ]]; then
       logf=$(mktemp "${TMPDIR:-/tmp}/triage-tick-log.XXXXXX")
       trap 'rm -f "$logf"' EXIT
-      "$here/gh-read.sh" -- run view "$run_id" --repo "$repo" --log-failed >"$logf" 2>/dev/null || : >"$logf"
+      orch_run gh-read.sh -- run view "$run_id" --repo "$repo" --log-failed >"$logf" 2>/dev/null || : >"$logf"
     fi
     if [[ -s "$logf" ]]; then
-      meta=$("$here/gh-read.sh" --json -- run view "$run_id" --repo "$repo" --json headSha,workflowName 2>/dev/null) || meta='{}'
+      meta=$(orch_run gh-read.sh --json -- run view "$run_id" --repo "$repo" --json headSha,workflowName 2>/dev/null) || meta='{}'
       sha=$(jq -r '.headSha // empty' <<<"$meta" 2>/dev/null) || sha=""
       [[ -n "$check" ]] || check=$(jq -r '.workflowName // empty' <<<"$meta" 2>/dev/null) || check=""
-      dep=$("$here/failure-triage.sh" needs --repo "$repo" --check "${check:-*}" --log "$logf" 2>/dev/null) || dep=""
+      dep=$(orch_run failure-triage.sh needs --repo "$repo" --check "${check:-*}" --log "$logf" 2>/dev/null) || dep=""
     fi
     mode="" args=(--failed) headf=""
     if [[ -n "$dep" ]]; then
@@ -269,7 +269,7 @@ reasons=()
 mh_args=(--repo "$repo")
 [[ -z "$branch" ]] || mh_args+=(--branch "$branch")
 for w in ${ignore[@]+"${ignore[@]}"}; do mh_args+=(--ignore-workflow "$w"); done
-mh=$("$here/main-health.sh" "${mh_args[@]}" 2>/dev/null) || true
+mh=$(orch_run main-health.sh "${mh_args[@]}" 2>/dev/null) || true
 mh=$(printf '%s\n' "$mh" | sed -n '$p')
 case "$mh" in green\ *) mh_state=green ;; red\ *) mh_state=red ;; *) mh_state=unknown ;; esac
 
@@ -278,7 +278,7 @@ pending=()
 if [[ -f "$reruns" ]]; then
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
-    st=$("$here/gh-read.sh" --json -- run view "$id" --repo "$repo" --json status 2>/dev/null | jq -r '.status // empty') || st=""
+    st=$(orch_run gh-read.sh --json -- run view "$id" --repo "$repo" --json status 2>/dev/null | jq -r '.status // empty') || st=""
     [[ "$st" == completed ]] || pending+=("$id")
   done < <(awk -F'\t' -v cut="$((now - 86400))" '$NF ~ /^(full-)?(intent$|rerun-requested$|note-failed)/ {
       at = $4; sub(/^at=/, "", at); if (at + 0 >= cut + 0) { r = $2; sub(/^run=/, "", r); if (!(r in s)) { s[r] = 1; print r } } }' "$reruns")
@@ -323,10 +323,10 @@ open=unknown dispatch=unknown next="-" reviews="" suspect=""
 lanes_tsv=""
 [[ ! -f "$state/lanes.tsv" ]] || lanes_tsv=$(cat "$state/lanes.tsv")
 snap_rc=0
-snap=$("$here/gh-snapshot.sh" --repo "$repo" --limit 300 --json 2>/dev/null) || snap_rc=$?
+snap=$(orch_run gh-snapshot.sh --repo "$repo" --limit 300 --json 2>/dev/null) || snap_rc=$?
 ((snap_rc <= 1)) && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$snap" || snap=""
 pr_rc=0
-prs=$("$here/gh-issues.sh" prs-open --repo "$repo" --limit 300 --fields number,closingIssuesReferences 2>/dev/null) || pr_rc=$?
+prs=$(orch_run gh-issues.sh prs-open --repo "$repo" --limit 300 --fields number,closingIssuesReferences 2>/dev/null) || pr_rc=$?
 if ((pr_rc != 0)) && [[ -n "$snap" ]] && [[ "$(orch_gh_api triage-tick.sh)" == rest ]]; then
   open=$(jq -r --argjson t "$snap_rc" 'if $t == 1 or length >= 300 then "300+" else length end' <<<"$snap")
 fi
@@ -340,7 +340,7 @@ if ((pr_rc == 0)); then
     $5 == "expired" { delete r[$1]; next } { r[$1] = $3 } END { for (k in r) print k, r[k] }' "$state/cloud-sessions.tsv")
   stale_cut=$(orch_iso "$((now - ${ORCHESTRATE_DISPATCH_STALE_HOURS:-6} * 3600))")
   # 1000, not 300: a limit under the open count hid the newest issues (#259); a full list says so.
-  if issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 1000 --fields number,labels 2>/dev/null); then
+  if issues=$(orch_run gh-issues.sh issues --repo "$repo" --limit 1000 --fields number,labels 2>/dev/null); then
     q=$(jq -r --slurpfile prs <(printf '%s\n' "$prs") --rawfile lanes <(printf '%s' "$lanes_tsv") \
       --rawfile cloud <(printf '%s' "$cloud_live") --arg cut "$stale_cut" \
       --argjson ready "$(json_list ${ready[@]+"${ready[@]}"})" --argjson exclude "$(json_list "${exclude[@]}")" '
@@ -374,7 +374,7 @@ dstale=""
 if [[ -n "${suspect:-}" ]]; then
   st_rc=0
   # shellcheck disable=SC2086 # issue numbers, one word each
-  st=$("$here/cloud-dispatch.sh" stale --repo "$repo" $suspect 2>/dev/null) || st_rc=$?
+  st=$(orch_run cloud-dispatch.sh stale --repo "$repo" $suspect 2>/dev/null) || st_rc=$?
   ((st_rc == 0 || st_rc == 7)) || st=$(printf 'unknown #%s\n' $suspect)
   dstale=$(awk '$1 ~ /^(stale|capped|unknown)$/ { k[$1] = k[$1] (k[$1] == "" ? "" : ",") $2; n[$1]++ }
     END { if (n["stale"] + n["capped"] + n["unknown"] > 0)
@@ -406,7 +406,7 @@ mark_ready() { # PR -> what the reviewed-draft line says; one drafts.log line ei
   else via=rest; fi
   [[ "$via" != rest ]] || out=$(gh api -X PATCH "repos/$repo/pulls/$n" -F draft=false 2>&1) || rc=$?
   if ((rc == 0)); then
-    left=$("$here/gh-read.sh" --json -- api "repos/$repo/pulls/$n" 2>/dev/null | jq -r '.draft | if type == "boolean" then tostring else empty end') || left=""
+    left=$(orch_run gh-read.sh --json -- api "repos/$repo/pulls/$n" 2>/dev/null | jq -r '.draft | if type == "boolean" then tostring else empty end') || left=""
     case "$left" in
       false) out="marked ready" ;;
       true) out="mark-ready failed (still a draft after the $via write: mark it ready elsewhere, e.g. GitHub MCP update_pull_request draft=false)" ;;
@@ -424,7 +424,7 @@ if [[ -n "$snap" ]]; then
   mode=$(jq -r '.mode // "attended"' "$state/campaign.json" 2>/dev/null) || mode=attended
   while IFS=$'\t' read -r n head roll; do
     [[ -n "$n" ]] || continue
-    row=$("$here/review-ledger.sh" latest --repo "$repo" --pr "$n" 2>/dev/null) || row=""
+    row=$(orch_run review-ledger.sh latest --repo "$repo" --pr "$n" 2>/dev/null) || row=""
     IFS=$'\t' read -r _ _ v vhead _ <<<"$row" || true
     [[ "$v" == ship || "$roll" == SUCCESS ]] || continue
     what="mark ready?" hrc=0
@@ -467,7 +467,7 @@ if [[ "$loop" != alive && "$open" != unknown && "$open" != 0 ]]; then reasons+=(
 # Approved PRs the merge loop passes over (#269): open, non-draft, latest verdict ship, but not
 # READY. pr-ready.sh runs only when there is such a candidate, so a campaign without one pays nothing.
 shipped_lines=""
-if [[ -n "$snap" ]] && sh_rows=$("$here/review-ledger.sh" shipped --repo "$repo" 2>/dev/null) && [[ -n "$sh_rows" ]]; then
+if [[ -n "$snap" ]] && sh_rows=$(orch_run review-ledger.sh shipped --repo "$repo" 2>/dev/null) && [[ -n "$sh_rows" ]]; then
   cands=$(jq -r --rawfile sh <(printf '%s\n' "$sh_rows") '
     ([$sh | split("\n")[] | select(length > 0) | split("\t")[0]]) as $s
     | [.[] | select(.draft != true) | .number | tostring | select(IN($s[]))] | unique_by(tonumber) | .[]' <<<"$snap")
@@ -525,7 +525,7 @@ threads="threads unknown"
 if [[ "$open" == 0 ]]; then
   threads="threads none"
 elif [[ "$open" != unknown ]]; then
-  t=$("$here/thread-sweep.sh" scan --summary --repo "$repo" 2>/dev/null) || true
+  t=$(orch_run thread-sweep.sh scan --summary --repo "$repo" 2>/dev/null) || true
   t=$(printf '%s\n' "$t" | sed -n '$p')
   [[ "$t" != "threads unresolved="* ]] || threads=$t
 fi
@@ -537,8 +537,8 @@ if [[ -n "$sp" ]]; then reasons+=("stalled=$(tr ',' '\n' <<<"$sp" | awk 'END { p
 # Merge-loop holds (hold.sh): count them and name every one past --hold-hours with its reason, so
 # a hold whose condition passed but was never released is seen at the next tick (#196).
 holds_line="" stale_holds=""
-if hold_rows=$("$here/hold.sh" list --repo "$repo" 2>/dev/null) && [[ -n "$hold_rows" ]]; then
-  stale_holds=$("$here/hold.sh" stale --repo "$repo" --hours "$hold_hours" 2>/dev/null) || true
+if hold_rows=$(orch_run hold.sh list --repo "$repo" 2>/dev/null) && [[ -n "$hold_rows" ]]; then
+  stale_holds=$(orch_run hold.sh stale --repo "$repo" --hours "$hold_hours" 2>/dev/null) || true
   ns=0
   [[ -z "$stale_holds" ]] || ns=$(awk 'END { print NR }' <<<"$stale_holds")
   holds_line="holds n=$(awk 'END { print NR }' <<<"$hold_rows") stale=$ns"
@@ -548,12 +548,12 @@ fi
 # Repairs in flight (review-ledger.sh, #212): each is settled against its closing comment, and one
 # in flight past --hold-hours is named so its session is checked. Omitted with none in flight.
 repairs_line="" stale_repairs="" writers=""
-if fl=$("$here/review-ledger.sh" inflight --repo "$repo" 2>/dev/null) && [[ -n "$fl" ]]; then
+if fl=$(orch_run review-ledger.sh inflight --repo "$repo" 2>/dev/null) && [[ -n "$fl" ]]; then
   # A second writer on a PR under repair (#214), checked before settle ends any of them.
-  writers=$("$here/repair-writer.sh" check --repo "$repo" 2>/dev/null | awk '$1 != "clear"') || true
+  writers=$(orch_run repair-writer.sh check --repo "$repo" 2>/dev/null | awk '$1 != "clear"') || true
   nw=$(awk '($1 == "two-writers" || $1 == "force-push") && !s[$2]++ { c++ } END { print c + 0 }' <<<"$writers")
   ((nw == 0)) || reasons+=("repair-writers=$nw")
-  st=$("$here/review-ledger.sh" settle --repo "$repo" 2>/dev/null) || true
+  st=$(orch_run review-ledger.sh settle --repo "$repo" 2>/dev/null) || true
   cut=$(orch_iso "$((now - hold_hours * 3600))")
   repairs_line=$(awk '{ k[$1] = k[$1] (k[$1] == "" ? "" : ",") $2 }
     END { printf "repairs inflight=%s settled=%s unknown=%s", (k["inflight"] == "" ? "-" : k["inflight"]),
@@ -567,7 +567,7 @@ fi
 # Fix rounds per open PR (#257, review-ledger.sh rounds): one at or past the cap is looping, each
 # push drawing a new review round. Omitted when no open PR has had a fix round.
 rounds_lines="" cap=${ORCHESTRATE_REVIEW_ROUND_CAP:-2}
-if [[ -n "$snap" && "$cap" =~ ^[1-9][0-9]*$ ]] && rr=$("$here/review-ledger.sh" rounds --repo "$repo" 2>/dev/null) && [[ -n "$rr" ]]; then
+if [[ -n "$snap" && "$cap" =~ ^[1-9][0-9]*$ ]] && rr=$(orch_run review-ledger.sh rounds --repo "$repo" 2>/dev/null) && [[ -n "$rr" ]]; then
   rounds_lines=$(jq -r --rawfile rr <(printf '%s\n' "$rr") --argjson cap "$cap" '[.[].number | tostring] as $open
     | [$rr | split("\n")[] | select(length > 0) | split("\t") | select(.[0] | IN($open[]))] as $r
     | select($r | length > 0)

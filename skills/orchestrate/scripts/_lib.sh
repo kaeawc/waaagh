@@ -21,7 +21,7 @@ case "${BASH_SOURCE[0]}" in */*) _orch_lib_dir=${BASH_SOURCE[0]%/*} ;; *) _orch_
 # directory holding only the stubs it needs (a failing hold.sh, a pr-merge.sh with a fixed exit
 # code): every other NAME still runs from the real tree, so bashcov credits it, where a copy of
 # the tree is credited nothing. The helpers below, and the scripts whose siblings tests stub
-# (merge-queue.sh, pr-merge.sh, issue-candidates.sh), call their siblings through it.
+# (merge-queue.sh, pr-merge.sh, issue-candidates.sh, triage-tick.sh), call their siblings through it.
 orch_run() {
   local f="$_orch_lib_dir/$1"
   [[ -z "${ORCHESTRATE_SCRIPTS_DIR:-}" || ! -x "$ORCHESTRATE_SCRIPTS_DIR/$1" ]] || f="$ORCHESTRATE_SCRIPTS_DIR/$1"
