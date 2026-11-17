@@ -99,6 +99,26 @@ outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a
 }
 
+@test "paced pushes (#219): the cap and gap leave later items waiting, unpushed, for a later pass" {
+  wt a
+  wt b
+  enqueue a
+  enqueue b
+  export ORCHESTRATE_UPDATE_CAP=1 ORCHESTRATE_UPDATE_GAP=600
+  run mqr run-once
+  [ "$status" -eq 0 ]
+  [ "$(outcome a)" = merged ]
+  [ "$(outcome b)" = waiting ]
+  [[ "$output" == *"b: waiting (update paced (cap: 1 of 1 updates made this pass); a later pass pushes it)"* ]]
+  run ! git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/b
+  [ "$(cut -f2,3 "$ORCHESTRATE_STATE_DIR/o__r/branch-updates.log")" = $'-\tmerge-queue' ]
+  # a new pass inside the gap: still paced
+  run mqr run-once
+  [[ "$output" == *"b: waiting (update paced (gap: last update (PR -) 0s ago"* ]]
+  ORCHESTRATE_NOW=$((ORCHESTRATE_NOW + 600)) run mqr run-once
+  [ "$(outcome b)" = merged ]
+}
+
 @test "a conflict records outcome conflict, is not done, and blocks its dependent" {
   wt a f.txt left
   git -C "$BATS_TEST_TMPDIR/seed" switch -q main 2>/dev/null || true
