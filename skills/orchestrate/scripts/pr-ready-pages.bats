@@ -30,11 +30,10 @@ STUB
 }
 
 OKC='[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}]'
+# shellcheck source=pr_fixture.bash
+source "${BATS_TEST_DIRNAME}/pr_fixture.bash"
 pr_row() { # number [state]
-  jq -cn --argjson n "$1" --argjson c "$OKC" --arg s "${2:-}" \
-    '{number:$n,author:{login:"me"},isDraft:false,isCrossRepository:false,baseRefName:"main",
-      headRefOid:("abcdef0123456789"+($n|tostring)),mergeable:"MERGEABLE",labels:[],statusCheckRollup:$c}
-     + (if $s == "" then {} else {state:$s} end)'
+  pr_fixture_row "$1" me false false MERGEABLE "$OKC" '[]' "$(jq -cn --arg s "${2:-OPEN}" '{state:$s}')"
 }
 prs() { # first last: green PRs, newest first like gh
   for ((i = $2; i >= $1; i--)); do pr_row "$i"; done | jq -s . >"$FX/prs.json"

@@ -197,10 +197,9 @@ STUB
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
 }
 
-pr_row() { # number author draft fork mergeable checks-json [labels-json]
-  jq -cn --argjson n "$1" --arg a "$2" --argjson d "$3" --argjson f "$4" --arg m "$5" --argjson c "$6" --argjson l "${7:-[]}" \
-    '{number:$n,author:{login:$a},isDraft:$d,state:"OPEN",isCrossRepository:$f,baseRefName:"main",headRefOid:("abcdef0123456789abcdef0123456789abcdef01"[0:(40-($n|tostring|length))]+($n|tostring)),mergeable:$m,labels:$l,statusCheckRollup:$c}'
-}
+# shellcheck source=pr_fixture.bash
+source "${BASH_SOURCE[0]%/*}/pr_fixture.bash"
+pr_row() { pr_fixture_row "$@"; } # number author draft fork mergeable checks-json [labels-json]
 
 OKC='[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}]'
 
@@ -216,12 +215,7 @@ verdict_of() { # checks... -> the verdict and detail of one PR built from them
   "$SCRIPTS/pr-ready.sh" --repo o/r --no-threads 2>/dev/null | cut -f2,6
 }
 
-pr_rows() { # from to author draft fork mergeable checks-json: pr_row for each number from..to
-  # (counting down when from > to), from one jq instead of one per row
-  jq -cn --argjson a "$1" --argjson b "$2" --arg au "$3" --argjson d "$4" --argjson f "$5" --arg m "$6" --argjson c "$7" \
-    '(if $a <= $b then range($a; $b + 1) else range($a; $b - 1; -1) end)
-     | {number:.,author:{login:$au},isDraft:$d,state:"OPEN",isCrossRepository:$f,baseRefName:"main",headRefOid:("abcdef0123456789abcdef0123456789abcdef01"[0:(40-(tostring|length))]+tostring),mergeable:$m,labels:[],statusCheckRollup:$c}'
-}
+pr_rows() { pr_fixture_rows "$@"; } # from to author draft fork mergeable checks-json: pr_row for each number from..to
 
 ready_prs() { # n: n mergeable, green PRs by me
   if (($1 > 0)); then pr_rows 1 "$1" me false false MERGEABLE "$OKC"; fi | jq -s . >"$FX/prs.json"
