@@ -40,7 +40,14 @@ from memory (advisory workflows, ready label, device slot types).
    - `main-unknown`: change nothing; an existing hold stays.
    - `merge-loop-<state>` (`absent`, `stale`, `dead`, `expired`, `ended`) while PRs are open: the
      merge loop is not running. Report it first; do not restart it yourself (see below).
-   - `dispatch=<n>`: report the `next=` issues and the free `slots` by type. New issues without a
+   - `dispatch=<n>`: first `"{{SCRIPTS}}/verify-on-main.sh" scan --repo {{REPO}} --apply` from
+     your checkout of `origin/{{BASE}}` (#258). It labels `verify-on-main` every open issue a merged
+     PR references without closing it ("Part of #N", "Refs #N") and no later result on a
+     default-branch SHA covers; the snapshot never counts those as dispatch work, so re-run the
+     snapshot after it labels any. Report its `verify` rows as one verify batch per platform
+     (`verify-on-main.sh batch`), its `closable` rows with their evidence links for the owner to
+     close (you close nothing), and its `failed` rows as implementation work again. Then
+     report the `next=` issues and the free `slots` by type. New issues without a
      route label go to the router first (`{{SCRIPTS}}/../routing.md`, `roles/router.md`); pass
      `--ready-label cloud-ready` so the queue holds only issues a cloud lane can take.
    - `host-hold` (in place of `dispatch=<n>`): the last line, `host HOLD|BACKOFF cause=<c>
@@ -90,7 +97,8 @@ from memory (advisory workflows, ready label, device slot types).
 ## Report (under 150 words)
 The final verdict line; stale holds (PR, age, condition, reason) and any released; reruns
 requested (run id, issue noted); red runs needing a fix lane; merge loop state with `last_merge`;
-dispatch candidates by slot type; anything denied.
+dispatch candidates by slot type; verify-on-main batches by platform and closable issues with
+their evidence links; anything denied.
 
 ---
 

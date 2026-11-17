@@ -57,5 +57,13 @@ rate limit.
   implementation) and D (unclear). Schedule B as one verify batch per platform
   (`roles/verify-batch.md`: one device, one private daemon, a list of issues, a verdict comment per
   issue) and give implementation lanes only C. One batch replaces a lane start per issue.
+- **Verify on main, not implementation.** An open issue a merged PR references without closing it
+  ("Part of #N", "Refs #N"), with no later result on a default-branch SHA, carries `verify-on-main`
+  (`"$SCRIPTS/verify-on-main.sh" scan --apply`, run by the triage tick). It is skipped by
+  `issue-route.sh` and left out of the tick's dispatch count; `verify-on-main.sh batch` groups it by
+  platform label (`--platform-prefix`, default `needs-local:`) for one verification lane per
+  platform (`roles/verification.md`). A main-SHA PASS already on the issue makes it `closable`,
+  reported with the link for the owner; a FAIL takes the label off. The label is configurable
+  (`ORCHESTRATE_VERIFY_ON_MAIN_LABEL`); nothing here closes an issue.
 - An unrouted issue is dispatched nowhere until it is routed. An issue whose route turns out wrong
   is re-routed with `issue-route.sh set`, never worked from both sides.
