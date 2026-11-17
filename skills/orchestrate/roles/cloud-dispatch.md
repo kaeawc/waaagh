@@ -122,6 +122,23 @@ appends a row to `versions.tsv` (the bump rule, `../briefs/README.md`):
 Cloud sessions cannot message the orchestrator. Their only output is the PR on `work/<N>-auto` and,
 when blocked, one comment on the issue. So the triage loop reads them: `pr-ready.sh` and
 `pr-intake.sh` pick up the PRs (merge bot, rebase bot and PR doctor treat them like any other PR of
-the author), and an issue in the ledger with no PR after a few hours gets its comments read. A
-`Part of #N` PR leaves the issue open for its local remainder. Do not dispatch an issue twice: the
-ledger refuses it, and a stuck one is re-routed or handed to a local lane instead.
+the author). A `Part of #N` PR leaves the issue open for its local remainder. The ledger refuses a
+second dispatch of a live one.
+
+## Stale dispatches (#259)
+
+A dispatch is not handled forever. A session that failed, stopped early or never opened a PR
+leaves its issue in the ledger with nothing to show for it, and both the queue and the tick's
+`dispatch` count leave a live dispatch out. So:
+
+- `cloud-dispatch.sh stale` lists every live dispatch older than `--hours` (default
+  `ORCHESTRATE_DISPATCH_STALE_HOURS`, 6, from its `run_at`) whose issue is still open and that no
+  open or merged PR cross-references: `stale #N dispatches=K/CAP since=<run_at> age=<h>h`, or
+  `capped #N ...` once it was dispatched `--cap` times (default `ORCHESTRATE_DISPATCH_CAP`, 3).
+  The triage tick runs it for its suspects and prints the `dispatch-stale` line.
+- For a stale issue, read its comments first (a blocked session leaves one), then
+  `cloud-dispatch.sh expire --issue N`: it checks again, appends an `expired` row to the ledger
+  and puts N back on the queue, and `next`, `payload` and `record` take it as a new dispatch. It
+  refuses (exit 3) a dispatch that is not stale yet, has a PR (repair that instead) or is closed;
+  `--force` skips that check when you know the session died. It always refuses at the cap: an issue
+  whose sessions keep ending without a PR is re-routed or handed to a local lane instead.
