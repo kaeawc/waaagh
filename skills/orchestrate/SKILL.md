@@ -699,6 +699,8 @@ Cloud sessions refuse GraphQL (HTTP 403, `gh pr list` included): `pr-ready.sh`, 
 and `lane-claim.sh` then read the PR side over REST through `gh-rest-pr.sh` on their own, as do
 `triage-tick.sh snapshot` (dispatch queue), `thread-sweep.sh` and `thread-resolve.sh` (#136)
 (`ORCHESTRATE_GH_API=rest` skips the refused attempt); REST costs a few calls per candidate PR.
+`pr-merge.sh` merges over REST too (#266): `PUT pulls/<n>/merge` with `sha=<head>` (409: head
+moved, exit 3; 405: not mergeable, exit 5), with every guard and exit code of the GraphQL path.
 One refusal is remembered for 12 hours (`<state root>/gh-no-graphql`), issue side and PR side
 alike; a new script with a REST path uses `orch_gh_api` / `orch_gh_refused` from `_lib.sh`.
 
