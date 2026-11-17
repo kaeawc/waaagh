@@ -58,7 +58,7 @@ read_once() {
   [ "$status" -eq 0 ] || { echo "status=$status: $output $stderr"; false; }
   [ "$(jq -r .number <<<"$output")" = 1 ]
   [ "$(wc -l <"$FX/rest-calls")" -eq 1 ]
-  [ "$(gh api -i repos/o/r/pulls/1 | jq -r .head.sha)" = abcdef01234567891 ]
+  [ "$(gh api -i repos/o/r/pulls/1 | jq -r .head.sha)" = abcdef0123456789abcdef0123456789abcdef01 ]
 
   stub_gh_routes
   printf '%s\n' "$output" >"$FX/pull.json"

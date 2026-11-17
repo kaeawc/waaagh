@@ -83,20 +83,18 @@ with_lock() { # serialize writers; a lock older than 5 minutes is a leftover
 
 # conflicts: prints one line per overlap with an active lane or an open PR.
 conflicts() {
-  local prs rc=0 err n f
+  local prs rc=0 n f
   if [[ "$api" != rest ]]; then
-    err=$(mktemp)
-    prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limit 200 \
-      --json number,title,body,closingIssuesReferences,files 2>"$err") || rc=$?
-    if orch_gh_refused "$rc" "$(cat "$err")"; then api=rest
-    elif ((rc != 0)); then rm -f "$err"; echo "unreadable"; return; fi
-    rm -f "$err"
+    prs=$(orch_gql_read 4 --json gh pr list --repo "$repo" --state open --limit 200 \
+      --json number,title,body,closingIssuesReferences,files) || rc=$?
+    if ((rc == 2)); then api=rest
+    elif ((rc != 0)); then echo "unreadable"; return; fi
   fi
   if [[ "$api" == rest ]]; then
-    prs=$("$here/gh-rest-pr.sh" list --repo "$repo" --limit 200 2>/dev/null) || { echo "unreadable"; return; }
+    prs=$("$here/gh-rest-pr.sh" list --repo "$repo" --limit 200 --tries 3 2>/dev/null) || { echo "unreadable"; return; }
     if [[ -n "$files" ]]; then
       for n in $(jq -r '.[].number' <<<"$prs"); do
-        f=$("$here/gh-rest-pr.sh" files --repo "$repo" --pr "$n" 2>/dev/null) || { echo "unreadable"; return; }
+        f=$("$here/gh-rest-pr.sh" files --repo "$repo" --pr "$n" --tries 3 2>/dev/null) || { echo "unreadable"; return; }
         prs=$(jq -c --argjson n "$n" --slurpfile f <(printf '%s\n' "$f") 'map(if .number == $n then .files = $f[0] else . end)' <<<"$prs")
       done
     fi
