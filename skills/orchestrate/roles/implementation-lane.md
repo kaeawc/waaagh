@@ -5,6 +5,9 @@ and the tests for this issue yourself, in the lane worktree, verify them, and re
 orchestrator reads your diff, has it validated independently and reviewed, and commits and pushes
 it: you leave it uncommitted.
 
+You may start in `{{FORBIDDEN}}`, the orchestrator's own checkout: never edit, check out, pull or
+build there. Your first write is in the lane worktree.
+
 Your prompt gives: the lane worktree (already at current `origin/{{BASE}}`), the issue text as a
 file path, the files in scope, and the files owned by other lanes. You run on Sonnet for routine,
 fully specified work and on Opus for judgment work; the orchestrator chose the model.

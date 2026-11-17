@@ -17,6 +17,8 @@ case "$*" in
   "api repos/o/r/contents/.claude/briefs/implement.md?ref=main"*) f=c-implement ;;
   "api repos/o/r/contents/.claude/briefs/repair.md?ref=main"*) f=c-repair ;;
   "api repos/o/r/issues/"*"/comments?per_page=100"*) f=comments ;;
+  "api --paginate repos/o/r/issues/"*"/comments?per_page=100") f=comments ;;   # REPAIR-START marker (#214)
+  "api -X POST repos/o/r/issues/"*) echo '{}'; exit 0 ;;
   "api repos/o/r/issues/"*"/timeline?per_page=100"*) f=timeline ;;
   "api repos/o/r/issues/"*) f=issue ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;

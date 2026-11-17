@@ -12,11 +12,19 @@
 #   variable the hook cannot expand, and shell writes (>, >>, tee, cp, mv, sed -i, dd of=, ...)
 #   that resolve outside the lane root, temp dirs, the state dir and $WAAAGH_LANE_ALLOW (temp dirs:
 #   $WAAAGH_LANE_TEMP, default /tmp:/private/tmp:/var/folders:$TMPDIR; lists are colon-separated).
+# Forbidden roots (#218): the orchestrator's own checkout, from $WAAAGH_LANE_FORBID (colon list) and
+#   <state root>/lane-forbidden (one absolute path per line; # comments; state root:
+#   $ORCHESTRATE_STATE_DIR, default ~/.claude/orchestrate). They bind a subagent's calls (payload
+#   agent_id) and a lane session whose worktree is not itself forbidden, never the orchestrator's
+#   own calls. Bound: denied are shell writes, rm -r / find -delete, mutating git (checkout, switch,
+#   reset, pull, merge, rebase, commit, stash, restore, apply, am, cherry-pick, revert, clean, add,
+#   rm, mv, worktree remove/move) and Edit/Write/MultiEdit/NotebookEdit under a forbidden root,
+#   except inside the caller's own lane worktree nested below it.
 # Asked (flagged for review): a destructive command that is backgrounded (&) or silenced
 #   (output to /dev/null), even when its path looks safe.
 # Output: nothing (allow; the normal permission flow continues) or one hookSpecificOutput JSON
 #   object with permissionDecision deny|ask and the reason. WAAAGH_LANE_SAFETY=off disables it.
-# Exit: 0 decided (or not a Bash call); 1 cannot run (no jq, unreadable payload; non-blocking);
+# Exit: 0 decided (or not a Bash or edit call); 1 cannot run (no jq, unreadable payload; non-blocking);
 #   2 bad usage: any argument but -h (the hook takes none; exit 2 blocks the call, so a mis-wired
 #   hook is loud rather than silently off).
 set -euo pipefail
@@ -32,13 +40,26 @@ command -v jq >/dev/null 2>&1 || { echo "lane-safety.sh: jq not found; lane safe
 
 payload=$(cat)
 tool=$(jq -r '.tool_name // empty' <<<"$payload" 2>/dev/null) || { echo "lane-safety.sh: unreadable payload" >&2; exit 1; }
-[[ "$tool" == Bash ]] || exit 0
-cmd=$(jq -r '.tool_input.command // empty' <<<"$payload")
+case "$tool" in Bash | Edit | Write | MultiEdit | NotebookEdit) ;; *) exit 0 ;; esac
+cmd=$(jq -r 'if .tool_name == "Bash" then .tool_input.command // empty
+  else .tool_input.file_path // .tool_input.notebook_path // empty end' <<<"$payload")
 cwd=$(jq -r '.cwd // empty' <<<"$payload")
+agent=$(jq -r '.agent_id // empty' <<<"$payload")
 [[ -n "$cwd" ]] || cwd=$PWD
 [[ -n "$cmd" ]] || exit 0
 
 home=${HOME:-/nonexistent}
+state_root=${ORCHESTRATE_STATE_DIR:-$home/.claude/orchestrate}
+# Raw forbidden roots; an edit tool call has nothing else to check, so it stops here without any.
+forbid_raw=()
+if [[ -n "${WAAAGH_LANE_FORBID:-}" ]]; then
+  IFS=: read -r -a extra <<<"$WAAAGH_LANE_FORBID"
+  ((${#extra[@]} == 0)) || forbid_raw+=("${extra[@]}")
+fi
+if [[ -r "$state_root/lane-forbidden" ]]; then
+  while IFS= read -r v || [[ -n "$v" ]]; do forbid_raw+=("$v"); done <"$state_root/lane-forbidden"
+fi
+[[ "$tool" == Bash || ${#forbid_raw[@]} -gt 0 ]] || exit 0
 US=$'\037' OP=$'\002'
 
 # --- path helpers -------------------------------------------------------------------------------
@@ -126,6 +147,37 @@ if [[ -n "$lane" ]]; then
 fi
 in_allowed() { local a; for a in "${allowed[@]}"; do inside "$1" "$a" && return 0; done; return 1; }
 
+# Forbidden roots (#218), each also by its physical path (/tmp vs /private/tmp). A lane's own
+# worktree nested below one (.claude/worktrees/<lane>) stays writable: own.
+forbid=() own="" lane_forbidden=no
+for v in "${forbid_raw[@]:-}"; do
+  case "$v" in /* | "~" | \~/*) ;; *) continue ;; esac
+  v=$(expand "$v" /) || continue
+  [[ "$v" != / ]] || continue
+  forbid+=("$v")
+  if p=$(cd "$v" 2>/dev/null && pwd -P) && [[ "$p" != "$v" ]]; then forbid+=("$p"); fi
+done
+if ((${#forbid[@]})); then
+  own=$lane
+  for v in "${forbid[@]}"; do
+    [[ "$lane" != "$v" ]] || lane_forbidden=yes
+    [[ -z "$own" ]] || ! inside "$v" "$own" || own=""
+  done
+  # Unbound: the orchestrator's own call (no subagent, and its cwd is no lane or a forbidden root).
+  if [[ -z "$agent" && ( -z "$lane" || $lane_forbidden == yes ) ]]; then forbid=(); fi
+fi
+# forbidden PATH: prints the bound forbidden root holding PATH (none inside the caller's own lane).
+forbidden() {
+  local f
+  ((${#forbid[@]})) || return 1
+  [[ -z "$own" ]] || ! inside "$1" "$own" || return 1
+  for f in "${forbid[@]}"; do
+    if inside "$1" "$f"; then printf '%s\n' "$f"; return 0; fi
+  done
+  return 1
+}
+forbid_why() { printf '%s' "$1 is in the orchestrator's checkout $2 ($state_root/lane-forbidden): never edit, check out, pull, commit or build there; work in your own worktree"; }
+
 denies="" asks=""
 deny() { denies="${denies:+$denies; }$1"; }
 ask() { asks="${asks:+$asks; }$1"; }
@@ -151,6 +203,10 @@ check_delete() {
     r=$(norm "$r")
     if inside "$t" "$r" || reaches "$t" "$r" "$glob" "$prefix"; then deny "$what $w: protected path $r"; return 0; fi
   done
+  if r=$(forbidden "$t"); then deny "$what $w: $(forbid_why "$t" "$r")"; return 0; fi
+  for r in "${forbid[@]:-}"; do
+    if [[ -n "$r" ]] && reaches "$t" "$r" "$glob" "$prefix"; then deny "$what $w: $(forbid_why "$t" "$r")"; return 0; fi
+  done
   [[ -n "$lane" ]] || return 0
   if [[ $glob == no && "$t" == "$lane" ]]; then deny "$what $w: that is the lane worktree itself; use git worktree remove"; return 0; fi
   if [[ $glob == no ]]; then
@@ -163,11 +219,40 @@ check_delete() {
 }
 # check_write WORD BASE WHAT: a file a shell command writes (lane mode only).
 check_write() {
-  [[ -n "$lane" ]] || return 0
-  local w=$1 base=$2 what=$3 t
+  [[ -n "$lane" || ${#forbid[@]} -gt 0 ]] || return 0
+  local w=$1 base=$2 what=$3 t f
   case "$w" in /dev/null | /dev/stdout | /dev/stderr | /dev/tty | /dev/fd/* | "") return 0 ;; esac
   t=$(expand "$w" "$base") || return 0
+  if f=$(forbidden "$t"); then deny "$what $w: $(forbid_why "$t" "$f")"; return 0; fi
+  [[ -n "$lane" ]] || return 0
   in_allowed "$t" || deny "$what $w: writes outside the lane worktree $lane; enter the worktree (EnterWorktree) and use the edit tools"
+}
+# check_git BASE ARG...: a mutating git command whose work tree (BASE, -C, --work-tree) lies under a
+# bound forbidden root. Read-only commands, fetch and worktree add stay allowed there.
+check_git() {
+  local dir=$1 sub="" f; shift
+  ((${#forbid[@]})) || return 0
+  while (($#)); do
+    case "$1" in
+      -C | --work-tree) (($# >= 2)) || return 0; dir=$(expand "$2" "$dir") || return 0; shift 2 ;;
+      --work-tree=*) dir=$(expand "${1#*=}" "$dir") || return 0; shift ;;
+      -c | --git-dir | --namespace) shift; if (($#)); then shift; fi ;;
+      -*) shift ;;
+      *) sub=$1; shift; break ;;
+    esac
+  done
+  case "$sub" in
+    checkout | switch | reset | pull | merge | rebase | commit | stash | restore | apply | am | cherry-pick | revert | clean | add | rm | mv) ;;
+    worktree)
+      case "${1:-}" in remove | move) ;; *) return 0 ;; esac
+      shift
+      while (($#)) && [[ "$1" == -* ]]; do shift; done
+      (($#)) || return 0
+      dir=$(expand "$1" "$dir") || return 0
+      sub="worktree remove/move" ;;
+    *) return 0 ;;
+  esac
+  if f=$(forbidden "$dir"); then deny "git $sub: $(forbid_why "$dir" "$f")"; fi
 }
 
 # --- tokenizer ----------------------------------------------------------------------------------
@@ -408,7 +493,8 @@ analyze_simple() {
       fi ;;
     avdmanager) [[ " ${a[*]:-} " != *" delete "* ]] || destructive=yes ;;
     git)
-      [[ " ${a[*]:-} " != *" worktree remove "* && " ${a[*]:-} " != *" clean "* ]] || destructive=yes ;;
+      [[ " ${a[*]:-} " != *" worktree remove "* && " ${a[*]:-} " != *" clean "* ]] || destructive=yes
+      ((n == 0)) || check_git "$base" "${a[@]}" ;;
     bash | sh | zsh | dash | ksh)
       for ((j = 0; j < n; j++)); do
         if [[ "${a[j]}" == -*c* && "${a[j]}" != --* ]]; then analyze "${a[j+1]:-}" "$base" $((depth + 1)); break; fi
@@ -448,7 +534,11 @@ analyze_simple() {
   destructive=no
 }
 
-analyze "$cmd" "$cwd"
+if [[ "$tool" == Bash ]]; then
+  analyze "$cmd" "$cwd"
+elif t=$(expand "$cmd" "$cwd") && f=$(forbidden "$t"); then
+  deny "$tool $cmd: $(forbid_why "$t" "$f")"
+fi
 
 decision="" reason=""
 if [[ -n "$denies" ]]; then decision=deny reason="lane safety (lane-safety.md): $denies"
