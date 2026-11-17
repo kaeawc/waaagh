@@ -6,6 +6,7 @@ skills/orchestrate/scripts/_build_dirs.sh	94
 skills/orchestrate/scripts/_lib.sh	94
 skills/orchestrate/scripts/_slots.sh	99
 skills/orchestrate/scripts/bench.sh	99
+skills/orchestrate/scripts/branch-idle.sh	99
 skills/orchestrate/scripts/campaign.sh	94
 skills/orchestrate/scripts/claim-check.sh	95
 skills/orchestrate/scripts/cloud-dispatch.sh	96
@@ -42,11 +43,13 @@ skills/orchestrate/scripts/merge-queue.sh	93
 skills/orchestrate/scripts/merge-sensitive.sh	95
 skills/orchestrate/scripts/open-blockers.sh	99
 skills/orchestrate/scripts/pr-claim.sh	97
+skills/orchestrate/scripts/pr-footer.sh	99
 skills/orchestrate/scripts/pr-intake.sh	92
 skills/orchestrate/scripts/pr-merge.sh	97
 skills/orchestrate/scripts/pr-ready.sh	98
 skills/orchestrate/scripts/regen-merge.sh	94
 skills/orchestrate/scripts/relay.sh	94
+skills/orchestrate/scripts/repair-writer.sh	94
 skills/orchestrate/scripts/review-followup.sh	96
 skills/orchestrate/scripts/review-gate.sh	96
 skills/orchestrate/scripts/review-ledger.sh	97
@@ -59,3 +62,4 @@ skills/orchestrate/scripts/update-pace.sh	97
 skills/orchestrate/scripts/validate.sh	96
 skills/orchestrate/scripts/verify-on-main.sh	94
 skills/orchestrate/scripts/wt-cleanup.sh	95
+skills/orchestrate/scripts/push-verify.sh	80

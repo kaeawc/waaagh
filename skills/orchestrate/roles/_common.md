@@ -22,7 +22,9 @@
 6. Use `git -C <worktree>` for every git command. Never loop git commands over a shell variable
    holding a list: the shell may be zsh, where `$var` does not word-split, and the command will
    run in the wrong checkout. Never edit a running shell script in place; write it beside and `mv`.
-   Work only in the checkout or worktree your prompt names. Never touch another lane's worktree,
+   Work only in the checkout or worktree your prompt names. `{{FORBIDDEN}}` is the orchestrator's
+   own checkout: you may start there, but never edit, check out, pull, commit, stash or build in it;
+   your first write is in your own worktree (the lane-safety hook refuses the rest, #218). Never touch another lane's worktree,
    never share a device, and never run two whole-suite test sweeps at once. Claim a device with
    its serial or UDID (`device-lock.sh claim ... --device <id>`), and before any `adb` or `simctl`
    command run `{{SCRIPTS}}/device-lock.sh check --name <you> --device <id>` (plus `--avd <suffix>`
@@ -33,6 +35,12 @@
    each push to a PR's branch, confirm the PR is still open: `{{SCRIPTS}}/claim-check.sh open
    --repo {{REPO}} --pr <n>`. Exit 3 (merged or closed) or 4 (unreadable) means do not push: report
    it, so the work moves to a new branch on purpose instead of landing on a merged one (#206).
+   Verify every push by reading the remote, never by the push's place in a chain: a slow pre-push
+   hook can outlive the SSH connection (`send-pack: unexpected disconnect`) while the next commands
+   still print normal output (#262). Run the gates yourself, then
+   `{{SCRIPTS}}/push-verify.sh --branch <branch> --no-verify` (pushes, then compares
+   `git ls-remote origin refs/heads/<branch>` with the commit; exit 0 is the only success). Remove
+   a worktree only after it verifies; if it is already gone, `--ref <sha>` pushes by SHA.
 8. Read `{{STATE}}/lane-rules.md` if it exists and obey it; where it conflicts with this file, it
    wins.
 9. Keep long output in files under `{{STATE}}/`, never inside a checkout (it would change the
