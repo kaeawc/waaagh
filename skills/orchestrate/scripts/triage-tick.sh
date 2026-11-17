@@ -7,7 +7,8 @@
 #            [--exclude-label L]... [--device-slots TYPE=N,...] [--loop-stale SECONDS] [--hold-hours H]
 #     Refreshes main health (main-health.sh, so MAIN_RED is set or cleared as usual), classifies
 #     each red run with CMD (run as `CMD --repo R --run ID`; the first word of its first line is the
-#     verdict: flake, known-flake or infra are known, anything else is not), and prints:
+#     verdict: flake, known-flake, infra, rerun or rerun-dont-fix are known, anything else is not;
+#     any case, `_` = `-`; the shared orch_verdict_rerunnable in _lib.sh), and prints:
 #       verdict ok | verdict act <reason>,...
 #       main green ... | main red <sha> runs=<id>:<class>,... action=<rerun|fix-lane>
 #            | main held rerun-pending runs=<id>,... | main unknown <reason>
@@ -177,7 +178,7 @@ json_list() { if (($#)); then printf '%s\n' "$@" | jq -R . | jq -sc .; else echo
 
 # rerun_seen ID: the run's latest reruns.log record is anything but a refused rerun. An `intent`
 # with no outcome (the answer was lost) counts as re-run: reconciled by the snapshot, never replayed.
-rerun_seen() { [[ -f "$reruns" ]] && awk -F'\t' -v r="run=$1" '$2 == r { last = $NF } END { exit !(last != "" && last !~ /^(full-)?failed/) }' "$reruns"; }
+rerun_seen() { orch_rerun_seen "$1"; }
 # full_seen SHA: the latest full rerun on head SHA (either SHA a prefix of the other) was not refused.
 full_seen() {
   [[ -f "$reruns" ]] && awk -F'\t' -v s="$1" '$NF ~ /^full-/ { for (i = 5; i < NF; i++) if ($i ~ /^head=/) {
@@ -292,10 +293,10 @@ case "$mh_state" in
     for id in $(grep -oE '=[a-z_]+\([0-9]+\)' <<<"$mh" | tr -dc '0-9\n'); do
       if rerun_seen "$id"; then cls=rerun-failed
       elif [[ -n "$classifier" ]]; then
-        cls=$(bash -c "$classifier"' "$@"' _ --repo "$repo" --run "$id" 2>/dev/null | awk 'NR == 1 { v = tolower($1); gsub(/[^a-z-]/, "", v); print v }') || cls=""
+        cls=$(bash -c "$classifier"' "$@"' _ --repo "$repo" --run "$id" 2>/dev/null | awk 'NR == 1 { v = tolower($1); gsub(/_/, "-", v); gsub(/[^a-z-]/, "", v); print v }') || cls=""
         [[ -n "$cls" ]] || cls=unclassified
       else cls=unclassified; fi
-      case "$cls" in flake | known-flake | infra) ;; *) known=no ;; esac
+      orch_verdict_rerunnable "$cls" || known=no
       runs="${runs:+$runs,}$id:$cls"
     done
     if [[ -z "$runs" ]]; then known=no; fi
