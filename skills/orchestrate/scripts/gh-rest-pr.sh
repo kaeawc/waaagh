@@ -16,9 +16,13 @@
 #            isDraft isCrossRepository baseRefName headRefName headRefOid labels createdAt
 #            updatedAt url closingIssuesReferences, with mergeable and mergeStateStatus "UNKNOWN"
 #            and an empty statusCheckRollup (the list endpoint carries none; use view --checks).
+#            Stopped at --limit with a full page read, it warns on stderr that the list may be
+#            incomplete (#259).
 #   view     one PR (GET pulls/<n>) in the same shape, with mergeable read (true MERGEABLE, false
 #            CONFLICTING, null UNKNOWN), mergeStateStatus from mergeable_state upper-cased
 #            (behind BEHIND, clean CLEAN, ...; absent UNKNOWN) and state OPEN|CLOSED|MERGED;
+#            mergeCommit {oid} (merge_commit_sha, only once merged; else null) and autoMergeRequest
+#            ({mergeMethod} from auto_merge; null when off), which pr-merge.sh reads back (#266);
 #            --checks adds its head's statusCheckRollup (see rollup).
 #   rollup   the statusCheckRollup of a commit: GET commits/<sha>/check-runs as CheckRun items
 #            (name, status, conclusion upper-cased, startedAt, detailsUrl, workflowName) plus
@@ -102,7 +106,11 @@ shape='def pr_shape($repo):
    closingIssuesReferences: ([(.body // "")
        | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#([0-9]+)")
        | select(.[0] == null or (.[0] | ascii_downcase) == ($repo | ascii_downcase))
-       | {number: (.[1] | tonumber)}] | unique_by(.number))};'
+       | {number: (.[1] | tonumber)}] | unique_by(.number))};
+  def view_shape($repo): pr_shape($repo) + {
+    mergeCommit: (if .merged_at != null and .merge_commit_sha != null then {oid: .merge_commit_sha} else null end),
+    autoMergeRequest: (if .auto_merge == null then null
+      else {mergeMethod: ((.auto_merge.merge_method // "") | ascii_upcase)} end)};'
 
 list_prs() {
   local rows='[]' page=1 out n m order=""
@@ -118,6 +126,8 @@ list_prs() {
     ((n == 100 && m < limit)) || break
     page=$((page + 1))
   done
+  ((n < 100 || m < limit)) ||
+    echo "gh-rest-pr.sh: warning: list stopped at --limit $limit after a full page; the list may be incomplete" >&2
   printf '%s\n' "$rows"
 }
 
@@ -152,12 +162,12 @@ view_pr() {
   local out one
   out=$(ghr api "repos/$repo/pulls/$pr") || exit 3
   if [[ "$checks" == no ]]; then
-    jq -c --arg repo "$repo" "$shape"' if type == "object" and has("number") then pr_shape($repo)
+    jq -c --arg repo "$repo" "$shape"' if type == "object" and has("number") then view_shape($repo)
       else error("not a pull request") end' <<<"$out" 2>/dev/null || unreadable "PR $pr: not a pull request object"
     return
   fi
   # The row and its head in one jq; rollup sets the row's statusCheckRollup in its own.
-  one=$(jq -r --arg repo "$repo" "$shape"' if type == "object" and has("number") then pr_shape($repo)
+  one=$(jq -r --arg repo "$repo" "$shape"' if type == "object" and has("number") then view_shape($repo)
     | tojson, (.headRefOid | tostring) else error("not a pull request") end' <<<"$out" 2>/dev/null) ||
     unreadable "PR $pr: not a pull request object"
   rollup "${one#*$'\n'}" "${one%%$'\n'*}"

@@ -506,6 +506,15 @@ A job that only passes on retry, or only from a build-cache hit, hides a red mai
 fix lane must check whether the greens were real: look for a failed first attempt, a cache restore
 that skipped the work, or a rerun, before declaring the branch healthy.
 
+**Known-flake red main reruns itself.** `main-health.sh --auto-rerun` (or
+`ORCHESTRATE_MAIN_AUTO_RERUN=1`, which also reaches the merge queue and the triage tick) classifies
+each red run with the repo's classifier (`--classifier`, else `ORCHESTRATE_CLASSIFIER_CMD`). When
+every one is rerunnable (flake, known-flake, infra, RERUN or RERUN-DONT-FIX), it re-runs each once
+per run id through `triage-tick.sh rerun` (failed jobs, or the whole run for a needs dependency
+that did not succeed; logged to `reruns.log`), and `MAIN_RED` stays until the rerun is green. An
+investigate or unclassified run, or a rerun that failed again, is named as `auto-rerun=held` and
+goes to a fix lane: a known flake that fails twice is a real red (#270).
+
 **Per-test timing budgets.** A test that breaches its own time budget (for example a 100 ms cap)
 on the default branch, and still breaches it when re-run alone, is a real red, not a flake: the
 classifier's INVESTIGATE is right. Handle it like any red main: `main-health.sh` holds merges, the
@@ -681,7 +690,8 @@ verification batch, check the device lock those routines use; never start a batc
 **Cloud dispatch.** When the owner wants one cloud session per `cloud-ready` issue with no click,
 the main session (subagents lack `RemoteTrigger`) creates one run-once routine per issue, paced and
 recorded through `"$SCRIPTS/cloud-dispatch.sh"`: `roles/cloud-dispatch.md`. Results come back only
-as PRs and issue comments, which the triage loop reads. A cloud-ready follow-up split from local
+as PRs and issue comments, which the triage loop reads; a dispatch with no PR after 6 h is stale
+and is expired and sent again, up to a cap (`cloud-dispatch.sh stale`/`expire`, #259). A cloud-ready follow-up split from local
 work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
 `device-cloud-handoff.md`. The standard implement and repair briefs live in the target repository
 (`.claude/briefs/`, installed from `briefs/`, changed by PR), so each dispatched prompt is one line.
@@ -689,6 +699,8 @@ Cloud sessions refuse GraphQL (HTTP 403, `gh pr list` included): `pr-ready.sh`, 
 and `lane-claim.sh` then read the PR side over REST through `gh-rest-pr.sh` on their own, as do
 `triage-tick.sh snapshot` (dispatch queue), `thread-sweep.sh` and `thread-resolve.sh` (#136)
 (`ORCHESTRATE_GH_API=rest` skips the refused attempt); REST costs a few calls per candidate PR.
+`pr-merge.sh` merges over REST too (#266): `PUT pulls/<n>/merge` with `sha=<head>` (409: head
+moved, exit 3; 405: not mergeable, exit 5), with every guard and exit code of the GraphQL path.
 One refusal is remembered for 12 hours (`<state root>/gh-no-graphql`), issue side and PR side
 alike; a new script with a REST path uses `orch_gh_api` / `orch_gh_refused` from `_lib.sh`.
 

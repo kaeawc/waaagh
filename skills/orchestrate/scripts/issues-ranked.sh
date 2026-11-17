@@ -57,9 +57,10 @@ jq_limit=$limit
 # gh-issues.sh: GraphQL, or REST where GitHub refuses GraphQL (an open PR's closing references
 # then come from its body's closing keywords).
 read_fail() { echo "issues-ranked.sh: $1 could not be read" >&2; exit 5; }
-prs=$("$here/gh-issues.sh" prs-open --repo "$repo" --limit 300 --fields number,closingIssuesReferences) ||
+# Limits above any open count we have seen (#259): gh-issues.sh warns on stderr when one is hit.
+prs=$("$here/gh-issues.sh" prs-open --repo "$repo" --limit 1000 --fields number,closingIssuesReferences) ||
   read_fail "open pull requests"
-issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 500 --since "$since" \
+issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 1000 --since "$since" \
   --fields number,title,labels,updatedAt) || read_fail "open issues"
 # The PR and issue lists travel as files or stdin, not arguments: one argument is capped at 128 KiB (#121).
 rows=$(jq -r --slurpfile prs <(printf '%s\n' "$prs") --argjson priority "$(json_list ${priority[@]+"${priority[@]}"})" \
