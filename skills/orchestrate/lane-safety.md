@@ -25,6 +25,9 @@ ownership (`scripts/device-lock.sh`, SKILL.md "Isolation and ownership").
 6. **Run destructive commands in the foreground with their output visible.** No `& true`, no
    `>/dev/null 2>&1` on `rm`, `kill`, `simctl delete`, `avdmanager delete` or `git worktree
    remove`: a backgrounded, silenced deletion cannot be caught in time.
+7. **Never change the orchestrator's checkout (`{{FORBIDDEN}}`).** A lane subagent starts in the
+   orchestrator's working directory. You may read there; never edit, check out, pull, commit,
+   stash or build there. Your first write is in your own worktree.
 
 A denied command is an answer, not an obstacle (`roles/_common.md` rule 4): record it and move on.
 
@@ -43,16 +46,34 @@ command (quotes, comments and heredoc bodies are data; `bash -c`, `eval`, `$(…
 | `adb kill-server`; `adb emu kill` without `-s` | deny | deny |
 | `>`, `>>`, `tee`, `cp`, `mv`, `sed -i`, `perl -i`, `dd of=` writing outside the worktree, temp dirs and the state dir | allow | deny |
 | a destructive command that is backgrounded (`&`) or silenced (`>/dev/null`) | ask | ask |
+| shell writes, `rm -r`, mutating `git` (`checkout`, `switch`, `reset`, `pull`, `merge`, `rebase`, `commit`, `stash`, `restore`, `apply`, `am`, `cherry-pick`, `revert`, `clean`, `add`, `rm`, `mv`, `worktree remove/move`) or an `Edit`/`Write`/`MultiEdit`/`NotebookEdit` call under a forbidden root, outside the caller's own nested worktree | allow (subagents: deny) | deny |
 
 A session is "in a lane" when its working directory is inside a linked git worktree, or when
 `WAAAGH_LANE_ROOT` names the lane root. Temp dirs are `/tmp`, `/private/tmp`, `/var/folders` and
 `$TMPDIR` (`WAAAGH_LANE_TEMP` overrides); `WAAAGH_LANE_ALLOW` adds roots (colon-separated).
+**Forbidden roots** (#218). Learned on auto-mobile (2026-11-11): a lane subagent inherited the
+orchestrator's cwd, its own git worktree, and edited four source files and moved HEAD there before
+creating its own worktree. The orchestrator writes its own checkout's absolute path as one line of
+`<state root>/lane-forbidden` (`$ORCHESTRATE_STATE_DIR`, default `~/.claude/orchestrate`; `#`
+comments; `WAAAGH_LANE_FORBID` adds a colon-separated list) at campaign start, fills `{{FORBIDDEN}}`
+with it in every lane brief, and removes the line at wrap-up. The hook then binds every subagent
+call (the hook payload carries `agent_id`) and every lane session whose own worktree is not
+forbidden; the orchestrator's own calls are never bound. Read-only `git`, `git fetch` and
+`git worktree add` stay allowed there, and a lane worktree nested below the forbidden checkout
+(`.claude/worktrees/<lane>`) stays writable to its own lane. The hook cannot see builds: rule 7
+still binds there.
+
+**The orchestrator's tick check.** Each tick, run `git -C <own checkout> status --short`. Stray
+edits there came from a lane: move them out with a patch (`git -C <own checkout> diff -- <files>
+> <state dir>/stray-<lane>.patch`, `git -C <lane worktree> apply` it, then `git -C <own checkout>
+restore -- <files>` for exactly those files), and correct that lane's brief.
+
 `WAAAGH_LANE_SAFETY=off` disables the hook for a session that needs it off; the owner sets it, never
 a lane.
 
 Limits: the hook cannot see writes made by an interpreter's own file API (`python -c "open(…)"`),
 paths read from files or stdin other than through `xargs rm`, or deletions inside a script the
-command runs. Rules 1–6 still bind there; the hook is the backstop, not the contract.
+command runs. Rules 1–7 still bind there; the hook is the backstop, not the contract.
 
 ## Model choice for device lanes
 

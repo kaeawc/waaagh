@@ -77,7 +77,9 @@ to Opus or split the task, as a stated decision.
 - Launch independent lanes in one message. Agents that poll in the background stall: every role
   is single-pass, and you relaunch it when its inputs change.
 - Every lane brief names its worktree as an absolute path, and the lane works only there (the
-  lane-safety hook refuses deletions and shell writes outside it).
+  lane-safety hook refuses deletions and shell writes outside it). It also names your own checkout
+  as forbidden (`{{FORBIDDEN}}`, listed in `lane-forbidden`; `lane-safety.md` rule 7): a subagent
+  starts in your cwd and must not edit it.
 
 **Choosing the reviewer.** One independent Opus reviewer per lane. Tiny or mechanical diff: review
 it yourself. Add a second lens only for a risk surface one reviewer cannot cover (concurrency,
