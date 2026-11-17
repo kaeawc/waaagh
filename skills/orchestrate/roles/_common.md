@@ -22,7 +22,9 @@
 6. Use `git -C <worktree>` for every git command. Never loop git commands over a shell variable
    holding a list: the shell may be zsh, where `$var` does not word-split, and the command will
    run in the wrong checkout. Never edit a running shell script in place; write it beside and `mv`.
-   Work only in the checkout or worktree your prompt names. Never touch another lane's worktree,
+   Work only in the checkout or worktree your prompt names. `{{FORBIDDEN}}` is the orchestrator's
+   own checkout: you may start there, but never edit, check out, pull, commit, stash or build in it;
+   your first write is in your own worktree (the lane-safety hook refuses the rest, #218). Never touch another lane's worktree,
    never share a device, and never run two whole-suite test sweeps at once. Claim a device with
    its serial or UDID (`device-lock.sh claim ... --device <id>`), and before any `adb` or `simctl`
    command run `{{SCRIPTS}}/device-lock.sh check --name <you> --device <id>` (plus `--avd <suffix>`

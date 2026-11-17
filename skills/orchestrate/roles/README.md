@@ -33,6 +33,7 @@ Each file is a complete brief for one single-pass agent. To launch a role:
 | `{{GENERATED_FILES}}` | conflict-prone generated files and the command that regenerates each; also written to `<state dir>/generated-files.tsv` (`<glob><TAB><command>` per line) for `regen-merge.sh` |
 | `{{VERIFY_SKILL}}` | the repo's verification skill (for example a manual-test skill) |
 | `{{DEVICES}}` | the devices this batch may use, and the ones it must never touch |
+| `{{FORBIDDEN}}` | absolute path of your own checkout (the directory this orchestrating session runs in), which a lane subagent starts in but must never change (#218). Also write that path as one line of `<state root>/lane-forbidden` (`~/.claude/orchestrate/lane-forbidden`) so `lane-safety.sh` refuses lane writes there; remove the line at wrap-up. A cloud session runs in its own checkout: cloud briefs have no `{{FORBIDDEN}}` |
 
 | Role | Template | Agent | Writes |
 |---|---|---|---|
