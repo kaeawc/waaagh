@@ -579,7 +579,7 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   lane reproduces it; a reproduction is spent only when it fails again on the same head, and the
   signature is then recorded. A check that failed only because a job it needs was abandoned,
   cancelled or skipped is re-run in full (`rerun --full`), never `--failed`, and several PRs
-  hitting that within the hour is a runner-pool problem (`"$SCRIPTS/failure-triage.sh"`,
+  hitting that within the hour is a runner-pool problem; a package install that could not reach its public mirror is infrastructure too, and several PRs hitting it is one outage to fix once (`"$SCRIPTS/failure-triage.sh"`,
   `failure-triage.md`, which also
   covers what to put in cloud briefs: container knobs and never killing by pattern).
 - GitHub reads in the scripts go through `"$SCRIPTS/gh-read.sh"`: bounded retries for network and

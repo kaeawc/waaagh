@@ -7,7 +7,7 @@
 # full: a failed-jobs-only rerun reads the same dependency result and fails again (#207).
 # Doctrine: failure-triage.md.
 #
-# Usage: failure-triage.sh <decide|rerun|needs|record|match|list|pool> [--repo OWNER/REPO] [options]
+# Usage: failure-triage.sh <decide|rerun|needs|mirror|outage|record|match|list|pool> [--repo OWNER/REPO] [options]
 #   decide --pr N --head SHA --check NAME [--verdict V] [--log FILE] [--file PATH]...
 #             print one line: `<action> <reason> [key=value]...`, action one of
 #               rerun-full the log shows a needs dependency that did not succeed (whatever the
@@ -40,6 +40,14 @@
 #             print `runner-pool suspect prs=<N,...> hits=<n> window=<s>` when needs-dependency hits
 #             came from at least N (default 2) PRs in the last SECONDS (default 3600), else
 #             `runner-pool ok prs=<N,...|-> hits=<n> window=<s>`
+#   mirror --check NAME --log FILE
+#             the package-mirror signature alone (#217): print `mirror <kind>` (apt, pip, npm or maven)
+#             and exit 0, or `none` and exit 1. A package install that could not reach its public
+#             mirror is infrastructure, whatever the classifier says; nothing is logged.
+#   outage [--window SECONDS] [--min N]
+#             print `mirror-outage suspect prs=<N,...> hits=<n> window=<s>` when mirror hits came from
+#             at least N (default 2) PRs in the last SECONDS (default 3600), else `mirror-outage ok ...`.
+#             One outage, not one failure per PR: rerun in a batch once the install path is fixed.
 #   record --check GLOB --pattern ERE --note TEXT [--source TEXT]
 #             add a failure signature (an extended regex over the job log) for checks matching GLOB;
 #             print its id. A later `decide --log` or `match` that finds it classifies the failure.
@@ -52,7 +60,10 @@
 # matches `/` (as in merge-sensitive). Files in <state dir>: check-domains, failure-signatures.tsv
 # (id, check glob, pattern, note, source, ISO time), pr-reruns.tsv (ISO time, pr=, head=, check=,
 # run=, outcome; a --full rerun's outcomes start `full-`), needs-hits.tsv (epoch, ISO time, pr=,
-# head=, check=, needs=, result=).
+# head=, check=, needs=, result=), mirror-hits.tsv (epoch, ISO time, pr=, head=, check=, mirror=).
+#   decide: a package-mirror signature in --log (apt, pip, npm, maven fetch errors) is infrastructure:
+#   `rerun mirror-outage mirror=<kind>` once, then `triage mirror-outage-persists` (fix the install path
+#   once for all PRs, do not reproduce); both add `pool=suspect prs=<N,...>` during a multi-PR outage.
 # Exit: 0 ok (match, needs: found) | 1 match, needs: none | 2 usage | 3 refused (already re-run on this head;
 #       signature already recorded) | 4 stale (the PR's head is no longer SHA) | 5 GitHub refused the
 #       rerun | 9 unverified (changed paths or head unreadable)
@@ -65,7 +76,7 @@ if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
 usage() { orch_usage; }
 cmd=${1:-}
 case "$cmd" in
-  decide | rerun | needs | record | match | list | pool) shift ;;
+  decide | rerun | needs | mirror | outage | record | match | list | pool) shift ;;
   -h | --help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -107,9 +118,9 @@ case "$cmd" in
     [[ "$check$pattern$note$src" != *$'\t'* && "$check$pattern$note$src" != *$'\n'* ]] || bad "no tabs or newlines in fields"
     rc=0; grep -Eq -e "$pattern" </dev/null || rc=$?
     ((rc != 2)) || bad "--pattern is not a valid extended regex" ;;
-  match | needs)
+  match | needs | mirror)
     [[ -n "$check" && -r "$log" ]] || bad "--check NAME and a readable --log FILE are required" ;;
-  pool)
+  pool | outage)
     [[ "$window" =~ ^[0-9]+$ && "$min_prs" =~ ^[1-9][0-9]*$ ]] || bad "--window SECONDS and --min N must be numbers" ;;
 esac
 
@@ -120,6 +131,7 @@ sigs="$state/failure-signatures.tsv"
 reruns="$state/pr-reruns.tsv"
 domains="$state/check-domains"
 hits="$state/needs-hits.tsv"
+mhits="$state/mirror-hits.tsv"
 
 # path_matches PATTERN FILE (merge-sensitive.sh semantics)
 path_matches() {
@@ -180,11 +192,24 @@ needs_sig() {
   printf '?\t?\n'
 }
 
+# mirror_sig FILE -> kind (apt, pip, npm or maven) when FILE shows a package install that could not
+# reach its public mirror (#217): infrastructure, so a rerun is right and a code fix is not.
+mirror_sig() {
+  local kind=""
+  if grep -Eqi -e 'Failed to fetch https?://|Temporary failure resolving|Unable to connect to [^ ]*(ubuntu|debian|archive|security)|Could not resolve .(archive|security|deb)[^ ]*|Hash Sum mismatch|Could not get lock /var/lib/(apt|dpkg)|Some index files failed to download|Connection failed \[IP' "$1"; then kind=apt
+  elif grep -Eqi -e 'Could not fetch URL https://pypi|(Read timed out|Connection (to|aborted)|Max retries exceeded).*(pypi|files\.pythonhosted)' "$1"; then kind=pip
+  elif grep -Eqi -e 'npm (ERR!|error) (code )?(ETIMEDOUT|ECONNRESET|EAI_AGAIN|ENOTFOUND)|npm (ERR!|error) network' "$1"; then kind=npm
+  elif grep -Eqi -e 'Could not transfer artifact|Could not (GET|HEAD) .https://(repo|plugins)\.(maven|gradle)' "$1"; then kind=maven
+  fi
+  [[ -n "$kind" ]] || return 1
+  echo "$kind"
+}
+
 # pool_prs [PR] -> "<prs csv>\t<hits>": the distinct PRs with needs-dependency hits in the window
 # (PR, the one being decided, counts too), and how many hits.
 pool_prs() {
-  local f=/dev/null
-  [[ ! -f "$hits" ]] || f=$hits
+  local f=/dev/null src=${POOL_FILE:-$hits}
+  [[ ! -f "$src" ]] || f=$src
   awk -F'\t' -v cut="$((now - window))" -v cur="${1:-}" '
     BEGIN { if (cur != "") { seen[cur] = 1; order[++k] = cur } }
     $1 + 0 >= cut + 0 { n++; p = $3; sub(/^pr=/, "", p); if (!(p in seen)) { seen[p] = 1; order[++k] = p } }
@@ -204,6 +229,16 @@ case "$cmd" in
   needs)
     dep=$(needs_sig "$check" "$log") || { echo none; exit 1; }
     echo "needs ${dep%%$'\t'*} ${dep#*$'\t'}"
+    exit 0 ;;
+  mirror)
+    kind=$(mirror_sig "$log") || { echo none; exit 1; }
+    echo "mirror $kind"
+    exit 0 ;;
+  outage)
+    IFS=$'\t' read -r prs n <<<"$(POOL_FILE=$mhits pool_prs)"
+    word=ok
+    (($(pool_count "$prs") < min_prs)) || word=suspect
+    echo "mirror-outage $word prs=$prs hits=$n window=$window"
     exit 0 ;;
   pool)
     IFS=$'\t' read -r prs n <<<"$(pool_prs)"
@@ -270,6 +305,21 @@ if [[ -n "$log" ]] && dep=$(needs_sig "$check" "$log"); then
   else
     echo "rerun-full needs-not-success needs=$job result=$res${prev:+ rerun=$prev}$pool"
   fi
+  exit 0
+fi
+
+# A package mirror that could not be reached is infrastructure whatever the classifier says: rerun
+# once; when it fails again the install path is the fix (once, for every PR), not a reproduction.
+if [[ -n "$log" ]] && kind=$(mirror_sig "$log"); then
+  if [[ ! -f "$mhits" ]] || ! awk -F'\t' -v p="pr=$pr" -v h="head=$head" -v c="check=$check" \
+    '$3 == p && $5 == c && (index($4, h) == 1 || index(h, $4) == 1) { f = 1 } END { exit !f }' "$mhits"; then
+    printf '%s\t%s\tpr=%s\thead=%s\tcheck=%s\tmirror=%s\n' "$now" "$(orch_iso "$now")" "$pr" "$head" "$check" "$kind" >>"$mhits"
+  fi
+  IFS=$'\t' read -r prs _n <<<"$(POOL_FILE=$mhits pool_prs "$pr")"
+  pool=""
+  (($(pool_count "$prs") < min_prs)) || pool=" pool=suspect prs=$prs"
+  if [[ -n "$prev" ]]; then echo "triage mirror-outage-persists mirror=$kind rerun=$prev$pool"
+  else echo "rerun mirror-outage mirror=$kind$pool"; fi
   exit 0
 fi
 
