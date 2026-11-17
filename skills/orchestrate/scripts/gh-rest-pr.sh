@@ -36,7 +36,8 @@
 #            optionally isOutdated/is_outdated/outdated (absent: current). A thread without a
 #            resolved flag, or any other shape, is unreadable (exit 3), never "0".
 #   thread-nodes  the PR as the GraphQL pull request node thread-sweep.sh classifies: {number,
-#            commits{nodes[{commit{oid,committedDate}}]}, reviewThreads{pageInfo{hasNextPage:false},
+#            commits{nodes[{commit{oid,committedDate,parents{totalCount},committer{email}}}]},
+#            reviewThreads{pageInfo{hasNextPage:false},
 #            nodes[{id, isResolved, isOutdated, starter{nodes[{author{login},url,body}]}, latest{totalCount,
 #            nodes[{author{login},body,createdAt}]}, comments{nodes[{body}]} (the last 100)}]}}. Flags come
 #            from ccr/review_threads as in threads; bodies and authors from GET pulls/<n>/comments,
@@ -213,7 +214,8 @@ thread_nodes() {
     def login: (.user.login // "") | sub("\\[bot\\]$"; "");
     def items: if type == "array" then .[] else error("not a list") end;
     [$cm[] | items] as $all
-    | {number: $n, commits: {nodes: [$co[] | items | {commit: {oid: .sha, committedDate: (.commit.committer.date // null)}}]},
+    | {number: $n, commits: {nodes: [$co[] | items | {commit: {oid: .sha, committedDate: (.commit.committer.date // null),
+         parents: {totalCount: ((.parents // []) | length)}, committer: {email: (.commit.committer.email // null)}}}]},
        reviewThreads: {pageInfo: {hasNextPage: false}, nodes: [$t[0][]
          | ([.root_comment_id, .rootCommentId, .comment_id, .commentId, .first_comment_id, .firstCommentId,
              ((.comments // null) | cmts | (.[0] // {}) | (.databaseId // .database_id // .id))]

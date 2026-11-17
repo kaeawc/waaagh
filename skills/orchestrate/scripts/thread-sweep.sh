@@ -14,8 +14,10 @@
 #                           comment carries an optional marker (review-followup.sh list) and the
 #                           last reply starts "Optional" or "Declined" (review-followup.sh
 #                           decline writes "Optional, not fixed: <reason>"); ref `optional`
-#                  | stalled  our own account replied last, after the PR's head commit, and the
-#                           reply names neither: an "agreed, proposed fix" reply with no push (#209).
+#                  | stalled  our own account replied last, after the PR's newest own commit, and
+#                           the reply names neither: an "agreed, proposed fix" reply with no push
+#                           (#209). A GitHub update-branch merge (two parents, committer
+#                           noreply@github.com) is not a push of a fix and does not count (#242).
 #                           A reply that starts "Disagree" is a stated disagreement and stays open.
 #                           Our account is ORCHESTRATE_SELF_LOGIN, else `gh api user`, read only
 #                           when such a reply exists (a failed read leaves the thread open)
@@ -69,7 +71,7 @@ repo=$(orch_repo "$repo")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-fields='number commits(last:100){nodes{commit{oid committedDate}}}
+fields='number commits(last:100){nodes{commit{oid committedDate parents{totalCount} committer{email}}}}
   reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated
     starter: comments(first:1){nodes{author{login} url body}}
     latest: comments(last:1){totalCount nodes{author{login} body createdAt}}}}'
@@ -129,11 +131,15 @@ prs=$(prs_json) || {
 }
 
 # The jq definitions both passes below share. epoch: an ISO time as epoch seconds, null when absent
-# or unparsable. head: the epoch of the PR's last commit (0 without one). late: the thread's last
-# reply is not its starter's and came after the head commit, so whoever wrote it pushed nothing since.
+# or unparsable. head: the epoch of the PR's newest own commit, 0 without one: a commit with two
+# parents committed by GitHub (noreply@github.com) is an update-branch merge, which moves the head
+# without anyone writing (#242), so it is skipped (the API carries no tree to check it the way
+# orch_update_merge in _lib.sh does). late: the thread's last reply is not its starter's and came
+# after that commit, so whoever wrote it pushed nothing since.
 defs='
   def epoch: if type == "string" then (try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null) else null end;
-  def head: ((.commits.nodes // []) | last | .commit.committedDate // null | epoch) // 0;
+  def update_merge: (.commit.parents.totalCount // 0) == 2 and (.commit.committer.email // "") == "noreply@github.com";
+  def head: [(.commits.nodes // [])[] | select(update_merge | not) | (.commit.committedDate // null | epoch) // 0] | max // 0;
   def late($h): (.latest.nodes[0] // {}) as $l
     | (.latest.totalCount // 0) >= 2 and (($l.author.login // "") != (.starter.nodes[0].author.login // ""))
       and (($l.createdAt | epoch) // -1) > $h;

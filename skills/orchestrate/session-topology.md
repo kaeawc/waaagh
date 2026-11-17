@@ -95,9 +95,16 @@ A cloud session cannot receive a message once it has started. A follow-up for it
 to address, a rebase, a missed case) goes as a **second run-once routine** on the same branch, and
 that routine waits for the first to be finished:
 
-- Brief: "Branch `work/<N>-auto`, PR #P. First check the branch is idle: the newest commit and the
-  newest PR event are both at least 30 minutes old. If not, stop and report `still-active` without
+- Brief: "Branch `work/<N>-auto`, PR #P. First check the branch is idle: the newest commit that is
+  not a GitHub update-branch merge (two parents, committer noreply@github.com; `git log
+  --format='%cI %ce %p' origin/<branch> ^origin/<base>`) and the newest PR event other than a
+  branch update are both at least 30 minutes old. If not, stop and report `still-active` without
   changing anything. If idle, check out the branch and <the follow-up>; push to the same branch."
+- The head's own time is not a writer check (#242): updating a branch (`update-pace.sh run`, `gh pr
+  update-branch`) makes a fresh head with nobody writing, and a sweep told to skip "recently pushed"
+  PRs then skips every PR just updated. From the orchestrator, `"$SCRIPTS/branch-idle.sh" --pr P
+  --minutes 30` reads the same thing from local git (`idle`/`active`, last-write, age; exit 0/1);
+  any brief that tells a session to skip recently pushed PRs words it the same way.
 - Schedule it with `run_once_at` at least 30 minutes after the first session's last push, through
   the same `cloud-dispatch.sh` pacing. A routine that reports `still-active` is rescheduled once,
   30 minutes later; after that the PR goes to a local PR doctor instead.
