@@ -41,6 +41,7 @@ skills/orchestrate/scripts/merge-queue.sh	93
 skills/orchestrate/scripts/merge-sensitive.sh	95
 skills/orchestrate/scripts/open-blockers.sh	99
 skills/orchestrate/scripts/pr-claim.sh	97
+skills/orchestrate/scripts/pr-footer.sh	99
 skills/orchestrate/scripts/pr-intake.sh	92
 skills/orchestrate/scripts/pr-merge.sh	97
 skills/orchestrate/scripts/pr-ready.sh	98
