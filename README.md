@@ -132,7 +132,9 @@ dev/test.sh --bashcov-shellopts   # the same with bashcov's exported errexit/nou
 dev/coverage.sh             # line coverage per script (needs: gem install bashcov)
 dev/coverage.sh skills/orchestrate/scripts/job-log.bats   # only these suites: partial numbers, said so
 dev/coverage.sh --changed   # only the suites naming scripts changed vs origin/main, then their floors (a lane's check: seconds to a few minutes; a full run is ~20 min)
-dev/coverage.sh --check dev/coverage-floor.tsv   # floors vs the last run; CI runs both on main and on PRs that change scripts (coverage.yml)
+dev/coverage.sh --check dev/coverage-floor.tsv   # floors vs the last run; CI runs them on main and on PRs that change scripts (coverage.yml)
+dev/coverage.sh --shard 2/4  # one shard of the suites, balanced by dev/coverage-weights.tsv; CI runs 4 and merges them
+dev/coverage.sh --merge DIR...   # add up shard resultsets into coverage/ and print the table; --weights LOG... refreshes the weights
 claude --plugin-dir .
 ```
 
