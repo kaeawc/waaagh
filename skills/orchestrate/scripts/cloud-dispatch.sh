@@ -26,7 +26,8 @@
 #        cloud-dispatch.sh record --issue N --trigger ID --run-at ISO [--kind repair --pr P] [--repo R]
 #        cloud-dispatch.sh stale [N...] [--hours H] [--cap K] [--repo OWNER/REPO]
 #        cloud-dispatch.sh expire --issue N [--hours H] [--cap K] [--force] [--repo OWNER/REPO]
-#        cloud-dispatch.sh stalled --runs FILE [--issue N] [--minutes M] [--repo OWNER/REPO]
+#        cloud-dispatch.sh stalled --runs FILE [--issue N] [--minutes M] [--no-push [--nopush-minutes M]]
+#                          [--repo OWNER/REPO]
 #        cloud-dispatch.sh status [--repo OWNER/REPO]
 #   queue add   append issues to the todo queue, skipping ones already queued or dispatched;
 #               prints "queued N" per issue added. queue list prints the issues still to dispatch;
@@ -119,6 +120,12 @@
 #               failed): a needs-decision candidate, read its final message before anything;
 #               "unfired #N trigger=T run_at=<iso> late=<m>m": no run at all (--issue N, its
 #               live dispatch) more than ORCHESTRATE_RUN_UNFIRED_MINUTES (15) after run_at;
+#               With --no-push (the caller asserts the dispatch has no pushed branch and no PR yet,
+#               #216: a cold-cache test run can hold a finished commit for an hour while the run
+#               keeps emitting events) a run still active more than --nopush-minutes (default
+#               ORCHESTRATE_RUN_NOPUSH_MINUTES, 30) after its started_at (or created_at) prints
+#               "nopush #N run=R status=S/W age=<m>m", and an "ended" line ends in " unpushed":
+#               read the log for a commit it never pushed. A run with no start time is not judged.
 #               "unknown #N run=R <what>" when a run cannot be judged (exit 7). A run still
 #               producing events, or a trigger not yet due, prints nothing. Fetch list_runs
 #               only for dispatches with no PR: stalled does not read GitHub.
@@ -154,7 +161,7 @@ repo="" issue="" count=1 base="" gates="" env_id="" source_arg="" model="" at=""
 fixtures="" require=no brief_ref="" pr="" dir=. kind="" force=no remote=no response=""
 per_minute=5 seconds="" message="" trigger="" run_at="" blocker_check=yes
 hours=${ORCHESTRATE_DISPATCH_STALE_HOURS:-6} cap=${ORCHESTRATE_DISPATCH_CAP:-3}
-minutes=${ORCHESTRATE_RUN_STALL_MINUTES:-45} unfired=${ORCHESTRATE_RUN_UNFIRED_MINUTES:-15}
+minutes=${ORCHESTRATE_RUN_STALL_MINUTES:-45} nopush_minutes=${ORCHESTRATE_RUN_NOPUSH_MINUTES:-30} no_push=0 unfired=${ORCHESTRATE_RUN_UNFIRED_MINUTES:-15}
 runs_file="" branch="" note=""
 nums=()
 while (($#)); do
@@ -189,6 +196,8 @@ while (($#)); do
     --cap) cap=$2; shift 2 ;;
     --minutes) minutes=$2; shift 2 ;;
     --runs) runs_file=$2; shift 2 ;;
+    --no-push) no_push=1; shift ;;
+    --nopush-minutes) nopush_minutes=$2; shift 2 ;;
     --branch) branch=$2; shift 2 ;;
     --note) note=$2; shift 2 ;;
     -h | --help) orch_usage; exit 0 ;;
@@ -205,7 +214,7 @@ case "$cmd" in
   *) usage ;;
 esac
 is_num() { [[ "$1" =~ ^[0-9]+$ ]]; }
-for v in "$count" "$lead" "$stagger" "$per_minute" "$hours" "$cap" "$minutes" "$unfired"; do is_num "$v" || usage; done
+for v in "$count" "$lead" "$stagger" "$per_minute" "$hours" "$cap" "$minutes" "$nopush_minutes" "$unfired"; do is_num "$v" || usage; done
 [[ "$branch" != *[[:space:]]* ]] || usage
 ((cap >= 1)) || usage
 [[ -z "$issue" ]] || is_num "$issue" || usage
@@ -608,7 +617,7 @@ case "$cmd" in
     # One row per run, unit-separated so empty fields do not collapse: kind id status worker
     # last_iso silent_min trigger_id what. Missing fields read as empty; kind is stalled,
     # blocked, ended, running or unknown.
-    rows=$(jq -r --argjson now "$now" --argjson lim "$((minutes * 60))" '
+    rows=$(jq -r --argjson now "$now" --argjson lim "$((minutes * 60))" --argjson np "$no_push" --argjson nplim "$((nopush_minutes * 60))" '
       def g($k): [.[$k]?, (.session? | objects | .[$k]?)] | map(select(. != null and . != "")) | .[0];
       def ts: if type == "number" then (if . > 1e12 then . / 1000 else . end | floor)
         elif type == "string" then (sub("\\.[0-9]+"; "") | sub("[+-]00:?00$"; "Z")
@@ -624,16 +633,19 @@ case "$cmd" in
       | (g("status") | low) as $st | (g("worker_status") | low) as $w
       | (g("last_event_at") | ts) as $last
       | ((g("trigger_id") // g("routine_id") // "") | tostring) as $trig
+      | (g("started_at") // g("created_at") | ts) as $start
       | (if $last == null then "" else ($last | todate) end) as $iso
       | (if $last == null then "" else ((($now - $last) / 60) | floor | tostring) end) as $silent
       | (if $w == "requires_action" or $st == "requires_action" then ["blocked", ""]
          elif ($w | IN("idle", "stopped", "ended", "terminated", "exited"))
            or ($st | IN("idle", "completed", "complete", "succeeded", "success", "failed", "error",
                         "errored", "ended", "archived", "terminated", "cancelled", "canceled", "expired"))
-           then ["ended", ""]
+           then ["ended", (if $np == 1 then "unpushed" else "" end)]
          elif $w == "running" or ($st | IN("running", "active", "in_progress", "started")) then
            (if $last == null then ["unknown", "no last_event_at"]
-            elif $now - $last > $lim then ["stalled", ""] else ["running", ""] end)
+            elif $now - $last > $lim then ["stalled", ""]
+            elif $np == 1 and $start != null and $now - $start > $nplim then ["nopush", ((($now - $start) / 60) | floor | tostring)]
+            else ["running", ""] end)
          else ["unknown", "status \(if $st == "" then "-" else $st end)/\(if $w == "" then "-" else $w end)"] end) as $k
       | [$k[0], $id, $st, $w, $iso, $silent, $trig, $k[1]] | map(gsub("[\u001f\n]"; " ")) | join("\u001f")' "$runs_file" 2>/dev/null) ||
       { echo "cloud-dispatch.sh: $runs_file is not list_runs JSON (an array of runs, or an object holding one)" >&2; exit 7; }
@@ -648,7 +660,8 @@ case "$cmd" in
       case "$k" in
         stalled) echo "stalled #${n:-?} run=$id status=$sw last_event=$iso silent=${silent}m" ;;
         blocked) echo "blocked #${n:-?} run=$id status=${st:--}/requires_action" ;;
-        ended) echo "ended #${n:-?} run=$id status=$sw last_event=${iso:--}" ;;
+        ended) echo "ended #${n:-?} run=$id status=$sw last_event=${iso:--}${what:+ $what}" ;;
+        nopush) echo "nopush #${n:-?} run=$id status=$sw age=${what}m" ;;
         unknown) echo "unknown #${n:-?} run=$id $what"; bad=1 ;;
       esac
     done <<<"$rows"
