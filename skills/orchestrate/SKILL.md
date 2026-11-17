@@ -497,6 +497,10 @@ their wall caps, and lanes re-run them, which makes it worse.
   build at a time, started only after running gates drain, with no new gate meanwhile, and
   `org.gradle.workers.max` capped (`HEAVY_BUILD_WORKERS`, default 2). Never run a Node gate and a
   native build at once.
+- **No shared build output.** Both wrappers give each lane a private build dir
+  (`ORCHESTRATE_LANE_BUILD_DIR`) and point TMPDIR, XDG cache, Xcode derived data and Gradle's
+  project cache into it, from a per-repo table. `wt-cleanup.sh` removes the dir once its worktree
+  is gone (`skills/orchestrate/host-load.md`).
 - Run the changed-files prepush check once per slice, not once per commit.
 - **Finished worktrees** go through `"$SCRIPTS/wt-cleanup.sh"` (dry run; `--apply` to remove): only
   clean, idle, pushed, unlocked, unprotected worktrees nobody is working in, via `git worktree

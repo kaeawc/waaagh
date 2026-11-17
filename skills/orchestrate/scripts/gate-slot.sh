@@ -12,11 +12,16 @@
 # A command whose words include gradle, gradlew, xcodebuild or fastlane goes to heavy-build-slot.sh.
 # While a heavy build holds its slot, no new gate starts: a Node gate and a Gradle/Xcode build never
 # run at once. A slot whose holder died (or whose PID was reused) is reclaimed; nothing is killed.
+# Every gate runs with lane-private build output (#213): ORCHESTRATE_LANE_BUILD_DIR, and TMPDIR,
+# XDG_CACHE_HOME and per-tool flags pointed into it from the build-dirs table (_build_dirs.sh;
+# ORCHESTRATE_BUILD_DIRS=off disables), exported before the gate environment is sourced.
 # Exit: CMD's exit code | 75 no slot within --wait | 2 usage
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
+# shellcheck source=_build_dirs.sh
+source "$here/_build_dirs.sh"
 
 slots=${ORCHESTRATE_GATE_SLOTS:-3} wait_s=${ORCHESTRATE_GATE_WAIT:-1800} label=gate env_file=${ORCHESTRATE_GATE_ENV:-}
 pass=()
@@ -41,10 +46,7 @@ for word in "$@"; do
 done
 
 # The per-repo gate environment, found without any network call.
-if [[ -z "$env_file" ]] && url=$(git remote get-url origin 2>/dev/null); then
-  slug=$(sed -E 's#^.*github\.com[:/]##; s#\.git$##' <<<"$url")
-  [[ "$slug" == */* ]] && env_file="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/${slug//\//__}/gate-env.sh"
-fi
+if [[ -z "$env_file" ]] && sd=$(repo_state_dir); then env_file="$sd/gate-env.sh"; fi
 [[ -z "$env_file" || -f "$env_file" ]] || env_file=""
 
 deadline=$(($(date +%s) + wait_s)) slot="" said=no
@@ -59,11 +61,12 @@ while :; do
 done
 trap 'slot_release "$slot" $$' EXIT
 export GATE_SLOT_KIND=gate
+build_dirs_apply "$@"
 rc=0
 if [[ -n "$env_file" ]]; then
   # shellcheck disable=SC2016  # expanded by the inner bash
-  bash -c 'source "$1"; shift; "$@"' gate-env "$env_file" "$@" || rc=$?
+  bash -c 'source "$1"; shift; "$@"' gate-env "$env_file" "${BUILD_ARGV[@]}" || rc=$?
 else
-  "$@" || rc=$?
+  "${BUILD_ARGV[@]}" || rc=$?
 fi
 exit "$rc"
