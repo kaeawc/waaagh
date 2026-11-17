@@ -270,6 +270,26 @@ orch_read_retry() {
   return 1
 }
 
+# orch_gql_read N [--json] gh CMD...: a bounded GraphQL read (gh-read.sh, at most N attempts) that
+# tells the caller when GitHub refused GraphQL, which orch_read_retry hides (its stderr goes to
+# /dev/null). Prints the body and returns 0; returns 1 on any other failure (nothing printed);
+# returns 2 and prints `refused` when GraphQL was refused and ORCHESTRATE_GH_API is auto, after
+# recording the refusal (orch_gh_refused) so every later read goes to REST. The caller switches to
+# its REST path on 2 (and must not treat the printed `refused` as a body). --json asks gh-read.sh
+# to check the body is JSON.
+orch_gql_read() {
+  local n=$1 rc=0 err out jsonflag=()
+  shift
+  if [[ "${1:-}" == --json ]]; then jsonflag=(--json); shift; fi
+  [[ "${1:-}" != gh ]] || shift
+  err=$(mktemp "${TMPDIR:-/tmp}/orch-gql-err.XXXXXX")
+  out=$(orch_run gh-read.sh "${jsonflag[@]+"${jsonflag[@]}"}" --tries "$n" --budget "${ORCHESTRATE_READ_BUDGET:-60}" -- "$@" 2>"$err") || rc=$?
+  if ((rc == 0)); then rm -f "$err"; printf '%s\n' "$out"; return 0; fi
+  if orch_gh_refused "$rc" "$(cat "$err" 2>/dev/null || true)"; then rm -f "$err"; echo refused; return 2; fi
+  rm -f "$err"
+  return 1
+}
+
 # orch_gh_priority high|normal|low: declare this script's GitHub budget priority (gh-budget.sh):
 # high for merges and main health, normal for ticks, repairs and lanes, low for nudges, backfills
 # and sweeps. With ORCHESTRATE_GH_BUDGET=1, sourcing this file also puts the gh shim (gh-shim/gh)

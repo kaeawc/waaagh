@@ -207,7 +207,7 @@ case "$*" in "pr list"*) echo "HTTP 403: Resource not accessible by integration"
   ready_prs 3
   pr_row 4 me false false MERGEABLE "$OKC" '[{"name":"hold"}]' | jq -s --slurpfile p "$FX/prs.json" '$p[0] + .' >"$FX/p2"
   mv "$FX/p2" "$FX/prs.json"
-  touch "$FX/rest-mode" "$FX/rest-fails-abcdef01234567892" "$FX/rest-fails-abcdef01234567894"
+  touch "$FX/rest-mode" "$FX/rest-fails-abcdef0123456789abcdef0123456789abcdef02" "$FX/rest-fails-abcdef0123456789abcdef0123456789abcdef04"
   run "$SCRIPTS/pr-ready.sh" --repo o/r
   [ "$status" -eq 0 ]
   [[ "$output" == *$'2\tBLOCK\tabcdef012\tUNKNOWN\t0\tchecks=unknown'* ]]
@@ -265,7 +265,7 @@ rp() { "$SCRIPTS/gh-rest-pr.sh" "$@" --repo o/r; }
   run rp list
   [ "$status" -eq 0 ]
   [ "$(jq -c '.[0] | [.author.login, .isDraft, .isCrossRepository, .mergeable, .statusCheckRollup]' <<<"$output")" = '["app/dependabot",false,false,"UNKNOWN",[]]' ]
-  [ "$(jq -c '.[1] | [.isDraft, .isCrossRepository, .labels, .baseRefName, .headRefOid]' <<<"$output")" = '[true,true,[{"name":"x"}],"main","abcdef01234567892"]' ]
+  [ "$(jq -c '.[1] | [.isDraft, .isCrossRepository, .labels, .baseRefName, .headRefOid]' <<<"$output")" = '[true,true,[{"name":"x"}],"main","abcdef0123456789abcdef0123456789abcdef02"]' ]
   [ "$(jq -c '[.[0].closingIssuesReferences[].number]' <<<"$output")" = '[12,13,15]' ]
   # 250 open PRs: three pages of 100; --limit stops early.
   pr_rows 1 250 me false false MERGEABLE '[]' | jq -s . >"$FX/prs.json"
@@ -311,7 +311,7 @@ STUB
   [ "$(rp files --pr 1)" = '[{"path":"a.sh"},{"path":"b/c.md"}]' ]
   [ "$(rp review --pr 1)" = '{"state":"APPROVED","commit":"bbb"}' ]
   [ "$(rp review --pr 2)" = '{"state":null,"commit":null}' ]
-  run rp rollup --sha abcdef01234567891
+  run rp rollup --sha abcdef0123456789abcdef0123456789abcdef01
   [ "$(jq -c '.[0] | [.__typename, .name, .conclusion, .workflowName]' <<<"$output")" = '["CheckRun","build","SUCCESS","CI"]' ]
   [ "$(jq -c '.[1] | [.__typename, .context, .state]' <<<"$output")" = '["StatusContext","ci/x","PENDING"]' ]
   run rp view --pr 9
@@ -329,10 +329,10 @@ STUB
   touch "$FX/rest-mode"
   run "$SCRIPTS/gh-snapshot.sh" --repo o/r
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = "pr 1 head=abcdef01234567891 draft=no rollup=SUCCESS review=APPROVED review-commit=abcdef01234567891 reviewed=head cache=new" ]
-  [ "${lines[1]}" = "pr 2 head=abcdef01234567892 draft=yes rollup=PENDING review=NONE review-commit=- reviewed=none cache=new" ]
-  [ "${lines[2]}" = "pr 3 head=abcdef01234567893 draft=no rollup=ERROR review=CHANGES_REQUESTED review-commit=0ld reviewed=stale cache=new" ]
-  [ "${lines[3]}" = "pr 4 head=abcdef01234567894 draft=no rollup=NONE review=NONE review-commit=- reviewed=none cache=new" ]
+  [ "${lines[0]}" = "pr 1 head=abcdef0123456789abcdef0123456789abcdef01 draft=no rollup=SUCCESS review=APPROVED review-commit=abcdef0123456789abcdef0123456789abcdef01 reviewed=head cache=new" ]
+  [ "${lines[1]}" = "pr 2 head=abcdef0123456789abcdef0123456789abcdef02 draft=yes rollup=PENDING review=NONE review-commit=- reviewed=none cache=new" ]
+  [ "${lines[2]}" = "pr 3 head=abcdef0123456789abcdef0123456789abcdef03 draft=no rollup=ERROR review=CHANGES_REQUESTED review-commit=0ld reviewed=stale cache=new" ]
+  [ "${lines[3]}" = "pr 4 head=abcdef0123456789abcdef0123456789abcdef04 draft=no rollup=NONE review=NONE review-commit=- reviewed=none cache=new" ]
   grep -q 'sort=created&direction=asc' "$FX/rest-calls"
   run "$SCRIPTS/gh-snapshot.sh" --repo o/r --limit 2
   [ "$status" -eq 1 ]
