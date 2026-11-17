@@ -20,6 +20,8 @@ case "$*" in
     a="$*"; n=${a#api repos/o/r/issues/}; n=${n%%/*}
     [ -f "$FX/comments-$n.json" ] || { echo "HTTP 404: Not Found" >&2; exit 1; }
     cat "$FX/comments-$n.json" ;;
+  "api --paginate repos/o/r/issues/"*"/comments?per_page=100") echo '[]' ;;   # the REPAIR-START marker's read (#214)
+  "api -X POST repos/o/r/issues/"*"/comments "*) echo '{}' ;;
   *) echo "HTTP 404: Not Found" >&2; exit 1 ;;
 esac
 STUB

@@ -95,6 +95,12 @@ review on every poll or push.
   `git worktree` a jj checkout.
 - **One writer per branch or overlapping file set.** Parallel lanes get disjoint file scopes and
   separate worktrees. Every brief names its scope and the files other lanes own.
+- **That holds across sessions too** (#214). A cloud session that opened a PR stays a live writer
+  while the PR is open: idle is not done, and it wakes on the PR's CI, review and bot events.
+  `cloud-dispatch.sh record --kind repair` therefore posts one `REPAIR-START` marker on the PR
+  (`repair-writer.sh mark`), and the implement brief stops before any push once one is there. The
+  tick's `repair-writer.sh check` flags a second writer the commit metadata shows
+  (`repair-writers=<n>`); re-read the head SHA right before recording a review verdict.
 - Implementation lanes leave changes uncommitted and run no mutating VCS commands; you commit and
   push. (The PR doctor and supersede-evidence roles commit on their own branches, per their briefs.)
 - **A device belongs to one agent at a time.** Anything that drives an emulator, simulator or

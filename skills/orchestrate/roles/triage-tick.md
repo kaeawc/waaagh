@@ -17,7 +17,8 @@ from memory (advisory workflows, ready label, device slot types).
    `dispatch`, `slots`, `cron`, `threads`, `host`, then `holds n=<k> stale=<m>` and one
    `hold-stale` line per stale hold when the merge loop holds any PR (`hold.sh`), then `repairs
    inflight=… settled=… unknown=…` and one `repair-stale` line per long repair when a repair
-   session is in flight (`review-ledger.sh settle`). `triage-tick.sh
+   session is in flight (`review-ledger.sh settle`), and a `repair-writers` line per such PR with a
+   second writer (`repair-writer.sh check`). `triage-tick.sh
    -h` is the source of truth for the lines and their order; find a line by its name, not its
    position or the count. The first is the verdict: `verdict ok`, or `verdict act <reason>,...`. It refreshes main health (sets or clears `MAIN_RED`) in the same
    call. Work only from these lines.
@@ -117,6 +118,11 @@ from memory (advisory workflows, ready label, device slot types).
      flight longer than `--hold-hours` with no closing comment. Report it; the orchestrator checks
      the session and, if its run ended, records `review-ledger.sh repaired --pr <pr> --session
      <id>`. Never record `repaired` or `ship` for a repair yourself.
+   - `repair-writers=<n>`: each `repair-writers two-writers|force-push #<pr> ...` line is a PR
+     under repair that another writer pushed to since the dispatch (`repair-writer.sh check`,
+     #214): commits from two session trailers or authors, or a force-push. Report it; the
+     orchestrator stops the other session and has the final head re-reviewed. A `repair-writers
+     unknown` line could not be read: report it, never a guess.
 3. Re-run the snapshot only if you wrote something in step 2, and report its verdict line.
 
 ## Report (under 150 words)
