@@ -6,6 +6,7 @@ skills/orchestrate/scripts/_build_dirs.sh	94
 skills/orchestrate/scripts/_lib.sh	94
 skills/orchestrate/scripts/_slots.sh	99
 skills/orchestrate/scripts/bench.sh	99
+skills/orchestrate/scripts/boot-slot.sh	85
 skills/orchestrate/scripts/branch-idle.sh	99
 skills/orchestrate/scripts/campaign.sh	94
 skills/orchestrate/scripts/claim-check.sh	95

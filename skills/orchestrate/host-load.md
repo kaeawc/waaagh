@@ -114,7 +114,29 @@ verify the same tree need its artifacts once, not once each:
   (20480) are removed, as are partial builds; the newest and any a process is working inside stay.
   A lane that runs long on a reused build should take `--copy`.
 - **Stagger device boots.** Start the build first, then boot devices one at a time rather than
-  every emulator at once.
+  every emulator at once, through `scripts/boot-slot.sh` (below).
+
+## Device boots are gated on load
+
+Three local lanes once booted simulators within the same minute: a watchOS simulator, an iOS 18
+simulator for a runtime matrix, and a foldable. The 1-minute load on a 16-CPU Mac went from about
+25 to 235. The device-lane cap (4) was not exceeded: one matrix lane may boot several runtimes, and
+each boot starts many CoreSimulator processes, most of them after the boot command has returned.
+With ten lanes and one heavy-build slot the load still reached 130 when a boot, a test run and a
+build overlapped. The lane count is the wrong unit; booted devices and boots per minute drive it.
+
+- **Every boot goes through `"$SCRIPTS/boot-slot.sh" -- <boot command>`**: one boot at a time on
+  the host, started only while the 1-minute load is below 3x the CPU count (48 on 16 CPUs;
+  `--load-factor`, `ORCHESTRATE_BOOT_LOAD_FACTOR`), and the slot is kept 30 seconds afterwards
+  (`--settle`) so the next boot does not land on this one's start-up. Bounded wait (`--wait`,
+  default 900 seconds); exit 75 means it did not start: report it, do not retry in a loop.
+- **One booted device per lane.** A matrix over runtimes or devices runs them one at a time,
+  shutting each down before booting the next.
+- **The gate is in the lane's brief**, not left to the orchestrator noticing a spike
+  (`roles/verification.md`, `roles/verify-batch.md`).
+- **On a spike, pause lanes; do not abort them.** Message the running device lanes to stop
+  starting new boots and builds until `host-load.sh` admits again. An aborted lane loses its booted
+  device and its build, and rebuilding both is the load you were trying to shed.
 
 ## Never remove a worktree someone is in
 

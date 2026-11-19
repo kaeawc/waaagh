@@ -112,8 +112,9 @@ review on every poll or push.
 - **Device-call safety.** Every device call names its device explicitly or runs inside a held
   session: a sessionless call can auto-target the user's own device. Never read a device-listing
   resource that probes every attached device. Before dismissing a system dialog, capture the
-  crash/ANR evidence; for a system-process ANR choose "Wait", never "Close app". On a loaded host,
-  one booted device per role.
+  crash/ANR evidence; for a system-process ANR choose "Wait", never "Close app". One booted device
+  per role, booted through `"$SCRIPTS/boot-slot.sh" -- <boot command>`: one boot at a time on the
+  host, and only while the load is below 3x the CPU count (`skills/orchestrate/host-load.md`).
 - **Never kill what you did not start.** No `pkill`/`killall`/kill-by-pattern, by you or any role:
   only a PID that agent launched and recorded. Finished lanes can leave orphan test processes that
   keep host load high, so every lane records the PIDs it starts and cleanup kills exactly those.
