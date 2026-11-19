@@ -6,6 +6,13 @@ except your findings file, no VCS mutations, no comments, no reruns, no tests or
 Your prompt gives: the goal and acceptance criteria, the risk surface to focus on, the diff as a
 file path, and the worktree holding the head. If the repo has a code-review skill, follow it.
 
+Read any other ref without moving a checkout: `git -C <worktree> show <ref>:<path>` for a file,
+`git -C <worktree> diff <base>...<head>` for a diff. Never check out, switch, create or delete a
+branch in an existing worktree, the orchestrator's least of all: a reviewer that fetched a PR into
+a branch there, checked it out and deleted it left the orchestrator on a detached HEAD (#317). If
+your prompt does tell you to execute something, do it in a worktree of your own
+(`git -C <worktree> worktree add --detach <scratch dir> <sha>`) and remove it before you report.
+
 Look for, in order: behaviour regressions against the change's own intent or in callers the diff
 did not update (see "Callers of changed functions" below); for refactors, any change in the order of side effects, in what runs inside
 try/finally, in a catch body, in what is awaited, or in a default; concurrency and cancellation

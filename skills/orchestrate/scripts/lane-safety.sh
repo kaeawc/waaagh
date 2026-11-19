@@ -20,7 +20,7 @@
 #   agent_id) and a lane session whose worktree is not itself forbidden, never the orchestrator's
 #   own calls. Bound: denied are shell writes, rm -r / find -delete, mutating git (checkout, switch,
 #   reset, pull, merge, rebase, commit, stash, restore, apply, am, cherry-pick, revert, clean, add,
-#   rm, mv, worktree remove/move) and Edit/Write/MultiEdit/NotebookEdit under a forbidden root,
+#   rm, mv, branch -d/-m/-c/-f, worktree remove/move) and Edit/Write/MultiEdit/NotebookEdit under a forbidden root,
 #   except inside the caller's own lane worktree nested below it.
 # Asked (flagged for review): a destructive command that is backgrounded (&) or silenced
 #   (output to /dev/null), even when its path looks safe. Not asked: `kill $(cat PIDFILE)
@@ -400,6 +400,15 @@ check_git() {
   done
   case "$sub" in
     checkout | switch | reset | pull | merge | rebase | commit | stash | restore | apply | am | cherry-pick | revert | clean | add | rm | mv) ;;
+    branch)
+      # Deleting, moving, copying or forcing a branch: a reviewer deleted the branch it had checked
+      # out there and left the checkout on a detached HEAD (#317). Listing stays allowed.
+      local b mut=no
+      for b in "$@"; do
+        case "$b" in --delete | --move | --copy | --force | -[dDmMcCf]* | -[!-]*[dDmMcCf]*) mut=yes ;; esac
+      done
+      [[ $mut == yes ]] || return 0
+      sub="branch -d/-m/-c/-f" ;;
     worktree)
       case "${1:-}" in remove | move) ;; *) return 0 ;; esac
       shift

@@ -52,10 +52,15 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
     "cp /etc/hosts ." "rm -rf src" "find . -name '*.o' -delete" "git commit -m wip" \
     "git checkout -b mine" "git switch other" "git pull" "git stash" "git reset --hard" \
     "git add -A" "git -c user.name=x merge origin/main" "cd $MAIN && git rebase origin/main" \
-    "git -C $MAIN restore ." "git --work-tree=$MAIN clean -fd"; do
+    "git -C $MAIN restore ." "git --work-tree=$MAIN clean -fd" \
+    "git checkout pr-5" "git checkout --detach" "git branch -D pr-5" "git branch --delete pr-5" \
+    "git branch -m old new" "git branch -f main origin/main" "git branch -rd origin/x"; do
     expect deny Bash "$c" "$MAIN" agent-1 "orchestrator's checkout $MAIN"
   done
+  # The reviewer's read-only ways to see another ref, and its own detached worktree (#317).
   for c in "git status" "git log -1" "git diff" "git fetch origin" "git worktree add $T/new -b new" \
+    "git show origin/pr-5:src/a.kt" "git diff origin/main...origin/pr-5" "git branch --list 'pr-*'" \
+    "git branch -vv" "git branch --contains HEAD" "git worktree add --detach $T/scratch/review abc123" \
     "git branch -a" "cat f" "echo x > $T/scratch/out" "git -C $LANE commit -m wip" \
     "cd $LANE && echo x > f" "echo ok"; do
     expect allow Bash "$c" "$MAIN" agent-1
@@ -147,6 +152,10 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   grep -qF 'lane-forbidden' "$roles/README.md"
   grep -qF '{{FORBIDDEN}}' "$roles/_common.md"
   grep -qF '{{FORBIDDEN}}' "$roles/implementation-lane.md"
+  # The reviewer brief: read refs without a checkout; execute only in a worktree of its own (#317).
+  grep -qF 'show <ref>:<path>' "$roles/review.md"
+  grep -qF 'worktree add --detach' "$roles/review.md"
+  grep -qF 'rev-parse --abbrev-ref' "$ROOT/skills/orchestrate/SKILL.md"
   grep -qF 'lane-forbidden' "$ROOT/skills/orchestrate/lane-safety.md"
   grep -qF 'status --short' "$ROOT/skills/orchestrate/lane-safety.md"
   run jq -r '.hooks.PreToolUse[] | select(.hooks[].command | endswith("/lane-safety.sh")) | .matcher' "$ROOT/hooks/hooks.json"
