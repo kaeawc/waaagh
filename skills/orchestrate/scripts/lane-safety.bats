@@ -207,6 +207,68 @@ decide_as() {
   decide "ls >/dev/null 2>&1 &"; allowed
 }
 
+@test "a silenced kill from a pidfile the hook has read is not asked; a missing or malformed one is" {
+  mkdir -p "$LANE/scratch/sub"
+  echo 4242 >"$LANE/scratch/logpid.txt"; printf '11\n22\n' >"$LANE/scratch/two.pid"
+  echo "pid 4242" >"$LANE/scratch/bad.pid"; : >"$LANE/scratch/empty.pid"
+  decide 'kill $(cat scratch/logpid.txt) 2>/dev/null'; allowed
+  decide 'kill -9 "$(<scratch/two.pid)" 2>/dev/null; ls'; allowed
+  decide 'kill -s TERM `cat scratch/logpid.txt` $(cat scratch/two.pid) 2>/dev/null'; allowed
+  decide 'kill $(cat scratch/logpid.txt 2>/dev/null) 2>/dev/null'; allowed
+  decide "cd $LANE/scratch; kill \$(cat logpid.txt) 2>/dev/null; P=x; find . -name '*.log' | head"; allowed
+  # The incident shape (2026-11-19): cd to the lane, kill the recorded log PID, then only reads.
+  decide "cd $LANE; kill \$(cat scratch/logpid.txt) 2>/dev/null; ls scratch 2>/dev/null | head -30" "$MAIN"; allowed
+  # A mistyped or missing pidfile is caught before the command runs, with the path it resolved to.
+  decide 'kill $(cat scratch/logpdi.txt) 2>/dev/null'; asked "pidfile scratch/logpdi.txt not found ($LANE/scratch/logpdi.txt)"
+  decide 'cd scratch/sub; kill $(cat logpid.txt) 2>/dev/null'; asked "not found ($LANE/scratch/sub/logpid.txt)"
+  decide 'kill $(cat scratch/logpid.txt) $(cat scratch/nope.pid) 2>/dev/null'; asked "pidfile scratch/nope.pid not found"
+  decide 'kill $(cat scratch/bad.pid) 2>/dev/null'; asked "does not hold only PIDs above 1"
+  decide 'kill $(cat scratch/empty.pid) 2>/dev/null'; asked "does not hold only PIDs above 1"
+  decide 'kill $(cat "$PIDFILE") 2>/dev/null'; asked "let its output show"
+  # Anything the hook cannot verify keeps the plain ask.
+  decide 'kill $(cat scratch/logpid.txt) >/dev/null 2>&1'; asked "silenced destructive command"
+  decide 'kill $(cat scratch/logpid.txt) &>/dev/null'; asked "silenced destructive command"
+  decide 'kill 4242 $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'kill $PID 2>/dev/null'; asked "let its output show"
+  decide 'kill $(cat scratch/logpid.txt; echo 1) 2>/dev/null'; asked "let its output show"
+  decide 'kill $(head -1 scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'kill $(cat scratch/logpid.txt scratch/two.pid) 2>/dev/null'; asked "let its output show"
+  decide 'kill -s $(echo TERM) $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'kill $(cat scratch/logpid.txt) 2>/dev/null &'; asked "backgrounded destructive command"
+  # The file the hook read must be the file the shell reads: nothing before the kill may write
+  # it or move the cwd, and no wrapper may run the kill somewhere the hook did not follow.
+  decide 'echo -1 > scratch/logpid.txt; kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'ln -sf ../x scratch/logpid.txt; kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'true; kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'cd "$OTHER"; kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'cd scratch >/dev/null; kill $(cat logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'pushd scratch; kill $(cat logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'cd $(echo scratch); kill $(cat logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'sudo kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'timeout 5 kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'X=1 kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide "bash -c 'kill \$(cat scratch/logpid.txt) 2>/dev/null'"; asked "let its output show"
+  decide "eval 'kill \$(cat scratch/logpid.txt) 2>/dev/null'"; asked "let its output show"
+  decide 'echo $(kill $(cat scratch/logpid.txt) 2>/dev/null)'; asked "let its output show"
+  decide 'kill $(cat scratch/logpid.txt) 2>/dev/null >&2'; asked "let its output show"
+  decide 'kill $(cat scratch/logpid.txt) 2>|/dev/null'; asked "let its output show"
+  decide 'kill $(cat scratch/logpid.txt) 2>/dev/null | true'; asked "let its output show"
+  decide 'kill -- -$(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  # PIDs 0 (the caller's process group), 1 (init) and -1 never pass as a pidfile's content.
+  for v in 0 1 -1 "4242 0" 00; do
+    echo "$v" >"$LANE/scratch/v.pid"
+    decide 'kill $(cat scratch/v.pid) 2>/dev/null'; asked "does not hold only PIDs above 1"
+  done
+  # Still quiet: several quiet kills in a row, || true, -n, a pidfile with no trailing newline.
+  printf 4242 >"$LANE/scratch/nonl.pid"
+  decide 'kill $(cat scratch/logpid.txt) 2>/dev/null; kill -n 9 $(cat scratch/nonl.pid) 2>/dev/null || true'; allowed
+  decide "cd $LANE && cd scratch
+kill \$(cat two.pid) 2>/dev/null"; allowed
+  decide 'rm -rf $(cat scratch/logpid.txt) 2>/dev/null'; denied
+  decide 'kill $(pgrep -f xcodebuild) 2>/dev/null'; denied "kill fed by a process search"
+  decide 'cat scratch/logpid.txt | xargs kill 2>/dev/null'; denied "xargs kill"
+}
+
 @test "quoted text, comments and heredoc bodies are data, not commands" {
   decide 'git commit -m "never pkill; never rm -rf ~"'; allowed
   decide "echo 'killall Simulator' # rm -rf ~"; allowed
@@ -215,6 +277,19 @@ pkill -f xcodebuild
 rm -rf ~/Library
 EOF"; allowed
   decide 'grep -n "pkill" docs.md'; allowed
+}
+
+@test "a quoted newline stays inside its word: the rest of the command is still judged" {
+  decide "rm -rf ~ 'a
+b'"; denied "protected path $HOME"
+  decide "rm -rf \"a
+b\" ~"; denied "protected path $HOME"
+  decide "kill 'a
+b' -1"; denied "kill -1"
+  decide "echo 'a
+b' > $MAIN/f"; denied "writes outside"
+  decide "echo 'rm -rf ~
+pkill x'"; allowed
 }
 
 @test "other tools pass through; the hook can be switched off" {

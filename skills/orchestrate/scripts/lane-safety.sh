@@ -23,7 +23,10 @@
 #   rm, mv, worktree remove/move) and Edit/Write/MultiEdit/NotebookEdit under a forbidden root,
 #   except inside the caller's own lane worktree nested below it.
 # Asked (flagged for review): a destructive command that is backgrounded (&) or silenced
-#   (output to /dev/null), even when its path looks safe.
+#   (output to /dev/null), even when its path looks safe. Not asked: `kill $(cat PIDFILE)
+#   2>/dev/null` (stderr only; first in the command but for resolved `cd DIR`s; no wrapper) when
+#   the hook has read PIDFILE and it holds only PIDs above 1; a missing or malformed pidfile is
+#   asked, naming the path.
 # Output: nothing (allow; the normal permission flow continues) or one hookSpecificOutput JSON
 #   object with permissionDecision deny|ask and the reason. WAAAGH_LANE_SAFETY=off disables it.
 # Exit: 0 decided (or not a Bash or edit call); 1 cannot run (no jq, unreadable payload; non-blocking);
@@ -301,13 +304,15 @@ check_git() {
 }
 
 # --- tokenizer ----------------------------------------------------------------------------------
-# One line per simple command: "<terminator>\036<tok>\037<tok>...". Operator tokens start with \002.
-# Command substitutions ($(...), `...`) leave "$(...)" in the word and are emitted as their own
-# commands; heredoc bodies and comments are skipped.
+# One line per simple command: "<terminator>\036<tok>\037<tok>...\036<ids>". Operator tokens start
+# with \002. Command substitutions ($(...), `...`) leave "$(...)" in the word and are emitted as
+# their own commands after a "subid\036<id>\036" line; <ids> lists (comma-separated) the
+# substitutions in that command's words. Heredoc bodies and comments are skipped; a quoted newline
+# stays in its word as \035, so one command is always one line.
 tokenize() {
-  awk -v US="$US" -v OP="$OP" '
+  awk -v US="$US" -v OP="$OP" -v NL=$'\035' '
   function flush() { if (have) { toks = toks (ntok ? US : "") word; ntok++; word = ""; have = 0 } }
-  function emit(term) { flush(); if (ntok) print term "\036" toks; toks = ""; ntok = 0 }
+  function emit(term) { flush(); if (ntok) print term "\036" toks "\036" cmdsubs; toks = ""; ntok = 0; cmdsubs = "" }
   function optok(o) { flush(); toks = toks (ntok ? US : "") OP o; ntok++ }
   # read a $( ... ) or ` ... ` body starting at position i (just after the opener); returns end index
   function grab(s, i, closer,   depth, c, body, q) {
@@ -320,20 +325,20 @@ tokenize() {
       if (c == closer) { depth--; if (depth == 0) break }
       body = body c
     }
-    subs[++nsubs] = body
+    subs[++nsubs] = body; cmdsubs = cmdsubs (cmdsubs == "" ? "" : ",") nsubs
     return i
   }
   function scan(s,   i, c, n, n2, sq, dq, hd, line, k, j, delim, strip) {
-    sq = 0; dq = 0; word = ""; have = 0; toks = ""; ntok = 0; nhd = 0; wantdelim = 0
+    sq = 0; dq = 0; word = ""; have = 0; toks = ""; ntok = 0; nhd = 0; wantdelim = 0; cmdsubs = ""
     for (i = 1; i <= length(s); i++) {
       c = substr(s, i, 1); n = substr(s, i + 1, 1); n2 = substr(s, i + 2, 1)
-      if (sq) { if (c == "\047") sq = 0; else word = word c; continue }
+      if (sq) { if (c == "\047") sq = 0; else word = word (c == "\n" ? NL : c); continue }
       if (dq) {
         if (c == "\"") { dq = 0; continue }
         if (c == "\\" && (n == "\"" || n == "\\" || n == "$" || n == "`")) { word = word n; i++; continue }
         if (c == "$" && n == "(") { i = grab(s, i + 2, ")"); word = word "$(...)"; continue }
         if (c == "`") { i = grab(s, i + 1, "`"); word = word "$(...)"; continue }
-        word = word c; continue
+        word = word (c == "\n" ? NL : c); continue
       }
       if (c == "\047") { sq = 1; have = 1; continue }
       if (c == "\"") { dq = 1; have = 1; continue }
@@ -390,32 +395,71 @@ tokenize() {
   { buf = buf (NR > 1 ? "\n" : "") $0 }
   END {
     nsubs = 0; scan(buf)
-    for (q = 1; q <= nsubs; q++) scan(subs[q])
+    for (q = 1; q <= nsubs; q++) { print "subid\036" q "\036"; scan(subs[q]) }
   }'
 }
 
 # --- analysis -----------------------------------------------------------------------------------
 # analyze TEXT BASE [DEPTH]: every simple command in TEXT; a cd changes the base (cur) for the
-# commands after it. saw_kill/saw_pidsrc/cur are read and set by analyze_simple (dynamic scope).
+# commands after it. saw_kill/saw_pidsrc/cur/cmd_subs/quiet_kills are read and set by
+# analyze_simple (dynamic scope).
 destructive=no
 analyze() {
   local text=$1 cur=$2 depth=${3:-0} line term rest toks
-  local saw_kill=no saw_pidsrc=no
+  local saw_kill=no saw_pidsrc=no cmd_subs="" cursub=0 quiet_kills=() subn=() subtoks=() q
+  # prefix_ok: every top-level command so far is a plain `cd DIR` the hook resolved or a quiet kill
+  # (inert), so nothing in this text can have changed a pidfile or the cwd behind the hook's back.
+  local prefix_ok=yes inert=no
   ((depth < 4)) || return 0
   while IFS= read -r line; do
     term=${line%%$'\036'*} rest=${line#*$'\036'}
+    cmd_subs=${rest##*$'\036'} rest=${rest%$'\036'*}
+    if [[ "$term" == subid ]]; then cursub=$rest; continue; fi
     IFS=$US read -r -a toks <<<"$rest"
     ((${#toks[@]})) || continue
+    if ((cursub > 0)); then subn[cursub]=$((${subn[cursub]:-0} + 1)); subtoks[cursub]=$rest; fi
+    inert=no
+    if ((cursub == 0 && ${#toks[@]} == 2)) && [[ "${toks[0]}" == cd && "${toks[1]}" != -* && "$term" =~ ^(\;|nl|\&\&|end)$ ]] &&
+      expand "${toks[1]}" "$cur" >/dev/null; then inert=yes; fi
     analyze_simple "$term" "$cur" "$depth" "${toks[@]}"
+    ((cursub > 0)) || [[ $inert == yes ]] || prefix_ok=no
   done < <(tokenize <<<"$text")
+  for q in ${quiet_kills[@]+"${quiet_kills[@]}"}; do quiet_kill "${q%%$'\036'*}" "${q#*$'\036'}"; done
   if [[ $saw_kill == yes && $saw_pidsrc == yes ]]; then
     deny "kill fed by a process search (pgrep/pidof/lsof/ps): kill only PIDs you recorded at start"
   fi
 }
 
+# quiet_kill BASE IDS: a `kill $(cat PIDFILE) 2>/dev/null` (substitution IDS, cwd BASE). Silence
+# hides only "no such process" when every PID comes from a pidfile the hook has read: each
+# substitution is exactly `cat FILE` or `<FILE` (its own 2>/dev/null allowed), and FILE exists and
+# holds only PIDs above 1 (0 is the caller's process group, 1 is init). Anything else is asked,
+# naming a missing or malformed pidfile (a mistyped path is caught here, before the command runs).
+# analyze_simple only sends a kill here when the file the hook reads is the file the shell will
+# read: the kill is the command's first word at the top level (no sudo, env, bash -c or eval), its
+# one redirection is 2>/dev/null, it is not piped, and only resolved `cd DIR` commands or other
+# quiet kills precede it in the text (nothing that could write the pidfile or move the cwd).
+quiet_kill() {
+  local base=$1 ids=$2 id st f path why=""
+  for id in ${ids//,/ }; do
+    st=()
+    [[ "${subn[id]:-0}" != 1 ]] || IFS=$US read -r -a st <<<"${subtoks[id]}"
+    if ((${#st[@]} == 4)) && [[ "${st[2]}" == "${OP}2>" && "${st[3]}" == /dev/null ]]; then st=("${st[0]}" "${st[1]}"); fi
+    f=""
+    if ((${#st[@]} == 2)) && [[ "${st[0]}" == cat || "${st[0]}" == "$OP<" ]] && [[ "${st[1]}" != -* ]]; then f=${st[1]}; fi
+    if [[ -z "$f" ]] || ! path=$(expand "$f" "$base"); then why="let its output show"; break; fi
+    if [[ ! -f "$path" || ! -r "$path" ]]; then why="pidfile $f not found ($path): fix the path, or let kill's output show"; break; fi
+    if ! awk '{ for (i = 1; i <= NF; i++) { n++; if ($i !~ /^[0-9]+$/ || $i + 0 < 2) bad = 1 } }
+      END { exit (n && !bad) ? 0 : 1 }' "$path"; then
+      why="pidfile $f ($path) does not hold only PIDs above 1: let kill's output show"; break
+    fi
+  done
+  [[ -z "$why" ]] || ask "silenced destructive command (kill ... >/dev/null): $why"
+}
+
 analyze_simple() {
   local term=$1 base=$2 depth=$3; shift 3
-  local args=() t i via_xargs=no silenced=no
+  local args=() t i via_xargs=no silenced=no nredir=0 only_err=no kill_quiet=no
   # split redirections from words
   while (($#)); do
     t=$1; shift
@@ -423,10 +467,14 @@ analyze_simple() {
       t=${t#"$OP"}
       local target=${1:-}
       (($#)) && shift
+      ((nredir += 1))
       case "$t" in
         *'>&') [[ "$target" =~ ^[0-9-]+$ ]] || check_write "$target" "$base" "redirect" ;;
         *'>' | *'>|')
-          if [[ "$target" == /dev/null ]]; then silenced=yes; else check_write "$target" "$base" "redirect"; fi ;;
+          if [[ "$target" == /dev/null ]]; then
+            silenced=yes
+            [[ "$t" != '2>' ]] || only_err=yes
+          else check_write "$target" "$base" "redirect"; fi ;;
       esac
     else
       args+=("$t")
@@ -482,7 +530,23 @@ analyze_simple() {
       destructive=yes
       [[ $via_xargs == no ]] || deny "xargs kill kills whatever a search matched: kill only PIDs you recorded at start"
       saw_kill=yes
-      for t in "${a[@]:-}"; do [[ "$t" != -1 ]] || deny "kill -1 signals every process you own"; done ;;
+      for t in "${a[@]:-}"; do [[ "$t" != -1 ]] || deny "kill -1 signals every process you own"; done
+      # Only stderr silenced, and every PID argument is one whole substitution: quiet_kill decides.
+      if [[ $nredir == 1 && $only_err == yes && $i == 0 && $depth == 0 && $cursub == 0 && $prefix_ok == yes &&
+        "$term" =~ ^(\;|nl|\&\&|\|\||end)$ && -n "$cmd_subs" ]]; then
+        local npid=0 nsub=0 skip=no
+        for t in "${a[@]:-}"; do
+          if [[ $skip == yes ]]; then skip=no; continue; fi
+          case "$t" in
+            -s | -n) skip=yes ;;
+            -*) ;;
+            '$(...)') ((npid += 1)); ((nsub += 1)) ;;
+            *) ((npid += 1)) ;;
+          esac
+        done
+        t=${cmd_subs//[^,]/}
+        if ((npid > 0 && npid == nsub && nsub == ${#t} + 1)); then kill_quiet=yes inert=yes; fi
+      fi ;;
     pgrep | pidof | lsof | ps) saw_pidsrc=yes ;;
     rm)
       destructive=yes
@@ -574,6 +638,7 @@ analyze_simple() {
   esac
   if [[ "$c" =~ ^(rm|kill|avdmanager|git|xcrun|simctl|adb|find)$ && $destructive == yes ]]; then
     if [[ "$term" == "&" ]]; then ask "backgrounded destructive command ($c ...): run it in the foreground and read its output"
+    elif [[ $silenced == yes && $kill_quiet == yes ]]; then quiet_kills+=("$base"$'\036'"$cmd_subs")
     elif [[ $silenced == yes ]]; then ask "silenced destructive command ($c ... >/dev/null): let its output show"; fi
   fi
   destructive=no
