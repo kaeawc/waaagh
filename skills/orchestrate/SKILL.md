@@ -504,7 +504,8 @@ their wall caps, and lanes re-run them, which makes it worse.
 - **Gradle and Xcode run alone.** `gate-slot.sh` routes them to `heavy-build-slot.sh`: one heavy
   build at a time, started only after running gates drain, with no new gate meanwhile, and
   `org.gradle.workers.max` capped (`HEAVY_BUILD_WORKERS`, default 2). Never run a Node gate and a
-  native build at once.
+  native build at once. Both wrappers are re-entrant: one called inside a wrapped command (a gate
+  script that wraps its own Gradle step) runs in the slot already held instead of waiting on it.
 - **No shared build output.** Both wrappers give each lane a private build dir
   (`ORCHESTRATE_LANE_BUILD_DIR`) and point TMPDIR, XDG cache, Xcode derived data and Gradle's
   project cache into it, from a per-repo table. `wt-cleanup.sh` removes the dir once its worktree

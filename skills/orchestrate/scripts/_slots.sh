@@ -9,6 +9,12 @@
 # PID), so a sweeper never acts on a verdict about a slot that was claimed since (#236). A lock whose
 # PID is dead, or that is over a minute old, is broken. The holder is hard-linked into place (ln
 # fails if one exists), and a claim whose slot vanished mid-write retries instead of running unslotted.
+# Re-entrancy (#313): both wrappers export the slot they hold to their command
+# (ORCHESTRATE_SLOT_HELD, the slot dir, and ORCHESTRATE_SLOT_HOLDER, the PID). A wrapper started
+# inside that command finds the marker with slot_held and runs inside the ancestor's slot instead of
+# waiting on it: a holder waiting on itself is alive, so stale-holder reclaim never frees it. The
+# marker counts only while that PID still holds that slot, so one inherited by a process that
+# outlived its wrapper is ignored.
 # Nothing here kills a process.
 
 slot_root() { echo "${ORCHESTRATE_SLOT_DIR:-${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/slots}"; }
@@ -99,6 +105,33 @@ slot_busy() {
   local pool n=$2 i c=0
   pool="$(slot_root)/$1"
   for ((i = 1; i <= n; i++)); do slot_live "$pool/slot-$i" && c=$((c + 1)); done
+  echo "$c"
+}
+
+# slot_held: prints the pool (gate or heavy) of the slot an ancestor wrapper holds for this process,
+# from the marker it exported; returns 1 when there is none or it is no longer true.
+slot_held() {
+  local d=${ORCHESTRATE_SLOT_HELD:-} pid=${ORCHESTRATE_SLOT_HOLDER:-}
+  [[ -n "$d" && "$pid" =~ ^[0-9]+$ && "$d" == "$(slot_root)"/*/slot-* && -f "$d/holder" ]] || return 1
+  [[ "$(sed -n 1p "$d/holder" 2>/dev/null || true)" == "$pid" ]] && slot_live "$d" || return 1
+  basename -- "$(dirname -- "$d")"
+}
+
+# slot_parked DIR: a heavy build started inside this gate's command is waiting for, or running in,
+# the heavy slot (DIR/parked holds its PID, and it is alive). The gate only waits on that build.
+slot_parked() {
+  local pid
+  pid=$(cat "$1/parked" 2>/dev/null || true)
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# slot_busy_unparked POOL N: as slot_busy, without the parked slots.
+slot_busy_unparked() {
+  local pool n=$2 i c=0
+  pool="$(slot_root)/$1"
+  for ((i = 1; i <= n; i++)); do
+    if slot_live "$pool/slot-$i" && ! slot_parked "$pool/slot-$i"; then c=$((c + 1)); fi
+  done
   echo "$c"
 }
 

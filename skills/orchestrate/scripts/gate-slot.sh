@@ -13,6 +13,8 @@
 # with the same gate environment passed as --env-file.
 # While a heavy build holds its slot, no new gate starts: a Node gate and a Gradle/Xcode build never
 # run at once. A slot whose holder died (or whose PID was reused) is reclaimed; nothing is killed.
+# Re-entrant (#313): called from inside a command that gate-slot.sh or heavy-build-slot.sh is already
+# running, it takes no second slot and runs CMD inside the one its ancestor holds.
 # Every gate runs with lane-private build output (#213): ORCHESTRATE_LANE_BUILD_DIR, and TMPDIR,
 # XDG_CACHE_HOME and per-tool flags pointed into it from the build-dirs table (_build_dirs.sh;
 # ORCHESTRATE_BUILD_DIRS=off disables), exported before the gate environment is sourced.
@@ -52,17 +54,23 @@ for word in "$@"; do
 done
 
 deadline=$(($(date +%s) + wait_s)) slot="" said=no
-while :; do
-  if [[ "$(slot_busy heavy 1)" == 0 ]] && slot=$(slot_try gate "$slots" $$ "$label"); then break; fi
-  if (($(date +%s) >= deadline)); then
-    echo "gate-slot: no gate slot within ${wait_s}s ($(slot_busy gate "$slots")/$slots gates, $(slot_busy heavy 1) heavy build busy)" >&2
-    exit 75
-  fi
-  [[ "$said" == yes ]] || { echo "gate-slot: waiting ($(slot_busy gate "$slots")/$slots gates busy, $(slot_busy heavy 1) heavy build)" >&2; said=yes; }
-  slot_sleep
-done
-trap 'slot_release "$slot" $$' EXIT
-export GATE_SLOT_KIND=gate
+if held=$(slot_held); then
+  # Nested: waiting for a slot would wait on this process's own ancestor (a gate inside a heavy
+  # build never starts; a gate inside a gate can use up every slot).
+  echo "gate-slot: already inside a $held slot; running in it" >&2
+else
+  while :; do
+    if [[ "$(slot_busy heavy 1)" == 0 ]] && slot=$(slot_try gate "$slots" $$ "$label"); then break; fi
+    if (($(date +%s) >= deadline)); then
+      echo "gate-slot: no gate slot within ${wait_s}s ($(slot_busy gate "$slots")/$slots gates, $(slot_busy heavy 1) heavy build busy)" >&2
+      exit 75
+    fi
+    [[ "$said" == yes ]] || { echo "gate-slot: waiting ($(slot_busy gate "$slots")/$slots gates busy, $(slot_busy heavy 1) heavy build)" >&2; said=yes; }
+    slot_sleep
+  done
+  trap 'slot_release "$slot" $$' EXIT
+  export GATE_SLOT_KIND=gate ORCHESTRATE_SLOT_HELD="$slot" ORCHESTRATE_SLOT_HOLDER=$$
+fi
 build_dirs_apply "$@"
 rc=0
 if [[ -n "$env_file" ]]; then
