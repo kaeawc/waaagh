@@ -7,7 +7,8 @@
 #   ~/.android, the Android SDK, system dirs, $WAAAGH_PROTECTED_PATHS) or on an ancestor of one;
 #   pkill, killall, xargs kill, kill fed by pgrep/pidof/lsof/ps; adb kill-server, adb emu kill
 #   without -s; quitting, killing or opening Simulator.app; simctl shutdown/erase/delete all.
-# Also denied in a lane (cwd in a linked git worktree, or $WAAAGH_LANE_ROOT set): rm -r targets
+# Also denied in a lane (cwd in a linked git worktree, or $WAAAGH_LANE_ROOT set): gradle --stop
+#   (it stops every lane's daemons), rm -r targets
 #   outside the lane root and temp dirs (or the lane root itself), rm -r targets built from a
 #   variable the hook cannot expand, and shell writes (>, >>, tee, cp, mv, sed -i, dd of=, ...)
 #   that resolve outside the lane root, temp dirs, the state dir and $WAAAGH_LANE_ALLOW (temp dirs:
@@ -690,6 +691,11 @@ analyze_simple() {
       # move the cwd, so a quiet kill may follow it.
       if [[ $filered == no && $i == 0 && "${args[0]}" == "$c" && -z "$cmd_subs" && $cursub == 0 && $depth == 0 &&
         "$term" =~ ^(\;|nl|\&\&|\|\||\||end)$ ]]; then inert=yes; fi ;;
+    gradle | gradlew)
+      # --stop stops every compatible daemon on the host, other lanes' running builds included (#318).
+      if [[ -n "$lane" && " ${a[*]:-} " == *" --stop "* ]]; then
+        lane_deny "$c --stop stops every lane's Gradle daemons: let an idle daemon time out"
+      fi ;;
     pkill | killall)
       deny "$c kills by name or pattern: kill only PIDs you recorded at start"
       [[ "$c" != killall ]] || { low=$(tr '[:upper:]' '[:lower:]' <<<"${a[*]:-}"); [[ "$low" != *simulator* ]] || deny "never quit Simulator.app: it shuts down every booted simulator"; } ;;

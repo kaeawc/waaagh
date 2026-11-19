@@ -113,6 +113,17 @@ asked() {
   decide "adb -s emulator-5556 emu kill"; allowed
 }
 
+@test "gradle --stop stops every lane's daemons: denied in a lane, asked in the owner's worktree" {
+  decide "./gradlew --stop"; denied "stops every lane's Gradle daemons"
+  decide "cd android && gradle --stop"; denied "stops every lane's Gradle daemons"
+  decide "./gradlew assembleDebug --no-daemon"; allowed
+  decide "./gradlew --status"; allowed
+  decide "echo ./gradlew --stop"; allowed
+  decide "./gradlew --stop" "$MAIN"; allowed
+  git -C "$MAIN" worktree add -q "$T/owner" -b owner
+  decide "./gradlew --stop" "$T/owner"; asked "approve only if you are the owner"
+}
+
 @test "in a lane, shell writes outside the worktree are denied" {
   decide "echo x > $MAIN/README.md"; denied "redirect $MAIN/README.md: writes outside the lane worktree"
   decide "printf x >> ../main/f"; denied "writes outside"

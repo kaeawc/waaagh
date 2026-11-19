@@ -65,11 +65,16 @@ teardown() {
 
 @test "Gradle and Xcode commands are routed to the heavy slot, with capped workers" {
   run gate -- bash -c 'echo "$GATE_SLOT_KIND|$GRADLE_OPTS"' ./gradlew
-  [ "$output" = "heavy|-Dorg.gradle.workers.max=2" ]
+  [ "$output" = "heavy|-Dorg.gradle.workers.max=2 -Dorg.gradle.daemon=false" ]
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   printf '#!/bin/sh\necho "$GATE_SLOT_KIND $GRADLE_OPTS"\n' >"$BATS_TEST_TMPDIR/bin/xcodebuild"; chmod +x "$BATS_TEST_TMPDIR/bin/xcodebuild"
   HEAVY_BUILD_WORKERS=4 GRADLE_OPTS=-Xmx2g PATH="$BATS_TEST_TMPDIR/bin:$PATH" run gate -- xcodebuild test
-  [ "$output" = "heavy -Xmx2g -Dorg.gradle.workers.max=4" ]
+  [ "$output" = "heavy -Xmx2g -Dorg.gradle.workers.max=4 -Dorg.gradle.daemon=false" ]
+  # No long-lived Gradle daemon (#318), unless the caller chose otherwise.
+  HEAVY_BUILD_GRADLE_DAEMON=1 run gate -- bash -c 'echo "$GRADLE_OPTS"' ./gradlew
+  [ "$output" = "-Dorg.gradle.workers.max=2" ]
+  GRADLE_OPTS=-Dorg.gradle.daemon=true run gate -- bash -c 'echo "$GRADLE_OPTS"' ./gradlew
+  [ "$output" = "-Dorg.gradle.daemon=true -Dorg.gradle.workers.max=2" ]
   run gate -- bash -c 'echo "$GATE_SLOT_KIND"'
   [ "$output" = gate ]
 }

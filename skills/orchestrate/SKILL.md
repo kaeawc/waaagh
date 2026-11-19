@@ -512,6 +512,10 @@ their wall caps, and lanes re-run them, which makes it worse.
 - **One build per commit for verification lanes.** Device and verification lanes on the same
   commit build through `"$SCRIPTS/shared-build.sh" --class device` (or `verify`): the first builds,
   the rest reuse its artifacts. Stagger device boots (`skills/orchestrate/host-load.md`).
+- **No shared Gradle daemon.** The heavy slot runs Gradle with `org.gradle.daemon=false`: a daemon
+  started in one lane's sandbox, or on a JDK since upgraded away, breaks every later build that
+  reconnects to it. Never `./gradlew --stop`; it stops other lanes' builds
+  (`skills/orchestrate/host-load.md`).
 - Run the changed-files prepush check once per slice, not once per commit.
 - **Finished worktrees** go through `"$SCRIPTS/wt-cleanup.sh"` (dry run; `--apply` to remove): only
   clean, idle, pushed, unlocked, unprotected worktrees nobody is working in, via `git worktree
