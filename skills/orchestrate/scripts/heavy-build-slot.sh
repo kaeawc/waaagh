@@ -14,6 +14,10 @@
 # The build gets lane-private output as every gate does (#213, _build_dirs.sh): Xcode derived data
 # (-derivedDataPath), Gradle's --project-cache-dir, TMPDIR and XDG_CACHE_HOME under
 # ORCHESTRATE_LANE_BUILD_DIR, from the build-dirs table, before --env-file is sourced.
+# Gradle runs without a long-lived daemon (#318): -Dorg.gradle.daemon=false is added to GRADLE_OPTS
+# unless GRADLE_OPTS already sets org.gradle.daemon or HEAVY_BUILD_GRADLE_DAEMON=1. A daemon outlives
+# the command that started it and keeps that command's sandbox and JDK path; every later build from
+# any lane reconnects to it.
 # Exit: CMD's exit code | 75 not started within --wait | 2 usage
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -64,6 +68,9 @@ else
   export ORCHESTRATE_SLOT_HELD="$slot" ORCHESTRATE_SLOT_HOLDER=$$
 fi
 build_dirs_apply "$@"
+if [[ "${HEAVY_BUILD_GRADLE_DAEMON:-0}" != 1 && "${GRADLE_OPTS:-}" != *org.gradle.daemon=* ]]; then
+  export GRADLE_OPTS="${GRADLE_OPTS:+$GRADLE_OPTS }-Dorg.gradle.daemon=false"
+fi
 rc=0
 if [[ -n "$env_file" && -f "$env_file" ]]; then
   # shellcheck disable=SC2016  # expanded by the inner bash

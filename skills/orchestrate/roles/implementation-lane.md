@@ -35,7 +35,10 @@ fully specified work and on Opus for judgment work; the orchestrator chose the m
    typecheck and lint gates. Every gate runs through `{{SCRIPTS}}/gate-slot.sh --` so the host is
    not overloaded; exit 75 means no slot came free: report it, do not loop. The gate gives your
    build a lane-private output dir (`$ORCHESTRATE_LANE_BUILD_DIR`: TMPDIR, derived data, Gradle
-   project cache). Never point a build at a shared path such as `/tmp/DerivedData`.
+   project cache) and runs Gradle without a daemon. Never point a build at a shared path such as
+   `/tmp/DerivedData`, and never run `./gradlew --stop` (it stops every lane's builds). A Gradle
+   build that fails in seconds with "problem occurred starting process" hit a stale daemon: re-run
+   it once through the gate before reading your code.
 
 Run every gate inline and wait for it; never background one. Record the PIDs of every process you
 start (suites, servers) and kill exactly those before you report. Commit and push nothing: the

@@ -17,6 +17,7 @@ ownership (`scripts/device-lock.sh`, SKILL.md "Isolation and ownership").
    could be empty. Expand and echo the path first, then delete that literal path.
 3. **Kill only PIDs you recorded when starting the process.** No `pkill`, `killall`, `xargs kill`
    or `kill $(pgrep …)`; no `adb kill-server`, and `adb emu kill` only with `-s <your serial>`.
+   No `./gradlew --stop`: it stops every lane's Gradle daemons, running builds included.
 4. **Never open or quit Simulator.app.** Use `xcrun simctl` on your own device only, never on
    `all`.
 5. **Enter the worktree (`EnterWorktree`) before editing.** Never write files with shell
@@ -49,6 +50,7 @@ command (quotes, comments and heredoc bodies are data; `bash -c`, `eval`, `$(…
 | `pkill`, `killall`, `xargs kill`, `kill` fed by `pgrep`/`pidof`/`lsof`/`ps`, `kill -1` | deny | deny |
 | quitting, killing or opening Simulator.app; `simctl shutdown/erase/delete all` | deny | deny |
 | `adb kill-server`; `adb emu kill` without `-s` | deny | deny |
+| `gradle --stop`, `./gradlew --stop` (every compatible daemon on the host) | allow | deny |
 | `>`, `>>`, `tee`, `cp`, `mv`, `sed -i`, `perl -i`, `dd of=` writing outside the worktree, temp dirs and the state dir | allow | deny |
 | a destructive command that is backgrounded (`&`) or silenced (`>/dev/null`) | ask | ask |
 | a silenced stop of one named device: `adb -s SERIAL emu kill`, `simctl shutdown UDID` (not `all`, not `booted`); it loses nothing, and silence hides only "already stopped" or "no such device" | allow | allow |

@@ -84,6 +84,28 @@ and costs a whole lane run to diagnose. So this is not left to each lane's judgm
   unless a process is working inside it. Only directories under the build root that have a
   `.worktree` marker naming a missing path are touched.
 
+## No shared Gradle daemon
+
+Android builds on a host with several lanes once began failing in about 3 seconds with `A problem
+occurred starting process 'command .../bin/jlink'` (another lane saw `javap`). The tool ran fine by
+hand, and the same build had passed an hour earlier. A Gradle daemon outlives the command that
+started it and is reused by every later compatible build on the host, from any lane. This one had
+been started inside a lane's sandboxed shell, or on a Homebrew JDK that a `brew upgrade` then
+removed, so every build that reconnected to it inherited a broken process environment.
+
+- **`heavy-build-slot.sh` adds `-Dorg.gradle.daemon=false` to `GRADLE_OPTS`**, so a build through
+  the gate wrappers starts no daemon that outlives it. `HEAVY_BUILD_GRADLE_DAEMON=1`, or a
+  `GRADLE_OPTS` that already sets `org.gradle.daemon`, keeps the caller's choice. One heavy build
+  runs at a time, so a warm daemon would save little.
+- **A Gradle run outside the wrappers passes `--no-daemon`**, and points `JAVA_HOME` or the
+  toolchain at a JDK path that survives upgrades (not a versioned Homebrew Cellar path).
+- **A build that fails in seconds with "problem occurred starting process" for a JDK tool** is a
+  stale daemon, not the change: re-run it once through the gate (or with `--no-daemon`) before
+  reading the code.
+- **Never stop daemons to fix it.** `./gradlew --stop` stops every compatible daemon on the host,
+  other lanes' running builds included; the lane-safety hook refuses it in a lane. An idle daemon
+  times out by itself.
+
 ## One build per commit for verification lanes
 
 A manual-test round once started four device lanes on the same main commit. Each built its own
