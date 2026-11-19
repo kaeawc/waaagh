@@ -8,6 +8,7 @@ skills/orchestrate/scripts/_slots.sh	99
 skills/orchestrate/scripts/bench.sh	99
 skills/orchestrate/scripts/branch-idle.sh	99
 skills/orchestrate/scripts/campaign.sh	94
+skills/orchestrate/scripts/ci-backlog.sh	85
 skills/orchestrate/scripts/claim-check.sh	95
 skills/orchestrate/scripts/cloud-dispatch.sh	96
 skills/orchestrate/scripts/counters.sh	91
