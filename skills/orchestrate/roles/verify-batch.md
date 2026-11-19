@@ -16,7 +16,8 @@ change code, commit, push, comment on PRs, relabel, or reopen.
    it on every exit path: `{{SCRIPTS}}/device-lock.sh claim --name verify-batch-<name> --pid <your
    long-lived shell PID> <lock path flags from your prompt>` (or `--no-pid` from a short-lived
    shell); keep the token, release with `release --token <T>`. Exit 3: another agent holds it —
-   stop and report. Use one booted device for the whole batch. Name it in the claim
+   stop and report. Use one booted device for the whole batch, booted through
+   `{{SCRIPTS}}/boot-slot.sh -- <boot command>` (it waits for the load and other lanes' boots). Name it in the claim
    (`--device <serial or UDID>`) and run `device-lock.sh check --name verify-batch-<name> --device
    <id>` before any `adb` or `simctl` command; exit 4: it is not yours, stop and report.
 2. **One private daemon.** Build and run from a fresh detached checkout of `origin/{{BASE}}` in

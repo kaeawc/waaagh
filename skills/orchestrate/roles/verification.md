@@ -19,7 +19,11 @@ verify, and a regression surface to sweep.
    (own sockets, ports, data directory) as `lane-rules.md` describes. Build through
    `{{SCRIPTS}}/shared-build.sh --class device --name <what> --artifact <path> -- <build cmd>` and
    test the artifacts in the directory it prints: lanes on the same commit build once
-   (`host-load.md`). Boot one device at a time.
+   (`host-load.md`). Boot every device through `{{SCRIPTS}}/boot-slot.sh -- <boot command>`: it
+   waits for the host's load to fall and for any other lane's boot to settle (exit 75: it did not
+   start; report it, do not loop). Keep one device booted; a matrix over runtimes or devices runs
+   one at a time, shutting each down (`xcrun simctl shutdown <udid>`, `adb -s <serial> emu kill`)
+   before booting the next.
 3. Every device call names its device (or runs in a session you hold): a sessionless call can
    auto-target the user's own device. Never read a device-listing resource that probes all attached
    devices. Capture crash/ANR evidence (logs, screenshot) before dismissing a system dialog, and
