@@ -24,7 +24,9 @@ ownership (`scripts/device-lock.sh`, SKILL.md "Isolation and ownership").
    blocks an edit, you are in the wrong directory: fix that, do not route around it.
 6. **Run destructive commands in the foreground with their output visible.** No `& true`, no
    `>/dev/null 2>&1` on `rm`, `kill`, `simctl delete`, `avdmanager delete` or `git worktree
-   remove`: a backgrounded, silenced deletion cannot be caught in time.
+   remove`: a backgrounded, silenced deletion cannot be caught in time. One form may be quiet:
+   `kill $(cat <pidfile>) 2>/dev/null` (stderr only) for a PID you recorded in a file, where the
+   silence hides only "no such process". Run it first in its command (after a `cd` at most).
 7. **Never change the orchestrator's checkout (`{{FORBIDDEN}}`).** A lane subagent starts in the
    orchestrator's working directory. You may read there; never edit, check out, pull, commit,
    stash or build there. Your first write is in your own worktree.
@@ -46,6 +48,9 @@ command (quotes, comments and heredoc bodies are data; `bash -c`, `eval`, `$(…
 | `adb kill-server`; `adb emu kill` without `-s` | deny | deny |
 | `>`, `>>`, `tee`, `cp`, `mv`, `sed -i`, `perl -i`, `dd of=` writing outside the worktree, temp dirs and the state dir | allow | deny |
 | a destructive command that is backgrounded (`&`) or silenced (`>/dev/null`) | ask | ask |
+| `kill $(cat PIDFILE) 2>/dev/null` (also `$(<PIDFILE)`, backticks; every PID from such a substitution) where the hook has read PIDFILE and it holds only PIDs above 1 | allow | allow |
+| the same with a missing, empty or malformed PIDFILE (a mistyped path): the reason names the path it resolved to | ask | ask |
+| the same where the hook cannot be sure it read the file the shell will read: anything but resolved `cd DIR`s (or other quiet kills) before it in the command, a wrapper (`sudo`, `env`, `timeout`, `bash -c`, `eval`), a pipe, or any other redirection | ask | ask |
 | shell writes, `rm -r`, mutating `git` (`checkout`, `switch`, `reset`, `pull`, `merge`, `rebase`, `commit`, `stash`, `restore`, `apply`, `am`, `cherry-pick`, `revert`, `clean`, `add`, `rm`, `mv`, `worktree remove/move`) or an `Edit`/`Write`/`MultiEdit`/`NotebookEdit` call under a forbidden root, outside the caller's own nested worktree | allow (subagents: deny) | deny |
 
 A session is "in a lane" when its working directory is inside a linked git worktree, or when
