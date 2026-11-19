@@ -185,6 +185,10 @@ When a PR changes what an input means (units, coordinate space, encoding, defaul
 must carry a written-out "Callers of changed functions" section listing every caller, internal
 ones included, and whether each still passes the right meaning; a focused brief never waives it
 (#211). Where a repo uses Claude Code Review, put the same rule in the repo's review instructions.
+A reviewer reads refs with `git show` and `git diff` and never checks out in an existing worktree;
+when one returns, confirm your own checkout is still on its branch (`git rev-parse --abbrev-ref
+HEAD` prints the branch; `HEAD` means it was detached), since an edit or merge there would land on
+the wrong base (#317). With your checkout in `lane-forbidden`, the hook refuses the checkout.
 Record every verdict the moment it comes back: `"$SCRIPTS/review-ledger.sh" record --pr N --verdict
 ship|fix-first|rethink --head <sha> --findings <file>`: a ship whose findings lack the
 `input-meaning:` line, or the callers section when it says `changed`, is recorded `incomplete`
