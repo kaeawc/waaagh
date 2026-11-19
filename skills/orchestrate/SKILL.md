@@ -228,6 +228,11 @@ Act on it or surface the disagreement to the user.
 - Label results `verified-local` or `verified-ci`. While CI is backlogged, "fixed" means
   local-only until a post-merge run on the default branch completes. A run cancelled by a
   concurrency group is a cancellation, not a failure.
+- A passing sub-package or sub-project build does not prove the aggregate build. Where a root
+  manifest and per-package manifests compile the same sources (a root `Package.swift` beside
+  sub-package ones), a lane that touches them builds both before it says the gates pass, or the
+  repo's pre-push gate gains the root build: a lane once passed the sub-package's full `swift test`
+  and CI's required root build failed with `no such module` (#316).
 - Lane reports are claims. Read the diff and spot-check the quoted verification against the tree.
   Before relaying "merged", "closed", "verified" or "no device check needed" to the owner, confirm
   it with one read of the source of truth (`scripts/claim-check.sh`; `regression-gates.md`).

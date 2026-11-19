@@ -44,6 +44,12 @@ orchestrator holds that authority.
 ## Before you report
 - `git -C <worktree> status` and `git -C <worktree> diff --stat`: only the intended files. An
   empty diff is never `complete`.
+- Build every manifest that compiles a file you touched, not only the nearest one (#316). A repo
+  can compose the same sources twice: a root `Package.swift` and a sub-package's own, a root build
+  and a module's. List them (`git -C <worktree> ls-files 'Package.swift' '*/Package.swift'`) and
+  build each whose directory holds a touched file (`swift build --package-path <dir>`, plus the
+  sub-package's `swift test`). A module one manifest defines may not exist in the other, so never
+  `@testable import` (or import a test-only module) from a non-test source.
 - Your own test run is a claim, not evidence: record it with `{{SCRIPTS}}/validate.sh run --dir
   <worktree> --cmd "<command>" --runner implementation-lane` (no `--independent`; the
   orchestrator's validator writes the independent receipt).
