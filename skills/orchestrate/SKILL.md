@@ -553,6 +553,14 @@ that did not succeed; logged to `reruns.log`), and `MAIN_RED` stays until the re
 investigate or unclassified run, or a rerun that failed again, is named as `auto-rerun=held` and
 goes to a fix lane: a known flake that fails twice is a real red (#270).
 
+**Sizing the CI backlog.** Never count a `status=queued` run listing: it returns ghosts, runs
+created weeks ago that completed long since (70 once, back seven weeks), while a run whose own
+status is still queued can already have jobs on runners. `"$SCRIPTS/ci-backlog.sh"` reads the runs
+created inside a window (`--window`, default 360 minutes) and counts their queued and in-progress
+jobs by runner label; `ghost=<n>` names the listed runs with nothing left to run. Anything that
+cancels superseded runs filters by created time the same way and treats "run is completed" (HTTP
+409) as done, never as a failure to retry (#315).
+
 **Per-test timing budgets.** A test that breaches its own time budget (for example a 100 ms cap)
 on the default branch, and still breaches it when re-run alone, is a real red, not a flake: the
 classifier's INVESTIGATE is right. Handle it like any red main: `main-health.sh` holds merges, the
