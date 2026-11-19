@@ -14,6 +14,7 @@ setup() {
   git -C "$T/main" commit -q --allow-empty -m init
   git -C "$T/main" worktree add -q "$T/lane" -b lane
   LANE="$T/lane" MAIN="$T/main"
+  register_lane "$LANE"
 }
 
 # decide CMD [CWD]: run the hook on a Bash payload; $output is the decision JSON (empty = allow).
@@ -129,6 +130,73 @@ EOF"; denied "writes outside"
   decide "echo x > $T/state/note"; allowed
   decide "make 2>&1 | tee build.log"; allowed
   decide "echo x > $MAIN/f" "$MAIN"; allowed
+}
+
+# decide_as AGENT CMD [CWD]: decide, with the payload's agent_id set to AGENT (a subagent's call).
+decide_as() {
+  local payload
+  payload=$(jq -cn --arg a "$1" --arg c "$2" --arg d "${3:-$LANE}" \
+    '{tool_name: "Bash", tool_input: {command: $c}, cwd: $d, agent_id: $a}')
+  run "$SCRIPTS/lane-safety.sh" <<<"$payload"
+  [ "$status" -eq 0 ]
+}
+
+@test "an unregistered worktree is the owner's session: lane rules ask; subagents and known lanes deny" {
+  git -C "$MAIN" worktree add -q "$T/owner" -b owner
+  OWN="$T/owner"
+  decide "rm -rf $HOME/.claude/skills/old" "$OWN"; asked "no registered lane: approve only if you are the owner"
+  decide "echo x > $HOME/.claude/notes.md" "$OWN"; asked "writes outside the lane worktree"
+  decide 'rm -rf "$X"' "$OWN"; asked "path built from a variable"
+  decide "rm -rf build; echo x > f.txt" "$OWN"; allowed
+  # Protected roots and pattern kills stay denied for the owner too.
+  decide "rm -rf $HOME/Library/Android/sdk" "$OWN"; denied "protected path"
+  decide "pkill -f xcodebuild" "$OWN"; denied
+  # A subagent's call, WAAAGH_LANE_ROOT and an active lanes.tsv row each make it a known lane.
+  decide_as agent-1 "rm -rf $HOME/.claude/skills/old" "$OWN"; denied "outside the lane worktree"
+  WAAAGH_LANE_ROOT="$OWN" decide "echo x > $HOME/.claude/notes.md" "$OWN"; denied "writes outside"
+  decide "echo x > $MAIN/f"; denied "writes outside"
+  # A lane whose row is no longer active is not a known lane.
+  printf '%s\twork/2-y\t2\tsrc/\ta2\tmerged\n' "$OWN" >>"$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"
+  decide "echo x > $HOME/.claude/notes.md" "$OWN"; asked "no registered lane"
+  register_lane "$OWN"
+  decide "echo x > $HOME/.claude/notes.md" "$OWN"; denied "writes outside"
+}
+
+@test "lanes.tsv rows: lane-claim's own rows, live statuses, CRLF, relative, ~, nested and top-level files" {
+  git -C "$MAIN" worktree add -q "$T/owner" -b owner
+  OWN="$T/owner" W="echo x > $HOME/.claude/notes.md" L="$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"
+  rm -f "$L"
+  # Relative rows resolve against the main checkout, where lane-claim.sh add runs.
+  printf '.claude/x\tb\t1\tf\ta\tactive\n' >"$L"; decide "$W" "$OWN"; asked "no registered lane"
+  printf '%s\tb\t1\tf\ta\tactive\n' "../owner" >"$L"; decide "$W" "$OWN"; denied "writes outside"
+  # Any status lane-claim.sh still counts live is a known lane; only the ended ones are not.
+  for st in pr-open running active; do
+    printf '%s\tb\t1\tf\ta\t%s\n' "$OWN" "$st" >"$L"; decide "$W" "$OWN"; denied "writes outside"
+  done
+  for st in done merged closed abandoned; do
+    printf '%s\tb\t1\tf\ta\t%s\n' "$OWN" "$st" >"$L"; decide "$W" "$OWN"; asked "no registered lane"
+  done
+  # Hand-edited rows: CRLF, trailing blanks, a trailing slash, a comment line.
+  printf '# lanes\n%s\tb\t1\tf\ta\tactive\r\n' "$OWN" >"$L"; decide "$W" "$OWN"; denied "writes outside"
+  printf '%s/\tb\t1\tf\ta\tactive  \n' "$OWN" >"$L"; decide "$W" "$OWN"; denied "writes outside"
+  printf '# %s\tb\t1\tf\ta\tactive\n' "$OWN" >"$L"; decide "$W" "$OWN"; asked "no registered lane"
+  # A ~ row, and a row for the worktree's parent or a directory inside it, err toward deny.
+  mkdir -p "$HOME/wt"; git -C "$MAIN" worktree add -q "$HOME/wt/h" -b h
+  printf '~/wt/h\tb\t1\tf\ta\tactive\n' >"$L"; decide "$W" "$HOME/wt/h"; denied "writes outside"
+  printf '%s/sub\tb\t1\tf\ta\tactive\n' "$OWN" >"$L"; decide "$W" "$OWN"; denied "writes outside"
+  # The state root's own lanes.tsv counts too.
+  rm -f "$L"; printf '%s\tb\t1\tf\ta\tactive\n' "$OWN" >"$ORCHESTRATE_STATE_DIR/lanes.tsv"
+  decide "$W" "$OWN"; denied "writes outside"
+}
+
+@test "the owner's worktree session: deleting its own worktree and globs ask; forbidden roots stay denied" {
+  git -C "$MAIN" worktree add -q "$T/owner" -b owner
+  OWN="$T/owner"
+  decide "rm -rf $OWN" "$OWN"; asked "that is the lane worktree itself"
+  decide "rm -rf $HOME/.claude/old*" "$OWN"; asked "outside the lane worktree"
+  printf '%s\n' "$MAIN" >"$ORCHESTRATE_STATE_DIR/lane-forbidden"
+  decide "echo x > $MAIN/README.md" "$OWN"; denied "orchestrator's checkout"
+  decide "rm -rf $MAIN/src" "$OWN"; denied "orchestrator's checkout"
 }
 
 @test "destructive commands that are backgrounded or silenced are flagged for review" {

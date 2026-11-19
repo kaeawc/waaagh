@@ -12,6 +12,8 @@
 #   variable the hook cannot expand, and shell writes (>, >>, tee, cp, mv, sed -i, dd of=, ...)
 #   that resolve outside the lane root, temp dirs, the state dir and $WAAAGH_LANE_ALLOW (temp dirs:
 #   $WAAAGH_LANE_TEMP, default /tmp:/private/tmp:/var/folders:$TMPDIR; lists are colon-separated).
+#   Denied only in a known lane (payload agent_id, $WAAAGH_LANE_ROOT, or an active lanes.tsv row
+#   under the state root); in any other linked worktree, the owner's own session, they ask.
 # Forbidden roots (#218): the orchestrator's own checkout, from $WAAAGH_LANE_FORBID (colon list) and
 #   <state root>/lane-forbidden (one absolute path per line; # comments; state root:
 #   $ORCHESTRATE_STATE_DIR, default ~/.claude/orchestrate). They bind a subagent's calls (payload
@@ -146,6 +148,44 @@ if [[ -n "$lane" ]]; then
   fi
 fi
 in_allowed() { local a; for a in "${allowed[@]}"; do inside "$1" "$a" && return 0; done; return 1; }
+# A known lane gets lane-mode denials: a subagent's call (payload agent_id), $WAAAGH_LANE_ROOT, or
+# a worktree with a live row in a lanes.tsv under the state root (lane-claim.sh add; live = any
+# status but done, merged, closed or abandoned, as lane-claim.sh counts it). A row matches when its
+# worktree holds this lane or sits inside it (either way errs toward deny); a relative row resolves
+# against the repository's main checkout, where lane-claim.sh runs. Any other linked worktree is the
+# owner's own session (the desktop app runs every session in one): there the same rules ask instead,
+# so the owner approves or declines in the permission prompt.
+known_lane=no
+if [[ -n "$lane" ]]; then
+  if [[ -n "$agent" || -n "${WAAAGH_LANE_ROOT:-}" ]]; then known_lane=yes
+  else
+    lane_p=$(cd "$lane" 2>/dev/null && pwd -P || printf '%s' "$lane")
+    main_co=""
+    [[ -z "${g2:-}" ]] || main_co=$(dirname "$g2")
+    for f in "$state_root/lanes.tsv" "$state_root"/*/lanes.tsv; do
+      [[ -r "$f" ]] || continue
+      while IFS= read -r row || [[ -n "$row" ]]; do
+        row=${row%$'\r'}
+        [[ -n "$row" && "$row" != \#* && "$row" == *$'\t'* ]] || continue
+        wt=${row%%$'\t'*} st=${row##*$'\t'}
+        st=${st%"${st##*[![:space:]]}"}
+        case "$st" in done | merged | closed | abandoned) continue ;; esac
+        case "$wt" in
+          /*) ;;
+          "~" | \~/*) wt="$home${wt#\~}" ;;
+          *) [[ -n "$main_co" ]] || continue; wt="$main_co/$wt" ;;
+        esac
+        wt=$(norm "$wt")
+        wt_p=$(cd "$wt" 2>/dev/null && pwd -P || printf '%s' "$wt")
+        for v in "$wt" "$wt_p"; do
+          if inside "$lane" "$v" || inside "$lane_p" "$v" || inside "$v" "$lane" || inside "$v" "$lane_p"; then
+            known_lane=yes; break 3
+          fi
+        done
+      done <"$f"
+    done
+  fi
+fi
 
 # Forbidden roots (#218), each also by its physical path (/tmp vs /private/tmp). A lane's own
 # worktree nested below one (.claude/worktrees/<lane>) stays writable: own.
@@ -181,12 +221,17 @@ forbid_why() { printf '%s' "$1 is in the orchestrator's checkout $2 ($state_root
 denies="" asks=""
 deny() { denies="${denies:+$denies; }$1"; }
 ask() { asks="${asks:+$asks; }$1"; }
+# lane_deny MSG: a lane-mode rule; denied in a known lane, asked in the owner's own worktree session.
+lane_deny() {
+  if [[ $known_lane == yes ]]; then deny "$1"
+  else ask "$1 (this worktree is no registered lane: approve only if you are the owner)"; fi
+}
 
 # check_delete WORD BASE WHAT: a recursive deletion target.
 check_delete() {
   local w=$1 base=$2 what=$3 t glob=no prefix="" r
   if ! t=$(expand "$w" "$base"); then
-    [[ -z "$lane" ]] || deny "$what $w: path built from a variable; expand and echo the literal path first"
+    [[ -z "$lane" ]] || lane_deny "$what $w: path built from a variable; expand and echo the literal path first"
     return 0
   fi
   # A glob is judged by the directory it lists (t) and the literal start of the globbed name
@@ -208,13 +253,13 @@ check_delete() {
     if [[ -n "$r" ]] && reaches "$t" "$r" "$glob" "$prefix"; then deny "$what $w: $(forbid_why "$t" "$r")"; return 0; fi
   done
   [[ -n "$lane" ]] || return 0
-  if [[ $glob == no && "$t" == "$lane" ]]; then deny "$what $w: that is the lane worktree itself; use git worktree remove"; return 0; fi
+  if [[ $glob == no && "$t" == "$lane" ]]; then lane_deny "$what $w: that is the lane worktree itself; use git worktree remove"; return 0; fi
   if [[ $glob == no ]]; then
     local a ok=no
     for a in "${allowed[@]}"; do [[ "$t" == "$a"/* ]] && ok=yes; done
-    [[ $ok == yes ]] || deny "$what $w: outside the lane worktree $lane and temp dirs"
+    [[ $ok == yes ]] || lane_deny "$what $w: outside the lane worktree $lane and temp dirs"
   else
-    in_allowed "$t" || deny "$what $w: outside the lane worktree $lane and temp dirs"
+    in_allowed "$t" || lane_deny "$what $w: outside the lane worktree $lane and temp dirs"
   fi
 }
 # check_write WORD BASE WHAT: a file a shell command writes (lane mode only).
@@ -225,7 +270,7 @@ check_write() {
   t=$(expand "$w" "$base") || return 0
   if f=$(forbidden "$t"); then deny "$what $w: $(forbid_why "$t" "$f")"; return 0; fi
   [[ -n "$lane" ]] || return 0
-  in_allowed "$t" || deny "$what $w: writes outside the lane worktree $lane; enter the worktree (EnterWorktree) and use the edit tools"
+  in_allowed "$t" || lane_deny "$what $w: writes outside the lane worktree $lane; enter the worktree (EnterWorktree) and use the edit tools"
 }
 # check_git BASE ARG...: a mutating git command whose work tree (BASE, -C, --work-tree) lies under a
 # bound forbidden root. Read-only commands, fetch and worktree add stay allowed there.

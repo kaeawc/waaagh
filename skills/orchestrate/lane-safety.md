@@ -49,7 +49,13 @@ command (quotes, comments and heredoc bodies are data; `bash -c`, `eval`, `$(…
 | shell writes, `rm -r`, mutating `git` (`checkout`, `switch`, `reset`, `pull`, `merge`, `rebase`, `commit`, `stash`, `restore`, `apply`, `am`, `cherry-pick`, `revert`, `clean`, `add`, `rm`, `mv`, `worktree remove/move`) or an `Edit`/`Write`/`MultiEdit`/`NotebookEdit` call under a forbidden root, outside the caller's own nested worktree | allow (subagents: deny) | deny |
 
 A session is "in a lane" when its working directory is inside a linked git worktree, or when
-`WAAAGH_LANE_ROOT` names the lane root. Temp dirs are `/tmp`, `/private/tmp`, `/var/folders` and
+`WAAAGH_LANE_ROOT` names the lane root. The "In a lane" denials bind a **known lane**: a subagent's
+call (the payload carries `agent_id`), a session with `WAAAGH_LANE_ROOT` set, or a worktree with an
+`active` row in a `lanes.tsv` under the state root (`lane-claim.sh add`). Any other linked worktree
+is the owner's own session (the Claude desktop app runs every session in one), so the same rules
+**ask** there instead: the owner approves or declines in the permission prompt. Register every lane
+with `lane-claim.sh add` before it starts, or its out-of-worktree writes reach the owner as prompts
+rather than denials. Temp dirs are `/tmp`, `/private/tmp`, `/var/folders` and
 `$TMPDIR` (`WAAAGH_LANE_TEMP` overrides); `WAAAGH_LANE_ALLOW` adds roots (colon-separated).
 **Forbidden roots** (#218). Learned on auto-mobile (2026-11-11): a lane subagent inherited the
 orchestrator's cwd, its own git worktree, and edited four source files and moved HEAD there before
