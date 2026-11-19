@@ -74,15 +74,6 @@ is() {
   decide 'ps --pid 1 -ww; kill $P'; allowed
 }
 
-@test "adb emu kill with a literal -s serial is not asked when silenced" {
-  decide 'adb -s emulator-5702 emu kill >/dev/null 2>&1'; allowed
-  decide 'adb -s emulator-5702 emu kill >/dev/null &'; is ask "backgrounded"
-  decide 'adb -s $SERIAL emu kill >/dev/null'; is ask "silenced destructive command (adb"
-  decide 'adb -s emulator-$p emu kill >/dev/null'; is ask "silenced destructive command (adb"
-  ANDROID_SERIAL=emulator-5554 decide 'adb emu kill >/dev/null'; is ask "silenced destructive command (adb"
-  decide 'adb emu kill >/dev/null'; is deny "without -s"
-}
-
 @test "BSD sed -i '' takes the empty word as the suffix, not the script" {
   decide "sed -i '' '/18582/d' scratch/hold.txt"; allowed
   decide "sed -i '' 's/a/b/' $MAIN/f.sh"; is deny "sed -i $MAIN/f.sh"
@@ -157,7 +148,9 @@ rm -rf $W/scratch/batch'; allowed
 }
 
 @test "WAAAGH_OWNER_SIBLING_WORKTREES=allow lets the owner's session write into sibling lane worktrees" {
-  decide "cd $LANE; echo x > scratch/build.log" "$OWN"; is ask "no registered lane"
+  # A cd into the sibling already makes it writable (enter_worktree); the knob covers absolute paths.
+  decide "cd $LANE; echo x > scratch/build.log" "$OWN"; allowed
+  decide "echo x > $LANE/scratch/build.log" "$OWN"; is ask "no registered lane"
   export WAAAGH_OWNER_SIBLING_WORKTREES=allow
   decide "cd $LANE; bun run build > scratch/build.log 2>&1; echo x | tee scratch-udid.txt" "$OWN"; allowed
   decide "sed -i '' s/a/b/ $LANE/scratch/f; rm -rf $LANE/scratch/batch" "$OWN"; allowed

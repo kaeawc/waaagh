@@ -24,16 +24,21 @@
 #   except inside the caller's own lane worktree nested below it.
 # Asked (flagged for review): a destructive command that is backgrounded (&) or silenced
 #   (output to /dev/null), even when its path looks safe. Not asked: `kill $(cat PIDFILE)
-#   2>/dev/null` (stderr only; first in the command but for resolved `cd DIR`s; no wrapper) when
-#   the hook has read PIDFILE and it holds only PIDs above 1; a missing or malformed pidfile is
-#   asked, naming the path. Never a kill: signal 0 (kill -0, -s 0, -n 0) and kill -l. A kill whose
-#   PIDs are all literal numbers above 1 is neither asked when silenced nor "fed by a search"
-#   (ps -p/-q PID is a check, not a search); nor is a silenced `adb -s <literal serial> emu kill`.
+#   2>/dev/null` (stderr only; no wrapper; only resolved `cd DIR`s and read-only commands such as
+#   grep, tail or ls before it) when the hook has read PIDFILE and it holds only PIDs above 1 (a
+#   missing or malformed pidfile is asked, naming the path); a silenced kill whose PIDs are all
+#   literal numbers above 1; a silenced stop of one named device (`adb -s SERIAL emu kill`,
+#   `simctl shutdown UDID`), which loses nothing. Never a kill: signal 0 (kill -0, -s 0, -n 0)
+#   and kill -l. A literal-PID kill is not "fed by a search", and ps -p/-q PID is a check, not one.
+# A resolved `cd` into another linked worktree of the same repository makes that worktree
+#   writable too: a lane subagent starts in the orchestrator's working directory and reaches its
+#   own worktree by cd.
 # Quieter writes: ~/.claude/projects/<project>/memory is writable from every session; in the
 #   owner's session `cp .../android/local.properties <linked worktree>/android/` is allowed, and
 #   WAAAGH_OWNER_SIBLING_WORKTREES=allow (default ask) allows writes and rm -r below another linked
-#   worktree of the same repository. `rm -r "$VAR"` is judged by VAR's value when a straight-line
-#   top-level literal assignment (VAR=..., export VAR=...) set it and VAR appears nowhere else.
+#   worktree of the same repository without a cd into it. `rm -r "$VAR"` is judged by VAR's value
+#   when a straight-line top-level literal assignment (VAR=..., export VAR=...) set it and VAR
+#   appears nowhere else.
 # Output: nothing (allow; the normal permission flow continues) or one hookSpecificOutput JSON
 #   object with permissionDecision deny|ask and the reason. WAAAGH_LANE_SAFETY=off disables it.
 # Exit: 0 decided (or not a Bash or edit call); 1 cannot run (no jq, unreadable payload; non-blocking);
@@ -158,6 +163,22 @@ if [[ -n "$lane" ]]; then
   fi
 fi
 in_allowed() { local a; for a in "${allowed[@]}"; do inside "$1" "$a" && return 0; done; return 1; }
+# enter_worktree DIR: a resolved `cd` into another linked worktree of this repository makes that
+# worktree writable too. A lane subagent starts in the orchestrator's working directory (rule 7),
+# itself a linked worktree in the desktop app, and reaches its own worktree by cd: without this its
+# every shell write there is "outside the lane". The main checkout is no linked worktree, and a
+# forbidden root stays denied (check_write and check_delete test it first).
+enter_worktree() {
+  local d=$1 o t1 t2 top
+  [[ -n "$lane" && -n "${g2:-}" ]] || return 0
+  ! in_allowed "$d" || return 0
+  # `mkdir -p WT/scratch; cd WT/scratch`: the directory may not exist yet, so ask its nearest parent.
+  while [[ ! -d "$d" && "$d" == /*/* ]]; do d=${d%/*}; done
+  o=$(git -C "$d" rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel 2>/dev/null) || return 0
+  t1=$(sed -n 1p <<<"$o") t2=$(sed -n 2p <<<"$o") top=$(sed -n 3p <<<"$o")
+  [[ -n "$top" && "$t1" != "$t2" && "$t2" == "$g2" ]] || return 0
+  allowed+=("$(norm "$top")")
+}
 # A known lane gets lane-mode denials: a subagent's call (payload agent_id), $WAAAGH_LANE_ROOT, or
 # a worktree with a live row in a lanes.tsv under the state root (lane-claim.sh add; live = any
 # status but done, merged, closed or abandoned, as lane-claim.sh counts it). A row matches when its
@@ -395,7 +416,8 @@ check_git() {
 # One line per simple command: "<terminator>\036<tok>\037<tok>...\036<ids>". Operator tokens start
 # with \002. Command substitutions ($(...), `...`) leave "$(...)" in the word and are emitted as
 # their own commands after a "subid\036<id>\036" line; <ids> lists (comma-separated) the
-# substitutions in that command's words. Heredoc bodies and comments are skipped; a quoted newline
+# substitutions in that command's words. A "paren\036\036" line marks a ( or ) (subshell, function,
+# array, case pattern). Heredoc bodies and comments are skipped; a quoted newline
 # stays in its word as \035, so one command is always one line.
 tokenize() {
   awk -v US="$US" -v OP="$OP" -v NL=$'\035' '
@@ -452,7 +474,7 @@ tokenize() {
         emit("&"); continue
       }
       if (c == "|") { if (n == "|") { emit("||"); i++ } else { if (n == "&") i++; emit("|") } continue }
-      if (c == "(" || c == ")") { emit("sub"); continue }
+      if (c == "(" || c == ")") { emit("sub"); print "paren\036\036"; continue }
       if (c == "$" && n == "(") { i = grab(s, i + 2, ")"); word = word "$(...)"; have = 1; continue }
       if (c == "`") { i = grab(s, i + 1, "`"); word = word "$(...)"; have = 1; continue }
       if (c == ">" || c == "<") {
@@ -495,12 +517,15 @@ destructive=no
 analyze() {
   local text=$1 cur=$2 depth=${3:-0} line term rest toks
   local saw_kill=no saw_pidsrc=no cmd_subs="" cursub=0 quiet_kills=() subn=() subtoks=() q
-  # prefix_ok: every top-level command so far is a plain `cd DIR` the hook resolved or a quiet kill
-  # (inert), so nothing in this text can have changed a pidfile or the cwd behind the hook's back.
-  local prefix_ok=yes inert=no
-  # straight: every top-level command so far was a plain command ended by `;` or a newline, so a
-  # literal assignment now runs unconditionally in this shell (see subst_var). plain: set by
-  # analyze_simple for the command it judged.
+  # prefix_ok: every top-level command so far is inert (a plain `cd DIR` the hook resolved, a quiet
+  # kill, or a read-only command with no file redirection), so nothing in this text can have
+  # changed a pidfile or the cwd behind the hook's back. A cd counts only when the shell is sure to
+  # run it in this shell: not in a pipeline or after ||, after && only when a cd precedes it (a
+  # failed cd leaves no pidfile to find), and never near a parenthesis (a subshell's cd is undone).
+  local prefix_ok=yes inert=no prev_term="" prev_cd=no
+  # straight: every top-level command so far was plain and ended by `;` or a newline (the cumulative
+  # form of prev_term), so a literal assignment now runs unconditionally in this shell (see
+  # subst_var). plain: set by analyze_simple for the command it judged.
   local straight=no plain=yes t
   ((depth < 4)) || return 0
   if ((depth == 0)); then
@@ -513,16 +538,22 @@ analyze() {
     term=${line%%$'\036'*} rest=${line#*$'\036'}
     cmd_subs=${rest##*$'\036'} rest=${rest%$'\036'*}
     if [[ "$term" == subid ]]; then cursub=$rest; continue; fi
+    if [[ "$term" == paren ]]; then ((cursub > 0)) || prefix_ok=no; continue; fi
     IFS=$US read -r -a toks <<<"$rest"
     ((${#toks[@]})) || continue
     if ((cursub > 0)); then subn[cursub]=$((${subn[cursub]:-0} + 1)); subtoks[cursub]=$rest; fi
     inert=no
+    local is_cd=no
     if ((cursub == 0 && ${#toks[@]} == 2)) && [[ "${toks[0]}" == cd && "${toks[1]}" != -* && "$term" =~ ^(\;|nl|\&\&|end)$ ]] &&
-      expand "${toks[1]}" "$cur" >/dev/null; then inert=yes; fi
+      [[ "$prev_term" != "|" && "$prev_term" != "||" && ( "$prev_term" != "&&" || $prev_cd == yes ) ]] &&
+      expand "${toks[1]}" "$cur" >/dev/null; then inert=yes is_cd=yes; fi
     plain=yes
     analyze_simple "$term" "$cur" "$depth" "${toks[@]}"
     ((cursub > 0)) || [[ $inert == yes ]] || prefix_ok=no
-    if ((cursub == 0)) && [[ $plain == no || ! "$term" =~ ^(\;|nl|end)$ ]]; then straight=no; fi
+    if ((cursub == 0)); then
+      [[ $plain == yes && "$term" =~ ^(\;|nl|end)$ ]] || straight=no
+      prev_term=$term prev_cd=$is_cd
+    fi
   done < <(tokenize <<<"$text")
   for q in ${quiet_kills[@]+"${quiet_kills[@]}"}; do quiet_kill "${q%%$'\036'*}" "${q#*$'\036'}"; done
   if [[ $saw_kill == yes && $saw_pidsrc == yes ]]; then
@@ -537,8 +568,9 @@ analyze() {
 # naming a missing or malformed pidfile (a mistyped path is caught here, before the command runs).
 # analyze_simple only sends a kill here when the file the hook reads is the file the shell will
 # read: the kill is the command's first word at the top level (no sudo, env, bash -c or eval), its
-# one redirection is 2>/dev/null, it is not piped, and only resolved `cd DIR` commands or other
-# quiet kills precede it in the text (nothing that could write the pidfile or move the cwd).
+# one redirection is 2>/dev/null, it is not piped, and only resolved `cd DIR` commands, other quiet
+# kills and read-only commands precede it in the text (nothing that could write the pidfile or move
+# the cwd).
 quiet_kill() {
   local base=$1 ids=$2 id st f path why=""
   for id in ${ids//,/ }; do
@@ -578,7 +610,7 @@ record_vars() {
 
 analyze_simple() {
   local term=$1 base=$2 depth=$3; shift 3
-  local args=() t i via_xargs=no silenced=no nredir=0 only_err=no kill_quiet=no kill_literal=no
+  local args=() t i via_xargs=no silenced=no nredir=0 only_err=no kill_quiet=no kill_literal=no filered=no stop_named=no
   # split redirections from words
   while (($#)); do
     t=$1; shift
@@ -588,12 +620,12 @@ analyze_simple() {
       (($#)) && shift
       ((nredir += 1))
       case "$t" in
-        *'>&') [[ "$target" =~ ^[0-9-]+$ ]] || check_write "$target" "$base" "redirect" ;;
+        *'>&') [[ "$target" =~ ^[0-9-]+$ ]] || { filered=yes; check_write "$target" "$base" "redirect"; } ;;
         *'>' | *'>|')
           if [[ "$target" == /dev/null ]]; then
             silenced=yes
             [[ "$t" != '2>' ]] || only_err=yes
-          else check_write "$target" "$base" "redirect"; fi ;;
+          else filered=yes; check_write "$target" "$base" "redirect"; fi ;;
       esac
     else
       args+=("$t")
@@ -647,11 +679,17 @@ analyze_simple() {
       if ((n == 0)); then cur=$home; elif [[ "${a[0]}" != - ]]; then
         cur=$(expand "${a[0]}" "$base") || { cur=$base; plain=no; }
       else plain=no; fi
-      [[ -d "$cur" ]] || plain=no ;;
+      [[ -d "$cur" ]] || plain=no
+      enter_worktree "$cur" ;;
     export) ((i == 0)) && record_vars "$term" "$depth" $nredir "${a[@]:-}" ;;
     for | case | select | function | source | . | pushd | popd)
       plain=no
       [[ "$c" != source && "$c" != . ]] || { var_names=() var_vals=(); } ;;
+    grep | egrep | fgrep | head | tail | cut | cat | echo | printf | ls | wc | tr | sleep | date | pwd)
+      # Read-only with no file redirection, wrapper or substitution: it cannot write a pidfile or
+      # move the cwd, so a quiet kill may follow it.
+      if [[ $filered == no && $i == 0 && "${args[0]}" == "$c" && -z "$cmd_subs" && $cursub == 0 && $depth == 0 &&
+        "$term" =~ ^(\;|nl|\&\&|\|\||\||end)$ ]]; then inert=yes; fi ;;
     pkill | killall)
       deny "$c kills by name or pattern: kill only PIDs you recorded at start"
       [[ "$c" != killall ]] || { low=$(tr '[:upper:]' '[:lower:]' <<<"${a[*]:-}"); [[ "$low" != *simulator* ]] || deny "never quit Simulator.app: it shuts down every booted simulator"; } ;;
@@ -748,22 +786,23 @@ analyze_simple() {
       case "${s[0]:-}" in
         shutdown | erase | delete)
           destructive=yes
-          for t in "${s[@]:1}"; do [[ "$t" != all ]] || deny "simctl ${s[0]} all touches every simulator: name your own UDID"; done ;;
+          for t in "${s[@]:1}"; do [[ "$t" != all ]] || deny "simctl ${s[0]} all touches every simulator: name your own UDID"; done
+          # Shutting one named device down loses nothing; silence hides only "already shut down".
+          if [[ "${s[0]}" == shutdown && ${#s[@]} == 2 && "${s[1]}" != all && "${s[1]}" != booted && "${s[1]}" != -* ]]; then stop_named=yes; fi ;;
       esac ;;
     adb)
-      local hasdev=no litdev=no
+      local hasdev=no
       for ((j = 0; j < n; j++)); do
         [[ "${a[j]}" == -s || "${a[j]}" == -t ]] || continue
         hasdev=yes
-        # A literal serial names one emulator: silencing its emu kill hides only "device not found".
-        [[ "${a[j+1]:-}" =~ ^[A-Za-z0-9._:-]+$ ]] && litdev=yes
       done
       [[ -z "${ANDROID_SERIAL:-}" ]] || hasdev=yes
       [[ " ${a[*]:-} " != *" kill-server "* ]] || deny "adb kill-server drops every lane's devices"
       if [[ " ${a[*]:-} " == *" emu kill "* ]]; then
         destructive=yes
         [[ $hasdev == yes ]] || deny "adb emu kill without -s <serial> may stop another lane's emulator"
-        [[ $litdev == no ]] || kill_literal=yes
+        # Stopping one named emulator loses nothing; silence hides only "OK" or "no such device".
+        [[ $hasdev == no ]] || stop_named=yes
       fi ;;
     avdmanager) [[ " ${a[*]:-} " != *" delete "* ]] || destructive=yes ;;
     git)
@@ -814,6 +853,7 @@ analyze_simple() {
     if [[ "$term" == "&" ]]; then ask "backgrounded destructive command ($c ...): run it in the foreground and read its output"
     elif [[ $silenced == yes && $kill_literal == yes ]]; then :
     elif [[ $silenced == yes && $kill_quiet == yes ]]; then quiet_kills+=("$base"$'\036'"$cmd_subs")
+    elif [[ $silenced == yes && $stop_named == yes ]]; then :
     elif [[ $silenced == yes ]]; then ask "silenced destructive command ($c ... >/dev/null): let its output show"; fi
   fi
   destructive=no
