@@ -202,7 +202,7 @@ decide_as() {
 @test "destructive commands that are backgrounded or silenced are flagged for review" {
   decide "rm -rf build >/dev/null 2>&1"; asked "silenced destructive command"
   decide "rm -rf build &"; asked "backgrounded destructive command"
-  decide "kill 4242 2>/dev/null"; asked "silenced"
+  decide 'kill $P 2>/dev/null'; asked "silenced"
   decide "rm -rf build"; allowed
   decide "ls >/dev/null 2>&1 &"; allowed
 }
@@ -299,8 +299,8 @@ kill \$(cat two.pid) 2>/dev/null"; allowed
   decide 'kill -s 0 4242 >/dev/null 2>&1 &'; allowed
   decide 'kill -n 0 4242 2>/dev/null'; allowed
   decide 'kill -0 $(pgrep -f gradle) 2>/dev/null'; allowed
-  decide 'kill -9 4242 2>/dev/null'; asked "silenced"
-  decide 'kill -s 9 4242 2>/dev/null'; asked "silenced"
+  decide 'kill -9 $P 2>/dev/null'; asked "silenced"
+  decide 'kill -s 9 $P 2>/dev/null'; asked "silenced"
   decide 'kill 0 2>/dev/null'; asked "silenced"
   decide 'kill -0 4242; kill $(pgrep -f gradle)'; denied "kill fed by a process search"
 }
