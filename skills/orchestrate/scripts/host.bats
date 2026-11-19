@@ -101,6 +101,70 @@ teardown() {
   wait
 }
 
+@test "a nested wrap runs inside the slot its ancestor holds instead of waiting on it (#313)" {
+  H="$SCRIPTS/heavy-build-slot.sh" G="$SCRIPTS/gate-slot.sh"
+  # The incident: heavy-build-slot.sh wrapping itself. The inner one keeps the outer's worker cap.
+  run "$H" -- "$H" --wait 1 --workers 9 -- bash -c 'echo "ran $GATE_SLOT_KIND|$GRADLE_OPTS"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ran heavy|-Dorg.gradle.workers.max=2"* && "$output" == *"already inside a heavy slot"* ]]
+  # A gate that wraps its own Gradle step, and a gate inside a heavy build or inside the only gate slot.
+  run "$H" -- "$G" --wait 1 -- bash -c 'echo "routed $GATE_SLOT_KIND"' ./gradlew
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"routed heavy"* ]]
+  run "$H" -- "$G" --wait 1 -- bash -c 'echo "ran $GATE_SLOT_KIND"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ran heavy"* ]]
+  run "$G" --slots 1 -- "$G" --slots 1 --wait 1 -- bash -c 'echo "ran $GATE_SLOT_KIND"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ran gate"* && "$output" == *"already inside a gate slot"* ]]
+  [ "$(holders gate)" -eq 0 ]
+  [ "$(holders heavy)" -eq 0 ]
+}
+
+@test "a heavy build inside a gate parks that gate; two such gates do not deadlock or overlap (#313)" {
+  H="$SCRIPTS/heavy-build-slot.sh" G="$SCRIPTS/gate-slot.sh" L="$BATS_TEST_TMPDIR/order"
+  run "$G" -- "$H" --wait 2 -- bash -c 'echo "ran $GATE_SLOT_KIND"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ran heavy"* ]]
+  for i in 1 2; do
+    "$G" -- "$H" --wait 20 -- bash -c "echo start >>'$L'; sleep 0.3; echo end >>'$L'" &
+  done
+  wait
+  [ "$(tr '\n' ' ' <"$L")" = "start end start end " ]
+  # A gate that is not parked still holds a nested heavy build back.
+  "$G" -- bash -c "$(held a)" &
+  await '[ "$(holders gate)" = 1 ]'
+  run "$G" -- "$H" --wait 1 -- true
+  [ "$status" -eq 75 ]
+  [[ "$output" == *"gates still running"* ]]
+  release a
+  wait
+  [ "$(holders gate)" -eq 0 ]
+  [ "$(holders heavy)" -eq 0 ]
+  [ -z "$(find "$ORCHESTRATE_SLOT_DIR" -name parked)" ]
+}
+
+@test "a slot marker that is no longer true is ignored (#313)" {
+  gate --slots 1 -- bash -c "$(held a)" &
+  await '[ "$(holders gate)" = 1 ]'
+  slot="$ORCHESTRATE_SLOT_DIR/gate/slot-1"
+  # Another process's slot (the PID does not match), a slot outside this pool root, and no PID.
+  ORCHESTRATE_SLOT_HELD="$slot" ORCHESTRATE_SLOT_HOLDER=$$ run gate --slots 1 --wait 1 -- true
+  [ "$status" -eq 75 ]
+  ORCHESTRATE_SLOT_HELD="$slot" run gate --slots 1 --wait 1 -- true
+  [ "$status" -eq 75 ]
+  mkdir -p "$BATS_TEST_TMPDIR/other/gate/slot-1"
+  cp "$slot/holder" "$BATS_TEST_TMPDIR/other/gate/slot-1/holder"
+  ORCHESTRATE_SLOT_HELD="$BATS_TEST_TMPDIR/other/gate/slot-1" ORCHESTRATE_SLOT_HOLDER=$(sed -n 1p "$slot/holder") run gate --slots 1 --wait 1 -- true
+  [ "$status" -eq 75 ]
+  release a
+  wait
+  # A marker left by a wrapper that has exited: its slot is gone, so a slot is taken as usual.
+  ORCHESTRATE_SLOT_HELD="$slot" ORCHESTRATE_SLOT_HOLDER=999999 run gate --slots 1 -- bash -c 'echo "$ORCHESTRATE_SLOT_HOLDER"'
+  [ "$status" -eq 0 ]
+  [ "$output" != 999999 ]
+}
+
 @test "the per-repo gate environment is sourced before the command" {
   printf 'export BUN_JOBS=2 TEST_TIMEOUT=60\n' >"$BATS_TEST_TMPDIR/gate-env.sh"
   run gate --env-file "$BATS_TEST_TMPDIR/gate-env.sh" -- bash -c 'echo "$BUN_JOBS/$TEST_TIMEOUT"'
