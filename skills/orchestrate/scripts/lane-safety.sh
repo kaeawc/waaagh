@@ -26,7 +26,14 @@
 #   (output to /dev/null), even when its path looks safe. Not asked: `kill $(cat PIDFILE)
 #   2>/dev/null` (stderr only; first in the command but for resolved `cd DIR`s; no wrapper) when
 #   the hook has read PIDFILE and it holds only PIDs above 1; a missing or malformed pidfile is
-#   asked, naming the path.
+#   asked, naming the path. Never a kill: signal 0 (kill -0, -s 0, -n 0) and kill -l. A kill whose
+#   PIDs are all literal numbers above 1 is neither asked when silenced nor "fed by a search"
+#   (ps -p/-q PID is a check, not a search); nor is a silenced `adb -s <literal serial> emu kill`.
+# Quieter writes: ~/.claude/projects/<project>/memory is writable from every session; in the
+#   owner's session `cp .../android/local.properties <linked worktree>/android/` is allowed, and
+#   WAAAGH_OWNER_SIBLING_WORKTREES=allow (default ask) allows writes and rm -r below another linked
+#   worktree of the same repository. `rm -r "$VAR"` is judged by VAR's value when a straight-line
+#   top-level literal assignment (VAR=..., export VAR=...) set it and VAR appears nowhere else.
 # Output: nothing (allow; the normal permission flow continues) or one hookSpecificOutput JSON
 #   object with permissionDecision deny|ask and the reason. WAAAGH_LANE_SAFETY=off disables it.
 # Exit: 0 decided (or not a Bash or edit call); 1 cannot run (no jq, unreadable payload; non-blocking);
@@ -229,11 +236,91 @@ lane_deny() {
   if [[ $known_lane == yes ]]; then deny "$1"
   else ask "$1 (this worktree is no registered lane: approve only if you are the owner)"; fi
 }
+# claude_memory PATH: PATH is inside a Claude project's auto-memory dir
+# (~/.claude/projects/<project>/memory), which every session may write.
+claude_memory() {
+  local rest=${1#"$home/.claude/projects/"}
+  [[ "$rest" != "$1" && "$rest" == ?*/memory* && "${rest#*/}" =~ ^memory(/|$) ]]
+}
+# sibling_worktree PATH: prints the linked worktree (not the main checkout, not this session's own
+# worktree) of this repository that holds PATH. Listed once, lazily, from git worktree list.
+siblings_listed=no siblings=()
+sibling_worktree() {
+  local w p
+  if [[ $siblings_listed == no ]]; then
+    siblings_listed=yes
+    while IFS= read -r w; do
+      [[ -n "$w" ]] || continue
+      w=$(norm "$w")
+      [[ "$w" != "$lane" ]] || continue
+      siblings+=("$w")
+      if p=$(cd "$w" 2>/dev/null && pwd -P) && [[ "$p" != "$w" ]]; then siblings+=("$p"); fi
+    done < <(git -C "$cwd" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | sed 1d)
+  fi
+  for w in "${siblings[@]:-}"; do
+    if [[ -n "$w" ]] && inside "$1" "$w"; then printf '%s\n' "$w"; return 0; fi
+  done
+  return 1
+}
+# owner_sibling PATH: in the owner's own session (no known lane), WAAAGH_OWNER_SIBLING_WORKTREES=allow
+# lets writes and deletions below another linked worktree of the same repository through (the
+# orchestrator driving its lanes' scratch dirs); default ask.
+owner_sibling() {
+  local w
+  [[ $known_lane == no && "${WAAAGH_OWNER_SIBLING_WORKTREES:-ask}" == allow ]] || return 1
+  w=$(sibling_worktree "$1") && [[ "$1" != "$w" ]]
+}
+# local_props TARGET BASE SRC...: the documented Android worktree setup step in the owner's session,
+# `cp <checkout>/android/local.properties <worktree>/android/` (the file is gitignored and every
+# new worktree needs it): every source is an android/local.properties and the target is the
+# android dir (or android/local.properties) of a linked worktree of this repository.
+local_props() {
+  local target=$1 base=$2 src t w; shift 2
+  [[ $known_lane == no && -n "$lane" && $# -gt 0 ]] || return 1
+  for src in "$@"; do
+    [[ "$src" == android/local.properties || "$src" == */android/local.properties ]] || return 1
+  done
+  t=$(expand "$target" "$base") || return 1
+  w=$(sibling_worktree "$t") || return 1
+  [[ "$t" == "$w/android" || "$t" == "$w/android/local.properties" ]]
+}
+# Literal assignments (NAME=WORD, export NAME=WORD) the hook can expand, so `B=$PWD/scratch/x;
+# rm -rf "$B"` is judged by its real path. Recorded only in a straight-line top-level prefix (only
+# `;` or newlines before it, no pipe, subshell, loop, conditional or failed cd), and used only when
+# NAME appears nowhere else in the command but as $NAME / ${NAME} (no read, for, second assignment,
+# ${NAME:=}...), and nothing is sourced.
+var_names=() var_vals=() vars_text=""
+# bare_count NAME: occurrences of NAME in vars_text other than $NAME and ${NAME}.
+bare_count() {
+  awk -v n="$1" 'BEGIN { RS = "\001" } { s = " " $0 " "; c = 0; L = length(n)
+    for (i = 2; i <= length(s) - L; i++) if (substr(s, i, L) == n) {
+      b = substr(s, i - 1, 1); a = substr(s, i + L, 1)
+      if (b ~ /[A-Za-z0-9_]/ || a ~ /[A-Za-z0-9_]/ || b == "$") continue
+      if (b == "{" && substr(s, i - 2, 1) == "$") { if (a == "=" || a == ":" || a == "-" || a == "+") c += 2; continue }
+      c++
+    }
+    print c }' <<<"$vars_text"
+}
+# subst_var WORD: WORD with a leading $NAME or ${NAME} replaced by its recorded literal value.
+subst_var() {
+  local w=$1 name rest k
+  # Only the top-level shell holds them: bash -c and eval bodies run where they may be unset.
+  [[ "${depth:-0}" == 0 ]] || return 1
+  if [[ "$w" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)\}(.*)$ || "$w" =~ ^\$([A-Za-z_][A-Za-z0-9_]*)(/.*)?$ ]]; then
+    name=${BASH_REMATCH[1]} rest=${BASH_REMATCH[2]}
+  else return 1; fi
+  for ((k = ${#var_names[@]} - 1; k >= 0; k--)); do
+    [[ "${var_names[k]}" == "$name" ]] || continue
+    [[ "$(bare_count "$name")" == 1 ]] || return 1
+    printf '%s\n' "${var_vals[k]}$rest"; return 0
+  done
+  return 1
+}
 
 # check_delete WORD BASE WHAT: a recursive deletion target.
 check_delete() {
-  local w=$1 base=$2 what=$3 t glob=no prefix="" r
-  if ! t=$(expand "$w" "$base"); then
+  local w=$1 base=$2 what=$3 t glob=no prefix="" r s
+  if ! t=$(expand "$w" "$base") && { ! s=$(subst_var "$w") || ! t=$(expand "$s" "$base"); }; then
     [[ -z "$lane" ]] || lane_deny "$what $w: path built from a variable; expand and echo the literal path first"
     return 0
   fi
@@ -257,6 +344,7 @@ check_delete() {
   done
   [[ -n "$lane" ]] || return 0
   if [[ $glob == no && "$t" == "$lane" ]]; then lane_deny "$what $w: that is the lane worktree itself; use git worktree remove"; return 0; fi
+  if owner_sibling "$t"; then return 0; fi
   if [[ $glob == no ]]; then
     local a ok=no
     for a in "${allowed[@]}"; do [[ "$t" == "$a"/* ]] && ok=yes; done
@@ -273,7 +361,7 @@ check_write() {
   t=$(expand "$w" "$base") || return 0
   if f=$(forbidden "$t"); then deny "$what $w: $(forbid_why "$t" "$f")"; return 0; fi
   [[ -n "$lane" ]] || return 0
-  in_allowed "$t" || lane_deny "$what $w: writes outside the lane worktree $lane; enter the worktree (EnterWorktree) and use the edit tools"
+  in_allowed "$t" || claude_memory "$t" || owner_sibling "$t" || lane_deny "$what $w: writes outside the lane worktree $lane; enter the worktree (EnterWorktree) and use the edit tools"
 }
 # check_git BASE ARG...: a mutating git command whose work tree (BASE, -C, --work-tree) lies under a
 # bound forbidden root. Read-only commands, fetch and worktree add stay allowed there.
@@ -410,7 +498,17 @@ analyze() {
   # prefix_ok: every top-level command so far is a plain `cd DIR` the hook resolved or a quiet kill
   # (inert), so nothing in this text can have changed a pidfile or the cwd behind the hook's back.
   local prefix_ok=yes inert=no
+  # straight: every top-level command so far was a plain command ended by `;` or a newline, so a
+  # literal assignment now runs unconditionally in this shell (see subst_var). plain: set by
+  # analyze_simple for the command it judged.
+  local straight=no plain=yes t
   ((depth < 4)) || return 0
+  if ((depth == 0)); then
+    vars_text=$text var_names=() var_vals=()
+    local o1='$(' o2='<(' o3='>('
+    t=${text//"$o1"/}; t=${t//"$o2"/}; t=${t//"$o3"/}
+    [[ "$t" == *'('* ]] || straight=yes
+  fi
   while IFS= read -r line; do
     term=${line%%$'\036'*} rest=${line#*$'\036'}
     cmd_subs=${rest##*$'\036'} rest=${rest%$'\036'*}
@@ -421,8 +519,10 @@ analyze() {
     inert=no
     if ((cursub == 0 && ${#toks[@]} == 2)) && [[ "${toks[0]}" == cd && "${toks[1]}" != -* && "$term" =~ ^(\;|nl|\&\&|end)$ ]] &&
       expand "${toks[1]}" "$cur" >/dev/null; then inert=yes; fi
+    plain=yes
     analyze_simple "$term" "$cur" "$depth" "${toks[@]}"
     ((cursub > 0)) || [[ $inert == yes ]] || prefix_ok=no
+    if ((cursub == 0)) && [[ $plain == no || ! "$term" =~ ^(\;|nl|end)$ ]]; then straight=no; fi
   done < <(tokenize <<<"$text")
   for q in ${quiet_kills[@]+"${quiet_kills[@]}"}; do quiet_kill "${q%%$'\036'*}" "${q#*$'\036'}"; done
   if [[ $saw_kill == yes && $saw_pidsrc == yes ]]; then
@@ -457,9 +557,28 @@ quiet_kill() {
   [[ -z "$why" ]] || ask "silenced destructive command (kill ... >/dev/null): $why"
 }
 
+# record_vars TERM DEPTH NREDIR WORD...: record NAME=VALUE words whose value the hook can expand,
+# when the command runs unconditionally in the top-level shell (straight, cursub and plain come from
+# analyze by dynamic scope). Any other word, or an unexpandable value, records nothing for it.
+record_vars() {
+  local term=$1 d=$2 nr=$3 w v; shift 3
+  [[ $d == 0 && $cursub == 0 && $straight == yes && $nr == 0 && "$term" =~ ^(\;|nl|\&\&|end)$ ]] || return 0
+  for w in "$@"; do
+    [[ "$w" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 0
+  done
+  for w in "$@"; do
+    [[ "$w" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]
+    local name=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]}
+    [[ -n "$val" ]] || continue
+    if v=$(expand "$val" "$cur") || { v=$(subst_var "$val") && v=$(expand "$v" "$cur"); }; then
+      var_names+=("$name") var_vals+=("$v")
+    fi
+  done
+}
+
 analyze_simple() {
   local term=$1 base=$2 depth=$3; shift 3
-  local args=() t i via_xargs=no silenced=no nredir=0 only_err=no kill_quiet=no
+  local args=() t i via_xargs=no silenced=no nredir=0 only_err=no kill_quiet=no kill_literal=no
   # split redirections from words
   while (($#)); do
     t=$1; shift
@@ -487,7 +606,8 @@ analyze_simple() {
     t=${args[i]}
     case "$t" in
       [A-Za-z_]*=*) [[ "${t%%=*}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || break; ((i += 1)) ;;
-      command | builtin | exec | nohup | time | noglob | '{' | '}' | '!' | then | do | else | elif | if | while | until | caffeinate) ((i += 1)) ;;
+      command | builtin | exec | nohup | time | noglob | caffeinate) ((i += 1)) ;;
+      '{' | '}' | '!' | then | do | else | elif | if | while | until) plain=no; ((i += 1)) ;;
       sudo | doas)
         ((i += 1))
         while ((i < ${#args[@]})) && [[ "${args[i]}" == -* ]]; do
@@ -513,7 +633,11 @@ analyze_simple() {
       *) break ;;
     esac
   done
-  ((i < ${#args[@]})) || return 0
+  if ((i == ${#args[@]})); then
+    # Assignments only: record the literal ones (subst_var).
+    [[ $plain == yes ]] && record_vars "$term" "$depth" $nredir "${args[@]}"
+    return 0
+  fi
   local c=${args[i]##*/}
   local a=("${args[@]:i+1}")
   local n=${#a[@]} low j
@@ -521,16 +645,36 @@ analyze_simple() {
   case "$c" in
     cd)
       if ((n == 0)); then cur=$home; elif [[ "${a[0]}" != - ]]; then
-        cur=$(expand "${a[0]}" "$base") || cur=$base
-      fi ;;
+        cur=$(expand "${a[0]}" "$base") || { cur=$base; plain=no; }
+      else plain=no; fi
+      [[ -d "$cur" ]] || plain=no ;;
+    export) ((i == 0)) && record_vars "$term" "$depth" $nredir "${a[@]:-}" ;;
+    for | case | select | function | source | . | pushd | popd)
+      plain=no
+      [[ "$c" != source && "$c" != . ]] || { var_names=() var_vals=(); } ;;
     pkill | killall)
       deny "$c kills by name or pattern: kill only PIDs you recorded at start"
       [[ "$c" != killall ]] || { low=$(tr '[:upper:]' '[:lower:]' <<<"${a[*]:-}"); [[ "$low" != *simulator* ]] || deny "never quit Simulator.app: it shuts down every booted simulator"; } ;;
     kill)
-      destructive=yes
       [[ $via_xargs == no ]] || deny "xargs kill kills whatever a search matched: kill only PIDs you recorded at start"
-      saw_kill=yes
       for t in "${a[@]:-}"; do [[ "$t" != -1 ]] || deny "kill -1 signals every process you own"; done
+      # Signal 0 (kill -0, -s 0, -n 0) and kill -l only probe or list: nothing is signalled. A kill
+      # whose every PID is a literal number above 1 was not fed by a search in this command, and
+      # silencing it hides only "no such process".
+      local probe=no literal=yes nlit=0 sk=no
+      for t in "${a[@]:-}"; do
+        if [[ $sk == yes ]]; then sk=no; [[ "$t" != 0 ]] || probe=yes; continue; fi
+        case "$t" in
+          -0 | -l | -L | -l*) probe=yes ;;
+          -s | -n) sk=yes ;;
+          --) ;;
+          -*) ;;
+          *) if [[ "$t" =~ ^[0-9]+$ ]] && ((10#$t > 1)); then ((nlit += 1)); else literal=no; fi ;;
+        esac
+      done
+      if [[ $probe == yes && $via_xargs == no ]]; then return 0; fi
+      destructive=yes
+      if [[ $literal == yes && $nlit -gt 0 && $via_xargs == no ]]; then kill_literal=yes; else saw_kill=yes; fi
       # Only stderr silenced, and every PID argument is one whole substitution: quiet_kill decides.
       if [[ $nredir == 1 && $only_err == yes && $i == 0 && $depth == 0 && $cursub == 0 && $prefix_ok == yes &&
         "$term" =~ ^(\;|nl|\&\&|\|\||end)$ && -n "$cmd_subs" ]]; then
@@ -547,7 +691,22 @@ analyze_simple() {
         t=${cmd_subs//[^,]/}
         if ((npid > 0 && npid == nsub && nsub == ${#t} + 1)); then kill_quiet=yes inert=yes; fi
       fi ;;
-    pgrep | pidof | lsof | ps) saw_pidsrc=yes ;;
+    pgrep | pidof | lsof) saw_pidsrc=yes ;;
+    ps)
+      # ps -p/-q PID only reports on PIDs it was given (a check before a kill); any other
+      # selection (-A, -a, -e, -x, -u, BSD `aux`, ...) is a process search.
+      local bypid=no sel=no
+      for ((j = 0; j < n; j++)); do
+        t=${a[j]}
+        case "$t" in
+          -p | -q | --pid) bypid=yes; ((j += 1)) ;;
+          -o | -O | --format) ((j += 1)) ;;
+          -p[0-9]* | --pid=*) bypid=yes ;;
+          -[wfjlcMmrSvhLT]*) [[ "${t#-}" != *[AaexUuGgtNdp]* ]] || sel=yes ;;
+          *) sel=yes ;;
+        esac
+      done
+      [[ $bypid == yes && $sel == no ]] || saw_pidsrc=yes ;;
     rm)
       destructive=yes
       local rec=no ends=no files=()
@@ -592,13 +751,19 @@ analyze_simple() {
           for t in "${s[@]:1}"; do [[ "$t" != all ]] || deny "simctl ${s[0]} all touches every simulator: name your own UDID"; done ;;
       esac ;;
     adb)
-      local hasdev=no
-      for t in "${a[@]:-}"; do [[ "$t" != -s && "$t" != -t ]] || hasdev=yes; done
+      local hasdev=no litdev=no
+      for ((j = 0; j < n; j++)); do
+        [[ "${a[j]}" == -s || "${a[j]}" == -t ]] || continue
+        hasdev=yes
+        # A literal serial names one emulator: silencing its emu kill hides only "device not found".
+        [[ "${a[j+1]:-}" =~ ^[A-Za-z0-9._:-]+$ ]] && litdev=yes
+      done
       [[ -z "${ANDROID_SERIAL:-}" ]] || hasdev=yes
       [[ " ${a[*]:-} " != *" kill-server "* ]] || deny "adb kill-server drops every lane's devices"
       if [[ " ${a[*]:-} " == *" emu kill "* ]]; then
         destructive=yes
         [[ $hasdev == yes ]] || deny "adb emu kill without -s <serial> may stop another lane's emulator"
+        [[ $litdev == no ]] || kill_literal=yes
       fi ;;
     avdmanager) [[ " ${a[*]:-} " != *" delete "* ]] || destructive=yes ;;
     git)
@@ -614,12 +779,19 @@ analyze_simple() {
     touch | truncate)
       for t in "${a[@]:-}"; do [[ "$t" == -* ]] || check_write "$t" "$base" "$c"; done ;;
     cp | mv | install | ln | rsync)
-      local last="" tdir=""
+      local last="" tdir="" srcs=()
       for ((j = 0; j < n; j++)); do
-        case "${a[j]}" in -t) tdir=${a[j+1]:-}; ((j += 1)) ;; --target-directory=*) tdir=${a[j]#*=} ;; -*) ;; *) last=${a[j]} ;; esac
+        case "${a[j]}" in
+          -t) tdir=${a[j+1]:-}; ((j += 1)) ;;
+          --target-directory=*) tdir=${a[j]#*=} ;;
+          -*) ;;
+          *) [[ -z "$last" ]] || srcs+=("$last"); last=${a[j]} ;;
+        esac
       done
-      [[ -n "$tdir" ]] && last=$tdir
-      [[ -z "$last" ]] || check_write "$last" "$base" "$c" ;;
+      if [[ -n "$tdir" ]]; then [[ -z "$last" ]] || srcs+=("$last"); last=$tdir; fi
+      if [[ -n "$last" ]] && ! { [[ $c == cp ]] && local_props "$last" "$base" "${srcs[@]:-}"; }; then
+        check_write "$last" "$base" "$c"
+      fi ;;
     dd)
       for t in "${a[@]:-}"; do [[ "$t" != of=* ]] || check_write "${t#of=}" "$base" "dd"; done ;;
     sed | gsed | perl)
@@ -630,6 +802,8 @@ analyze_simple() {
           t=${a[j]}
           case "$t" in
             -e | -f | --expression | --file) script=yes; ((j += 1)) ;;
+            # BSD sed -i '' (an empty backup suffix): the empty word is the suffix, not the script.
+            -i) [[ -n "${a[j+1]-x}" ]] || ((j += 1)) ;;
             -*) ;;
             *) if [[ $script == no ]]; then script=yes; else check_write "$t" "$base" "$c -i"; fi ;;
           esac
@@ -638,6 +812,7 @@ analyze_simple() {
   esac
   if [[ "$c" =~ ^(rm|kill|avdmanager|git|xcrun|simctl|adb|find)$ && $destructive == yes ]]; then
     if [[ "$term" == "&" ]]; then ask "backgrounded destructive command ($c ...): run it in the foreground and read its output"
+    elif [[ $silenced == yes && $kill_literal == yes ]]; then :
     elif [[ $silenced == yes && $kill_quiet == yes ]]; then quiet_kills+=("$base"$'\036'"$cmd_subs")
     elif [[ $silenced == yes ]]; then ask "silenced destructive command ($c ... >/dev/null): let its output show"; fi
   fi
