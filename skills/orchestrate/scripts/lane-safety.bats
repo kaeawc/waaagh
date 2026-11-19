@@ -269,6 +269,85 @@ kill \$(cat two.pid) 2>/dev/null"; allowed
   decide 'cat scratch/logpid.txt | xargs kill 2>/dev/null'; denied "xargs kill"
 }
 
+@test "read-only commands may precede a quiet kill; a conditional, piped or subshell cd may not" {
+  mkdir -p "$LANE/scratch" "$T/other/scratch"
+  echo 4242 >"$LANE/scratch/logpid.txt"; echo 1 >"$T/other/scratch/logpid.txt"
+  # The incident shape (2026-11-19): read a log, then stop the recorded log PID.
+  decide "cd $LANE; grep -n -i 'failed\\|error' scratch/run.log | head -10 | cut -c1-400; kill \"\$(cat scratch/logpid.txt)\" 2>/dev/null" "$MAIN"; allowed
+  decide 'tail -5 scratch/run.log 2>&1; ls scratch 2>/dev/null; sleep 2 && kill $(cat scratch/logpid.txt) 2>/dev/null'; allowed
+  decide 'echo stopping; kill $(cat scratch/logpdi.txt) 2>/dev/null'; asked "pidfile scratch/logpdi.txt not found"
+  # Anything that can write the pidfile, or that the hook cannot see through, still asks.
+  decide 'echo 1 > scratch/logpid.txt; kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'cat scratch/x >> scratch/logpid.txt; kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'echo $(date); kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide './grep x; kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'env ls; kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'sed -n 1p f; kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  decide 'ls & kill $(cat scratch/logpid.txt) 2>/dev/null'; asked "let its output show"
+  # A cd the shell may not run in this shell: the hook would read another directory's pidfile.
+  decide "ls nope && cd $T/other; kill \$(cat scratch/logpid.txt) 2>/dev/null"; asked "let its output show"
+  decide "ls || cd $T/other; kill \$(cat scratch/logpid.txt) 2>/dev/null"; asked "let its output show"
+  decide "echo | cd $T/other; kill \$(cat scratch/logpid.txt) 2>/dev/null"; asked "let its output show"
+  decide "(cd $T/other;); kill \$(cat scratch/logpid.txt) 2>/dev/null"; asked "let its output show"
+  decide "(cd $T/other; ls;); kill \$(cat scratch/logpid.txt) 2>/dev/null"; asked "let its output show"
+  decide "kill \$(cat scratch/logpid.txt) 2>/dev/null || cd $T/other; kill \$(cat scratch/logpid.txt) 2>/dev/null"; asked "let its output show"
+}
+
+@test "kill -0 is a probe, not a kill" {
+  decide 'kill -0 4242 2>/dev/null && echo alive'; allowed
+  decide 'until ! kill -0 $(cat scratch/pid 2>/dev/null) 2>/dev/null; do sleep 5; done'; allowed
+  decide 'kill -s 0 4242 >/dev/null 2>&1 &'; allowed
+  decide 'kill -n 0 4242 2>/dev/null'; allowed
+  decide 'kill -0 $(pgrep -f gradle) 2>/dev/null'; allowed
+  decide 'kill -9 4242 2>/dev/null'; asked "silenced"
+  decide 'kill -s 9 4242 2>/dev/null'; asked "silenced"
+  decide 'kill 0 2>/dev/null'; asked "silenced"
+  decide 'kill -0 4242; kill $(pgrep -f gradle)'; denied "kill fed by a process search"
+}
+
+@test "a silenced stop of one named device is not asked; erase, delete and every-device forms are" {
+  decide 'adb -s emulator-5702 emu kill >/dev/null 2>&1; adb -s emulator-5700 emu kill >/dev/null 2>&1; sleep 15'; allowed
+  ANDROID_SERIAL=emulator-5554 decide 'adb emu kill 2>/dev/null'; allowed
+  decide 'xcrun simctl shutdown $u 2>/dev/null; xcrun simctl delete $u && echo deleted'; allowed
+  decide 'simctl shutdown ABC-123 >/dev/null 2>&1'; allowed
+  decide 'adb emu kill >/dev/null 2>&1'; denied "without -s"
+  decide 'adb -s emulator-5702 emu kill >/dev/null 2>&1 &'; asked "backgrounded destructive command"
+  decide 'xcrun simctl shutdown booted 2>/dev/null'; asked "silenced destructive command"
+  decide 'xcrun simctl shutdown all 2>/dev/null'; denied "simctl shutdown all"
+  decide 'xcrun simctl shutdown A B 2>/dev/null'; asked "silenced destructive command"
+  decide 'xcrun simctl delete ABC-123 2>/dev/null'; asked "silenced destructive command"
+  decide 'xcrun simctl erase ABC-123 >/dev/null 2>&1'; asked "silenced destructive command"
+  decide 'avdmanager delete avd -n x >/dev/null'; asked "silenced destructive command"
+}
+
+@test "a cd into another linked worktree of the same repository makes it writable" {
+  git -C "$MAIN" worktree add -q "$T/lane2" -b lane2
+  mkdir -p "$T/elsewhere" && git -C "$T/elsewhere" init -q && git -C "$T/elsewhere" commit -q --allow-empty -m init
+  git -C "$T/elsewhere" worktree add -q "$T/foreign" -b foreign
+  sub() { # a subagent's call from the orchestrator's worktree ($LANE)
+    local payload
+    payload=$(jq -cn --arg c "$1" --arg d "$LANE" '{tool_name: "Bash", tool_input: {command: $c}, cwd: $d, agent_id: "a1"}')
+    run "$SCRIPTS/lane-safety.sh" <<<"$payload"
+    [ "$status" -eq 0 ]
+  }
+  # The incident shape (2026-11-19): the lane starts in the orchestrator's worktree and cds to its own.
+  sub "cd $T/lane2; mkdir -p scratch; (bun run build > scratch/build.log 2>&1; echo build=\$? >> scratch/build.log); tail -3 scratch/build.log"; allowed
+  sub "mkdir -p $T/lane2/scratch; cd $T/lane2/scratch
+nohup emulator -avd x > emu.log 2>&1 &
+echo \$! > emu.pid"; allowed
+  sub "cd $T/lane2 && rm -rf scratch/out"; allowed
+  # Without the cd, and for anything that is not a linked worktree of this repository, as before.
+  sub "echo x > $T/lane2/scratch/build.log"; denied "writes outside the lane worktree"
+  sub "cd $T/lane2 && rm -rf $T/lane2"; denied "outside the lane worktree"
+  sub "cd $MAIN; echo x > notes.txt"; denied "writes outside the lane worktree"
+  sub "cd $T/foreign; echo x > notes.txt"; denied "writes outside the lane worktree"
+  sub "cd $T/elsewhere; echo x > notes.txt"; denied "writes outside the lane worktree"
+  sub "cd \$WT; echo x > $T/lane2/notes.txt"; denied "writes outside the lane worktree"
+  # A forbidden root stays forbidden even when it is a linked worktree the lane cds into.
+  printf '%s\n' "$T/lane2" >"$ORCHESTRATE_STATE_DIR/lane-forbidden"
+  sub "cd $T/lane2; echo x > notes.txt"; denied "orchestrator's checkout"
+}
+
 @test "quoted text, comments and heredoc bodies are data, not commands" {
   decide 'git commit -m "never pkill; never rm -rf ~"'; allowed
   decide "echo 'killall Simulator' # rm -rf ~"; allowed
