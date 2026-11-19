@@ -15,6 +15,7 @@ setup() {
   git -C "$T/main" commit -q --allow-empty -m init
   git -C "$T/main" worktree add -q "$T/lane" -b lane
   LANE="$T/lane" MAIN="$T/main"
+  register_lane "$LANE"
   FAILS=""
 }
 

@@ -185,3 +185,10 @@ snapshot_line_names() {
 
 # `run ! cmd` is how a mid-test negative assertion fails (#134); bats >= 1.5 has it.
 bats_require_minimum_version 1.5.0
+
+# register_lane WORKTREE: an active lanes.tsv row (lane-claim.sh add) for WORKTREE, so lane-safety.sh
+# treats the owner-less calls from it as a known lane (deny) rather than the owner's session (ask).
+register_lane() {
+  mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"
+  printf '%s\twork/1-x\t1\tsrc/\tlane-agent\tactive\n' "$1" >>"$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"
+}
