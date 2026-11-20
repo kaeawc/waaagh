@@ -6,9 +6,18 @@
 # after the boot command has returned. The device-lane count does not bound that; boots per minute
 # and the load at each boot do.
 #
-# Usage: boot-slot.sh [--load-factor F] [--settle SECONDS] [--wait SECONDS] [--label TEXT] -- CMD...
+# Usage: boot-slot.sh [--load-factor F] [--max-booted N] [--max-boots N] [--settle SECONDS]
+#                     [--wait SECONDS] [--label TEXT] -- CMD...
 #   --load-factor  start CMD only while the 1-min load is below F x CPUs (default
 #                  $ORCHESTRATE_BOOT_LOAD_FACTOR or 3: 48 on 16 CPUs), as host-load.sh reads them
+#   --max-booted   also wait while the host has N or more devices booted (simulators and emulators;
+#                  default $ORCHESTRATE_BOOT_MAX_BOOTED or 4)
+#   --max-boots    also wait while N or more devices booted in spectra's boot window (5 minutes;
+#                  default $ORCHESTRATE_BOOT_MAX_RECENT or 3): boots per minute drive the load (#334)
+#   Device counts come from host-load.sh's devices rows (spectra, kaeawc/spectra#602); a spectra too
+#   old to count devices is named once and the gate falls back to the load alone. When this lane's
+#   worktree already has a device booted, a line says so (one booted device per lane); it does not
+#   wait for that.
 #   --settle       keep the slot this many seconds after CMD succeeds, so the next boot does not
 #                  start on top of this one's runtime processes (default $ORCHESTRATE_BOOT_SETTLE or 30)
 #   --wait         longest wait for the slot and for the load to fall (default $ORCHESTRATE_BOOT_WAIT
@@ -26,10 +35,12 @@ source "$here/_lib.sh"
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 
-factor=${ORCHESTRATE_BOOT_LOAD_FACTOR:-3} settle=${ORCHESTRATE_BOOT_SETTLE:-30} wait_s=${ORCHESTRATE_BOOT_WAIT:-900} label=boot
+factor=${ORCHESTRATE_BOOT_LOAD_FACTOR:-3} max_booted=${ORCHESTRATE_BOOT_MAX_BOOTED:-4} max_boots=${ORCHESTRATE_BOOT_MAX_RECENT:-3} settle=${ORCHESTRATE_BOOT_SETTLE:-30} wait_s=${ORCHESTRATE_BOOT_WAIT:-900} label=boot
 while (($#)); do
   case "$1" in
     --load-factor) factor=${2:-}; shift 2 ;;
+    --max-booted) max_booted=${2:-}; shift 2 ;;
+    --max-boots) max_boots=${2:-}; shift 2 ;;
     --settle) settle=${2:-}; shift 2 ;;
     --wait) wait_s=${2:-}; shift 2 ;;
     --label) label=${2:-}; shift 2 ;;
@@ -39,8 +50,9 @@ while (($#)); do
   esac
 done
 (($#)) || { orch_usage >&2; exit 2; }
-[[ "$factor" =~ ^[0-9]+([.][0-9]+)?$ && "$settle" =~ ^[0-9]+$ && "$wait_s" =~ ^[0-9]+$ ]] ||
-  { echo "boot-slot.sh: bad --load-factor, --settle or --wait" >&2; exit 2; }
+[[ "$factor" =~ ^[0-9]+([.][0-9]+)?$ && "$settle" =~ ^[0-9]+$ && "$wait_s" =~ ^[0-9]+$ &&
+  "$max_booted" =~ ^[1-9][0-9]*$ && "$max_boots" =~ ^[1-9][0-9]*$ ]] ||
+  { echo "boot-slot.sh: bad --load-factor, --max-booted, --max-boots, --settle or --wait" >&2; exit 2; }
 
 # Nested: the marker counts only while that PID still holds that slot.
 held=${ORCHESTRATE_BOOT_SLOT_HELD:-}
@@ -50,14 +62,30 @@ if [[ -n "$held" && "$held" == "$(slot_root)"/boot/slot-* && -f "$held/holder" ]
   exec "$@"
 fi
 
-# over_limit: the load row of host-load.sh (1-min load, CPUs); prints "<load> <limit>" and returns 0
-# while the load is at or above F x CPUs, 1 below it, 3 when there is no reading.
+# This lane's worktree, so host-load.sh's devices-root row counts the devices it started.
+lane_wt=$(git rev-parse --show-toplevel 2>/dev/null) || lane_wt=""
+said_old=no said_own=no
+# over_limit: host-load.sh's load and devices rows. Prints why the boot must wait and returns 0
+# while it must, 1 when it may go, 3 when there is no load reading.
 over_limit() {
-  local row load cpus
-  row=$(orch_run host-load.sh --top 0 2>/dev/null | awk -F'\t' '$1 == "load" { print $2, $3 + 0 }' || true)
-  load=${row%% *} cpus=${row##* }
-  [[ "$load" =~ ^[0-9]+([.][0-9]+)?$ && "$cpus" =~ ^[1-9][0-9]*$ ]] || return 3
-  awk -v l="$load" -v c="$cpus" -v f="$factor" 'BEGIN { printf "%s %.1f\n", l, f * c; exit !(l + 0 >= f * c) }'
+  local rows load cpus booted recent window own
+  rows=$(orch_run host-load.sh --top 0 ${lane_wt:+--worktree-root "$lane_wt"} 2>/dev/null || true)
+  read -r load cpus < <(awk -F'\t' '$1 == "load" { print $2, $3 + 0 }' <<<"$rows") || true
+  [[ "${load:-}" =~ ^[0-9]+([.][0-9]+)?$ && "${cpus:-}" =~ ^[1-9][0-9]*$ ]] || return 3
+  read -r booted recent window < <(awk -F'\t' '$1 == "devices" { print $2, $3, $4 }' <<<"$rows") || true
+  own=$(awk -F'\t' '$1 == "devices-root" { n += $3 } END { print n + 0 }' <<<"$rows")
+  if [[ -z "${booted:-}" && $said_old == no ]]; then
+    echo "boot-slot: spectra reports no device counts (update it for kaeawc/spectra#602); gating on the load alone" >&2; said_old=yes
+  fi
+  if ((own > 0)) && [[ $said_own == no ]]; then
+    echo "boot-slot: this lane already has $own device(s) booted: keep one booted device per lane; shut it down before booting another" >&2; said_own=yes
+  fi
+  if awk -v l="$load" -v c="$cpus" -v f="$factor" 'BEGIN { exit !(l + 0 >= f * c) }'; then
+    awk -v l="$load" -v c="$cpus" -v f="$factor" 'BEGIN { printf "the load to fall (%s, limit %.1f)\n", l, f * c }'; return 0
+  fi
+  if [[ -n "${booted:-}" ]] && ((booted >= max_booted)); then echo "a device to shut down ($booted booted, max $max_booted)"; return 0; fi
+  if [[ -n "${recent:-}" ]] && ((recent >= max_boots)); then echo "recent boots to settle ($recent in ${window}s, max $max_boots)"; return 0; fi
+  return 1
 }
 
 deadline=$(($(date +%s) + wait_s)) slot="" said=no
@@ -73,8 +101,8 @@ while :; do
   reading=$(over_limit) || rc=$?
   ((rc != 1)) || break
   ((rc != 3)) || { echo "boot-slot: the host load could not be read (host-load.sh); not booting blind" >&2; exit 3; }
-  (($(date +%s) < deadline)) || { echo "boot-slot: load ${reading% *} still at or above ${reading#* } after ${wait_s}s" >&2; exit 75; }
-  [[ "$said" == yes ]] || { echo "boot-slot: waiting for the load to fall (${reading% *}, limit ${reading#* })" >&2; said=yes; }
+  (($(date +%s) < deadline)) || { echo "boot-slot: still waiting for $reading after ${wait_s}s" >&2; exit 75; }
+  [[ "$said" == "$reading" ]] || { echo "boot-slot: waiting for $reading" >&2; said=$reading; }
   slot_sleep
 done
 

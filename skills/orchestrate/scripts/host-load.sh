@@ -18,6 +18,9 @@
 #   load     <1-min>  <cpus> CPUs, limit <F x CPUs>
 #   memory   <free GB>|unknown  min <G>, backoff <G>
 #   device-slots  2|3
+#   devices  <booted> <booted recently> <window seconds>   booted simulators and running emulators
+#            (spectra's devices block, kaeawc/spectra#602; omitted when spectra has none to report)
+#   devices-root  <root> <booted> <booted recently>   the devices the --worktree-root started
 #   cause    indexing|lanes|other|idle|<spectra's kind>  <what leads, from spectra>
 #   hint     <what to do about it>
 #   top-cpu|top-rss  <pid>  <cpu%>  <rss MB>  <command>  <worktree name or ->
@@ -86,6 +89,9 @@ printf 'verdict\t%s\t%s\n' "$verdict" "$reason"
 printf 'load\t%s\t%s CPUs, limit %s\n' "$load1" "$cpus" "$limit"
 printf 'memory\t%s\tmin %s, backoff %s\n' "$free_gb" "$min_gb" "$backoff_gb"
 printf 'device-slots\t%s\n' "$slots"
+jq -r 'select(.devices | type == "object") | .devices
+  | "devices\t\(.booted // 0)\t\(.booted_recently // 0)\t\(.boot_window_seconds // 0)",
+    (.by_root // [] | .[] | "devices-root\t\(.root)\t\(.booted // 0)\t\(.booted_recently // 0)")' <<<"$raw" 2>/dev/null || true
 ((top > 0)) || exit "$rc"
 
 # --- attribution (spectra) ----------------------------------------------------------------------

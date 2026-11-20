@@ -72,3 +72,14 @@ calls() { cat "$BATS_TEST_TMPDIR/spectra-calls"; }
   [ "$(row hint)" = "nothing leads the CPU table: the load is falling or brief" ]
   [ "$(printf '%s\n' "$output" | grep -c '^top-\|^family' || true)" -eq 0 ]
 }
+
+@test "device rows come from spectra's devices block, even with --top 0; none when spectra has none (#334)" {
+  run "$SCRIPTS/host-load.sh" --top 0
+  [[ "$output" != *devices* ]]
+  echo '{"devices": {"simulators": 2, "emulators": 1, "booted": 3, "booted_recently": 2, "boot_window_seconds": 300,
+    "by_root": [{"root": "/wt/lane-a", "booted": 1, "booted_recently": 1}], "list": []}}' >"$BATS_TEST_TMPDIR/spectra-load.json"
+  run "$SCRIPTS/host-load.sh" --top 0
+  [ "$status" -eq 0 ]
+  [ "$(row devices)" = $'3\t2\t300' ]
+  [ "$(row devices-root)" = $'/wt/lane-a\t1\t1' ]
+}
