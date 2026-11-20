@@ -120,9 +120,11 @@ The rule from `roles/review.md` and `review-ledger.sh` still applies: the latest
 - **Update-branch merges.** The orchestrator may carry a status forward from a reviewed SHA to a
   head whose only later commits are GitHub update-branch merges (`orch_review_covers`). It posts
   the same status on the new head, through the broker, with `carried from <sha9>`.
-- **Required status.** Making `orchestrate/review` a required status, with the App as its expected
-  source, lets GitHub enforce the rule even against a bug in the orchestrator. Whether the
-  ruleset requires it is open (#268).
+- **Required status, while traveling.** The "waaagh travel guard" ruleset makes `orchestrate/review`
+  a required status on the default branch, with the App (by App ID) as its only accepted source, so
+  GitHub enforces the rule even against a bug in the orchestrator (#268). It is on only for a trip
+  (`travel-guard.sh on` in the toggle's enter, `off` in its exit): at home, local merges do not post
+  the status.
 
 A PR merges only when all of these hold:
 
@@ -141,40 +143,44 @@ Check this on one PR before the first trip.
 
 ## The App identity and its key
 
-The owner creates the GitHub App, installs it on the target repositories and the store, and holds
-its private key. Automation never creates the App, never creates, reads, rotates or stores the
+The owner creates the GitHub App, installs it on the target repositories, and holds its private
+key. Automation never creates the App, never creates, reads, rotates or stores the
 key, and never asks for it. A cloud session never sees the key or an installation token.
 
-**How a cloud session acts as the App: the App broker** (the proposed default, pending the owner's
-answer in #268):
+**How a cloud session acts as the App: the App broker** (owner decision, 2026-11-20, #268). The App
+is `waaagh-bot`, installed on each target repository; the store does not need it.
 
-- **Where.** A workflow, `app-broker.yml`, runs in the state store repository,
-  `on: workflow_dispatch`.
-- **The key.** The owner puts the App ID in an Actions variable and the private key in a secret of
-  a protected Actions environment.
-- **The token.** One step mints an installation token with `actions/create-github-app-token`. It
-  is scoped to the one target repository and to `statuses`, `contents` and `pull-requests` write.
-  The token lives only inside that job. It is never printed, passed as an output, written to the
-  store, or returned to the caller.
-- **Inputs.** `op` (`status` or `merge`), `repo`, `pr` and `sha`, plus `state` and `description`
-  for `status`.
+- **Where.** One `app-broker.yml` workflow in each target repository, `on: workflow_dispatch`,
+  copied unchanged from `skills/orchestrate/templates/app-broker.yml`. There is no central broker.
+- **The key.** The owner's `GH_APP_ID` and `GH_APP_PRIVATE_KEY` Actions secrets in that repository.
+  No other copy exists.
+- **The token.** One step mints an installation token with `actions/create-github-app-token`,
+  scoped to that repository and to the one permission the write needs (`statuses`, or `contents`
+  and `pull-requests`). It lives only inside that job. It is never printed, passed as an output,
+  written to the store, or returned to the caller. Reads use the run's read-only `GITHUB_TOKEN`.
+- **Inputs.** `op` (`status` or `merge`), `pr` and `sha`, plus `state` and `description` for
+  `status` and `method` for `merge`. They reach the shell only through `env:`.
 - **Checks before acting:**
-  - `github.actor` is the expected cloud identity;
-  - for `merge`, the PR head is still `sha`, and `orchestrate/review` at `sha` is `success` and
-    was posted by the App.
+  - the caller is in the repository variable `APP_BROKER_ACTORS` (default: the owner);
+  - the PR is open, not from a fork, and its head is still `sha`;
+  - for `merge`, the newest `orchestrate/review` at `sha` is `success` and was posted by the App.
 - **The call.** The broker then calls `POST /repos/{repo}/statuses/{sha}` or
   `PUT /repos/{repo}/pulls/{pr}/merge` with `sha`.
-- **The caller.** A cloud session asks for an action with
-  `POST /repos/{store}/actions/workflows/app-broker.yml/dispatches`. It confirms the result on its
-  next read of the PR or the status, and never assumes success from the dispatch.
+- **The caller.** A cloud session runs `"$SCRIPTS/app-broker.sh" status|merge --repo R --pr N --sha S`,
+  which dispatches the workflow on the default branch. It confirms the result on its next pass
+  (`app-broker.sh check --sha S`, or a read of the PR) and never assumes success from the dispatch.
 
-**Open questions (#268), to be answered by the owner:**
+**Before the first trip** (owner):
 
-- Is the broker in the store, with the key as an environment secret, acceptable?
-- Should the ruleset require `orchestrate/review` from the App?
-- Can the cloud identity dispatch the store's workflow through the session's GitHub proxy?
+- Give waaagh-bot "Commit statuses: Read and write" and approve it on the installation. Until then
+  the broker cannot post a verdict.
+- Merge the broker into each target repository (one PR each).
+- Check once, from a cloud session, that its identity may dispatch the broker (an
+  `app-broker.sh status` on a low-risk PR, then `check`). If it may not, set `APP_BROKER_ACTORS` to
+  the identity the dispatch reports, or fall back to the store: the session pushes a request file
+  and a scheduled broker run acts on it.
 
-Until the owner answers, cloud runs neither merge nor post verdicts. Those PRs wait for the host.
+Until all three are done, cloud runs neither merge nor post verdicts. Those PRs wait for the host.
 
 ## Hourly cycle
 
@@ -224,15 +230,17 @@ force-pushes.
   3. Copy the state into the store and set `MODE=traveling` and `LEASE holder=none`.
   4. Push.
   5. Turn off the self-hosted-runner variable.
-  6. Write a local `TRAVELING` marker.
-  7. The owner then enables the routines.
+  6. Turn the travel guard on in each target repository (`travel-guard.sh on --app-id <App ID>`).
+  7. Write a local `TRAVELING` marker.
+  8. The owner then enables the routines.
 - **exit**, in order:
   1. The owner disables the routines first.
   2. Refuse while a cloud run holds an unexpired lease.
   3. Write `LEASE holder=host` and `MODE=local`, and push.
   4. Back up the local copies and copy the store's state back.
-  5. Turn the variable on and remove the marker.
-  6. Restart the host loops.
+  5. Turn the travel guard off in each target repository (`travel-guard.sh off`).
+  6. Turn the variable on and remove the marker.
+  7. Restart the host loops.
 - **status** prints the marker, the heartbeat age, held locks, the store's `MODE` and `LEASE`, and
   the variable.
 
@@ -246,7 +254,7 @@ force-pushes.
 | Duplicate dispatch | The orchestrator checks the label, ledger, PR and branch; the worker checks the PR and branch again |
 | A stale verdict | The status is bound to its SHA, and merging reads the status at the head |
 | A forged verdict | Only a status posted by the App counts. The broker checks the head and the App's status again before it merges |
-| The App key leaks | The key stays in the owner's environment secret. No session, prompt or store file ever holds the key or a token |
+| The App key leaks | The key stays in each repository's Actions secret. No session, prompt or store file ever holds the key or a token |
 | Main red | No merges until green |
 | Quota spent | `gh-budget.sh` reserves; skip the step |
 | A secret in state or a prompt | The toggle's scan; prompts carry numbers only |
@@ -260,4 +268,4 @@ force-pushes.
 | State store (#263) | A new private repository, one folder per target repository, plain git with a lease file and fast-forward-only pushes | A branch of the target repository, because a public repository would expose the decision queue |
 | How a label starts a worker (#264) | Each worker routine's GitHub event trigger on label events, with the label self-check, and the 30-fires-per-hour cap accepted | An Actions workflow that calls the routine's `/fire` endpoint, because it needs a routine token stored as a secret |
 | Merge and verdict identity (#265) | A dedicated GitHub App, created by the owner, who holds its key | The cloud session's own identity, because it is the PR author and cannot satisfy branch protection. Actions' `GITHUB_TOKEN`, because its merges start no workflows |
-| How a session acts as the App (#268) | Open. The proposed default is the App broker above | Handing a session the key or a token, because automation never handles the key. A component on the owner's host, because the host is off while traveling |
+| How a session acts as the App (#268) | An App broker workflow in each target repository, using that repository's App secrets; the verdict is a commit status; GitHub requires it from the App only while traveling (travel guard) | A central broker in the store, because it needs one more copy of the key. Handing a session the key or a token, because automation never handles the key. A component on the owner's host, because the host is off while traveling. A ruleset that is always on, because local merges at home do not post the status |
