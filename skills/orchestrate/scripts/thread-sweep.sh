@@ -41,7 +41,8 @@
 # Exit: 0 ok | 2 usage | 4 a read failed | 5 a resolve failed (rerun finishes it) |
 #       9 a resolve's outcome is unknown (rerun reconciles).
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal

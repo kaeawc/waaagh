@@ -29,7 +29,8 @@
 # Exit: 0 ok | 2 usage | 3 refused (id exists, unknown id, repo-scope upstream) | 9 the upstream
 #       issue was sent but its URL is unknown (see <state dir>/ops/upstream-<id>.json)
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority low

@@ -26,7 +26,8 @@
 # the readings; ps and lsof are found on PATH.
 # Exit: 0 ADMIT | 3 HOLD (load or memory below --min-free-gb) | 4 BACKOFF (memory) | 2 usage
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 

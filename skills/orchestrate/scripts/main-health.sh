@@ -35,7 +35,8 @@
 #         has no usable evidence: missing=<name>(pending|rerun-in-progress|not-in-window|no-run),...
 # Exit: 0 green (MAIN_RED cleared) | 1 red (MAIN_RED written) | 2 unknown (MAIN_RED left as it was)
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority high

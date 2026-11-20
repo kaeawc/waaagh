@@ -81,7 +81,8 @@
 # The journal and the merges.log line say api=rest.
 # Appends one line per attempt to <state dir>/merges.log.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority high

@@ -25,7 +25,8 @@
 # Exit: 0 complete | 1 truncated (more open PRs than --limit; the rows printed are valid) |
 #   3 unreadable (the gh-read.sh line is on stderr; no rows) | 2 usage
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal

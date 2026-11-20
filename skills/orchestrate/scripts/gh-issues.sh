@@ -33,7 +33,8 @@
 # root (PR side included) go straight to REST for 12 hours (orch_gh_api in _lib.sh).
 # Exit: 0 ok | 2 usage | 3-9 gh-read.sh's typed failure (see gh-read.sh -h).
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 # The caller's budget priority when it declared one (each caller runs this as a child).
