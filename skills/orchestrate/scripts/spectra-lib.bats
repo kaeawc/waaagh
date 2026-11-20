@@ -87,3 +87,13 @@ req() { bash -c 'source "$1/_lib.sh"; shift; orch_spectra_require "$@"' _ "$SCRI
   grep -qF 'https://github.com/kaeawc/spectra' "$ROOT/README.md"
   grep -qF 'orch_spectra_require' "$ROOT/skills/orchestrate/SKILL.md"
 }
+
+@test "host-load.md maps each debugging question to a spectra tool, and SKILL.md points there (#336)" {
+  doc="$ROOT/skills/orchestrate/host-load.md"
+  grep -qF '## Debugging load and processes with spectra' "$doc"
+  for c in 'spectra load' 'spectra lineage' 'spectra owner' 'spectra spawns' 'spectra jvm' 'spectra memory' 'spectra orphans'; do
+    grep -qF "$c" "$doc" || { echo "playbook lacks $c"; return 1; }
+  done
+  grep -qF 'never `gradle --stop`' "$doc"
+  grep -qF 'the playbook in `skills/orchestrate/host-load.md`' "$ROOT/skills/orchestrate/SKILL.md"
+}

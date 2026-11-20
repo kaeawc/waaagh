@@ -41,6 +41,29 @@ HOLD or BACKOFF turns the `dispatch=<n>` reason into `host-hold`.
 
 These are owner actions or waits. Nothing in this file kills, renices or quits a process.
 
+## Debugging load and processes with spectra
+
+A HOLD gives a cause and a hint. When the next step is not obvious, ask spectra (required, #329)
+instead of reaching for `ps`, `lsof` or `top`. Each CLI command takes `--json`; the MCP tools
+(`spectra-mcp`, registered by the plugin) answer the same questions from inside a session. Some
+tools are CLI-only until kaeawc/spectra#601 adds them to the MCP server.
+
+| Question | CLI | MCP tool | Then |
+|---|---|---|---|
+| Who is loading the host, by worktree and family? | `spectra load --root <worktree root>` | (CLI only until spectra#601) | As the cause table above |
+| What is one lane's process tree doing? | `spectra lineage <pid>`, `spectra process` | `process` (`tree`, `sample`) | A runaway child the lane started: message the lane to stop that PID |
+| Who holds a port, a file or a device path? | `spectra owner :8080`, `spectra owner <path>` | (CLI only until spectra#601) | Another lane's: leave it and pick another port or device |
+| Something keeps spawning short-lived processes | `spectra spawns --pid <pid> --duration 10s` | (CLI only until spectra#601) | Name the parent in the report; a lane's retry loop is the lane's to stop |
+| A Gradle or Kotlin daemon misbehaving | `spectra jvm` (`gc_stats`, `thread_dump`) | `jvm` | Let it idle out or stop that PID; never `gradle --stop` |
+| Memory pressure or swap | `spectra memory` | `memory` | Under the backoff line: start nothing, let lanes finish |
+| Out of file descriptors or PTYs | `spectra system` | `system` | Tell the owner; restart nothing yourself |
+| How has one PID's memory trended? | `spectra memtrace <pid>` | `metrics`, `process` (`history`; daemon) | Growing without bound: report the lane and PID |
+| What is left over after lanes finished? | `spectra orphans --root <worktree root>` | (CLI only until spectra#601) | The tick's `orphans` line (#332): kill nothing yourself |
+| What looks wrong at all? | `spectra whatswrong` | `diagnose`, `triage` | Follow its next steps; file a spectra issue when it cannot answer |
+
+Every row ends in one of: pause or message a lane, lower the lane cap, or tell the owner. Spectra
+never kills, and neither do you: only a lane stops the PIDs it recorded.
+
 ## Worktree budget
 
 Every worktree adds files for the indexer and the file-event daemon to watch. Removing 18 finished
