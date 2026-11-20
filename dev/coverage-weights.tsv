@@ -77,7 +77,8 @@ pr-merge-rest.bats	10
 pr-ready-behind.bats	11
 pr-ready-gaps.bats	6
 pr-ready-pages.bats	14
-pr-rest.bats	39
+pr-rest-parity.bats	26
+pr-rest.bats	13
 regen-merge-gaps.bats	3
 regen-merge.bats	4
 regression-gates.bats	11

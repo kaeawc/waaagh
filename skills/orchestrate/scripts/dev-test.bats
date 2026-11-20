@@ -110,3 +110,22 @@ fake_root() {
   [ "$status" -eq 2 ]
   [[ "$output" == *"no such suite: nope.bats"* ]]
 }
+
+@test "suites start slowest first: by dev/coverage-weights.tsv seconds, else by test count (#112)" {
+  fake_root
+  S="$R/skills/orchestrate/scripts"
+  rm "$S/probe.bats"
+  # Each suite appends its name when its first test starts; -j 1 runs them in the start order.
+  suite() { local i; for ((i = 1; i <= $2; i++)); do
+    printf '@test "%s %s" {\n  [ %s -gt 1 ] || echo %s >>"%s/started"\n}\n' "$1" "$i" "$i" "$1" "$R"; done >"$S/$1.bats"; }
+  suite many 3; suite few 1; suite some 2
+  run "$R/dev/test.sh" -j 1
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(tr '\n' ' ' <"$R/started")" = "many some few " ]
+  # A measured weight wins over the test count; a suite with no row keeps its count; a bad row is ignored.
+  printf '# suite\tseconds\nfew.bats\t40.5\nsome.bats\tslow\n' >"$R/dev/coverage-weights.tsv"
+  rm "$R/started"
+  run "$R/dev/test.sh" -j 1
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(tr '\n' ' ' <"$R/started")" = "few many some " ]
+}
