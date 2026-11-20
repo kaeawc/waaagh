@@ -18,7 +18,9 @@
 4. Stay inside your role's permissions. If the permission system denies a command, do not work
    around it: record it verbatim and continue with the next item.
 5. Never kill a process by name or pattern. Kill only a PID you started and recorded, and kill
-   those PIDs before you finish: leftover test processes keep the host loaded.
+   those PIDs before you finish: leftover test processes keep the host loaded. Then check with
+   `spectra orphans --root <your worktree>` (#332): stop any PID listed there that you recorded,
+   and name the rest in your report; never kill one you did not start.
 6. Use `git -C <worktree>` for every git command. Never loop git commands over a shell variable
    holding a list: the shell may be zsh, where `$var` does not word-split, and the command will
    run in the wrong checkout. Never edit a running shell script in place; write it beside and `mv`.

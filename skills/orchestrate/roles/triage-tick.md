@@ -56,6 +56,11 @@ from memory (advisory workflows, ready label, device slot types).
      Report the `dispatch` queue as waiting on the host, with the cause; for `cause=indexing` the
      owner action from `host-load.sh` (fewer worktrees, Spotlight exclusion). `host unknown` (the
      read failed) holds nothing: dispatch is reported as usual.
+   - `orphans=<n>` (#332): the `orphans <n> worktrees=<name>(<n>),...` line counts leftover
+     processes under the lane worktrees (`spectra orphans`: parent gone, cwd in a worktree). Report
+     them by worktree; if that lane is still running, message it to stop the PIDs it recorded. A
+     `(removed:<n>)` worktree has no lane left: report the PIDs to the owner. Kill nothing yourself.
+     `orphans unknown` (spectra missing or failed) holds nothing.
    - `issue-list-truncated`: the `dispatch` line ends `list=truncated@1000`; the issue read hit its
      limit, so the count may be short. Report it; do not read it as "nothing left to dispatch".
    - `dispatch-stale=<n>` / `dispatch-capped=<m>` (#259): the `dispatch-stale redispatch=… capped=…

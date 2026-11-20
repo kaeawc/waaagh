@@ -295,6 +295,35 @@ host_stub() {
   [[ "$(snap_line host)" == "host BACKOFF "* ]]
 }
 
+@test "leftover lane processes are reported from spectra orphans, by worktree; nothing is killed (#332)" {
+  echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
+  # No worktree root: no orphans line at all.
+  run snap
+  [ "$status" -eq 0 ]
+  [[ "$output" != *$'\n'orphans* ]]
+  export ORCHESTRATE_WORKTREE_ROOT="$BATS_TEST_TMPDIR/wt"; mkdir -p "$ORCHESTRATE_WORKTREE_ROOT"
+  run snap
+  [ "$(snap_line orphans)" = "orphans 0 worktrees=-" ]
+  [[ "${lines[0]}" != *orphans=* ]]
+  grep -qx "orphans --json --root $(cd "$ORCHESTRATE_WORKTREE_ROOT" && pwd -P)" "$BATS_TEST_TMPDIR/spectra-calls"
+  # Two worktrees with leftovers (one already removed); a by-design daemon is not counted.
+  jq -n '{total: 3, groups: [
+      {worktree: "lane-a", worktree_removed: false, processes: [{pid: 11, command: "node"}, {pid: 12, command: "java"}]},
+      {worktree: "lane-b", worktree_removed: true, processes: [{pid: 13, command: "qemu-system-aarch64"}]},
+      {worktree: "lane-c", worktree_removed: false, processes: [{pid: 14, command: "watchman", daemon_by_design: true}]}]}' \
+    >"$BATS_TEST_TMPDIR/spectra-orphans.json"
+  run snap
+  [ "$status" -eq 0 ]
+  [ "$(snap_line orphans)" = "orphans 3 worktrees=lane-a(2),lane-b(removed:1)" ]
+  [[ "${lines[0]}" == "verdict act "*"orphans=3"* ]]
+  # spectra failing, or missing, is unknown and holds nothing.
+  SPECTRA_STUB_FAIL=1 run snap
+  [ "$(snap_line orphans)" = "orphans unknown" ]
+  [[ "${lines[0]}" != *orphans=* ]]
+  SPECTRA="$BATS_TEST_TMPDIR/none" run snap
+  [ "$(snap_line orphans)" = "orphans unknown" ]
+}
+
 @test "the real host-load.sh over a loaded host holds dispatch (#114)" {
   echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
   SPECTRA_STUB_LOAD1=99 run snap
