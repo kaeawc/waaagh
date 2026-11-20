@@ -1,4 +1,5 @@
 # suite<TAB>seconds under bashcov at -j 1 (dev/coverage.sh --weights); a suite with no row weighs its @test count
+app-broker.bats	3
 bench-cases.bats	74
 blocked-candidates.bats	8
 brief-size.bats	5

@@ -5,6 +5,7 @@
 skills/orchestrate/scripts/_build_dirs.sh	94
 skills/orchestrate/scripts/_lib.sh	94
 skills/orchestrate/scripts/_slots.sh	99
+skills/orchestrate/scripts/app-broker.sh	85
 skills/orchestrate/scripts/bench.sh	99
 skills/orchestrate/scripts/boot-slot.sh	85
 skills/orchestrate/scripts/branch-idle.sh	99
@@ -19,9 +20,9 @@ skills/orchestrate/scripts/device-recheck.sh	98
 skills/orchestrate/scripts/excerpt.sh	99
 skills/orchestrate/scripts/failure-triage.sh	90
 skills/orchestrate/scripts/fingerprint.sh	95
+skills/orchestrate/scripts/freeze.sh	97
 skills/orchestrate/scripts/gate-slot.sh	96
 skills/orchestrate/scripts/gh-budget.sh	98
-skills/orchestrate/scripts/freeze.sh	97
 skills/orchestrate/scripts/gh-issues.sh	95
 skills/orchestrate/scripts/gh-read.sh	92
 skills/orchestrate/scripts/gh-rest-pr.sh	96
@@ -49,6 +50,7 @@ skills/orchestrate/scripts/pr-footer.sh	99
 skills/orchestrate/scripts/pr-intake.sh	92
 skills/orchestrate/scripts/pr-merge.sh	97
 skills/orchestrate/scripts/pr-ready.sh	98
+skills/orchestrate/scripts/push-verify.sh	80
 skills/orchestrate/scripts/regen-merge.sh	94
 skills/orchestrate/scripts/relay.sh	94
 skills/orchestrate/scripts/repair-writer.sh	94
@@ -60,9 +62,9 @@ skills/orchestrate/scripts/shipped-blocked.sh	99
 skills/orchestrate/scripts/supersede-check.sh	90
 skills/orchestrate/scripts/thread-resolve.sh	97
 skills/orchestrate/scripts/thread-sweep.sh	94
+skills/orchestrate/scripts/travel-guard.sh	85
 skills/orchestrate/scripts/triage-tick.sh	94
 skills/orchestrate/scripts/update-pace.sh	97
 skills/orchestrate/scripts/validate.sh	96
 skills/orchestrate/scripts/verify-on-main.sh	94
 skills/orchestrate/scripts/wt-cleanup.sh	95
-skills/orchestrate/scripts/push-verify.sh	80
