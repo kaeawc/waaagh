@@ -356,6 +356,16 @@ orch_spectra_require() {
     return 1
   fi
 }
+# orch_worktree_root: where this checkout's lane worktrees live (ORCHESTRATE_WORKTREE_ROOT, else
+# <main checkout>/.claude/worktrees when it exists), resolved; returns 1 when there is none.
+orch_worktree_root() {
+  local r=${ORCHESTRATE_WORKTREE_ROOT:-} common
+  if [[ -z "$r" ]] && common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    [[ ! -d "$common/../.claude/worktrees" ]] || r="$common/../.claude/worktrees"
+  fi
+  [[ -n "$r" && -d "$r" ]] || return 1
+  (cd "$r" && pwd -P)
+}
 # orch_spectra ARGS...: run spectra with ARGS (after orch_spectra_require). Every spectra call in
 # the scripts goes through here, so tests stub one place (spectra-lib.bats lints it).
 orch_spectra() { "$(orch_spectra_bin)" "$@"; }

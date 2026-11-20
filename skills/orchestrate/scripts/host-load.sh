@@ -35,7 +35,7 @@ case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esa
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 
-root=${ORCHESTRATE_WORKTREE_ROOT:-} top=5 factor=1.5 min_gb=8 backoff_gb=4 third_gb=12
+root="" top=5 factor=1.5 min_gb=8 backoff_gb=4 third_gb=12
 num() { [[ "$2" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "host-load.sh: bad $1: $2" >&2; exit 2; }; }
 while (($#)); do
   case "$1" in
@@ -50,10 +50,8 @@ while (($#)); do
   esac
 done
 [[ "$top" =~ ^[0-9]+$ ]] || { echo "host-load.sh: bad --top: $top" >&2; exit 2; }
-if [[ -z "$root" ]] && common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-  [[ ! -d "$common/../.claude/worktrees" ]] || root=$(cd "$common/../.claude/worktrees" && pwd -P)
-fi
-[[ -z "$root" || ! -d "$root" ]] || root=$(cd "$root" && pwd -P)
+if [[ -z "$root" ]]; then root=$(orch_worktree_root) || root=""
+elif [[ -d "$root" ]]; then root=$(cd "$root" && pwd -P); fi
 
 # --- readings (spectra) -------------------------------------------------------------------------
 orch_spectra_require load || exit 5

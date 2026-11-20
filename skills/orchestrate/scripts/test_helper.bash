@@ -79,11 +79,16 @@ seed_origin_copy() {
 # that reaches spectra without stubbing it gets spectra's "not found" error, on a Mac that has
 # spectra installed and on CI alike.
 export SPECTRA="${BATS_TEST_TMPDIR:-${BATS_FILE_TMPDIR:-/nonexistent}}/bin/spectra"
+# Nor the real lane worktrees: the checkout running the tests may have a .claude/worktrees of its
+# own, CI's does not. A suite that wants a worktree root sets ORCHESTRATE_WORKTREE_ROOT or unsets it.
+export ORCHESTRATE_WORKTREE_ROOT="${BATS_TEST_TMPDIR:-${BATS_FILE_TMPDIR:-/nonexistent}}/no-worktree-root"
 # stub_spectra: that spectra. `capabilities --json` declares load and orphans. `load --json` prints
 # an idle host: SPECTRA_STUB_LOAD1 (default 0.5), SPECTRA_STUB_CPUS (8), SPECTRA_STUB_FREE_GB (32;
 # "null" when memory could not be read), read at each call, with $BATS_TEST_TMPDIR/spectra-load.json
-# (cause, top_cpu, top_rss, families, ...) merged over it when it exists. SPECTRA_STUB_FAIL=1 makes
-# load print an error and exit 1. Every call is appended to $BATS_TEST_TMPDIR/spectra-calls.
+# (cause, top_cpu, top_rss, families, ...) merged over it when it exists. `orphans --json` prints
+# none, or $BATS_TEST_TMPDIR/spectra-orphans.json (and exits 3, as spectra does when it finds some).
+# SPECTRA_STUB_FAIL=1 makes load and orphans print an error and exit 1. Every call is appended to
+# $BATS_TEST_TMPDIR/spectra-calls.
 stub_spectra() {
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   cat >"$BATS_TEST_TMPDIR/bin/spectra" <<'STUB'
@@ -98,6 +103,10 @@ case "${1:-}" in
     jq -n --argjson l "${SPECTRA_STUB_LOAD1:-0.5}" --argjson c "${SPECTRA_STUB_CPUS:-8}" --argjson g "${SPECTRA_STUB_FREE_GB:-32}" \
       --argjson o "$over" '{verdict: "admit", load1: $l, cpus: $c, available_gb: $g,
         cause: {kind: "none", detail: "host is idle"}, top_cpu: [], top_rss: [], families: []} + $o' ;;
+  orphans)
+    [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: orphans failed" >&2; exit 1; }
+    if [ -f "$BATS_TEST_TMPDIR/spectra-orphans.json" ]; then cat "$BATS_TEST_TMPDIR/spectra-orphans.json"; exit 3; fi
+    echo '{"roots":[],"groups":[],"total":0}' ;;
   *) echo "spectra stub: unexpected call: $*" >&2; exit 9 ;;
 esac
 STUB

@@ -56,6 +56,11 @@
 #       host <ADMIT|HOLD|BACKOFF> cause=<indexing|lanes|other|-> free_gb=<g|unknown> load=<l> limit=<x>
 #            | host unknown      lane admission on this host (host-load.sh --top 3; the command is
 #                  ORCHESTRATE_HOST_LOAD, default host-load.sh beside this script)
+#       orphans <n> worktrees=<name>(<n>)[,...]|- | orphans unknown
+#                  leftover processes under the lane worktrees (spectra orphans --root <worktree
+#                  root>, #332): parent gone, cwd in a worktree; by-design daemons left out. A
+#                  removed worktree is named <name>(removed:<n>). Evidence only: nothing here kills.
+#                  Omitted with no worktree root; "unknown" when spectra is missing or fails.
 #       holds n=<k> stale=<m>      merge-loop holds in <state dir>/holds (hold.sh); omitted with none.
 #                  Then one line per hold older than --hold-hours (default
 #                  ORCHESTRATE_HOLD_STALE_HOURS, 12) or of unknown age (an old-format line):
@@ -75,6 +80,8 @@
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
 #     issue-list-truncated, dispatch-stale=<n> (`cloud-dispatch.sh expire --issue N`, then dispatch
 #     it again), dispatch-capped=<m> (route it to a local lane, or read why its sessions ended),
+#     orphans=<n> (leftover lane processes: tell the lane that started them to stop the PIDs it
+#     recorded, or report them; kill nothing yourself),
 #     host-hold (in place of dispatch=<n> while the host line is HOLD or BACKOFF; "host unknown"
 #     holds nothing), cron-expiring (under 24h left), resolve-now=<n> (PRs whose threads only need
 #     resolving: the local orchestrator resolves them, they are not repair targets), stalled=<n> (PRs
@@ -514,6 +521,21 @@ if [[ "$dispatch" =~ ^[0-9]+$ ]] && ((dispatch > 0)) && [[ -z "$device" || "$fre
   case "$host" in "host HOLD "* | "host BACKOFF "*) reasons+=("host-hold") ;; *) reasons+=("dispatch=$dispatch") ;; esac
 fi
 
+# Leftover lane processes (spectra orphans, #332): evidence for the report; nothing here kills.
+orphans=""
+if wtroot=$(orch_worktree_root); then
+  orphans="orphans unknown"
+  if orch_spectra_require orphans 2>/dev/null; then
+    oj=$(orch_spectra orphans --json --root "$wtroot" 2>/dev/null) || true   # exit 3: some found
+    o=$(jq -r '(.groups | arrays) as $g
+      | [$g[] | {w: .worktree, rm: (.worktree_removed // false), n: ([.processes[]? | select(.daemon_by_design | not)] | length)} | select(.n > 0)] as $l
+      | "orphans \($l | map(.n) | add // 0) worktrees=" + (if ($l | length) == 0 then "-"
+          else ($l | map(if .rm then "\(.w)(removed:\(.n))" else "\(.w)(\(.n))" end) | join(",")) end)' <<<"$oj" 2>/dev/null) || o=""
+    [[ -z "$o" ]] || orphans=$o
+  fi
+  case "$orphans" in "orphans 0 "* | "orphans unknown") ;; *) reasons+=("orphans=$(cut -d' ' -f2 <<<"$orphans")") ;; esac
+fi
+
 # Session cron age (session crons expire after 7 days).
 cron=none
 if [[ -f "$cronf" ]] && c=$(sed -n 1p "$cronf") && [[ "$c" =~ ^[0-9]+$ ]]; then
@@ -592,6 +614,7 @@ echo "slots $slots"
 echo "cron $cron"
 echo "$threads"
 echo "$host"
+[[ -z "$orphans" ]] || echo "$orphans"
 [[ -z "$holds_line" ]] || echo "$holds_line"
 [[ -z "$stale_holds" ]] || sed 's/^/hold-stale /' <<<"$stale_holds"
 [[ -z "$repairs_line" ]] || echo "$repairs_line"
