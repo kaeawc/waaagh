@@ -31,8 +31,9 @@ setup() {
 
 json() { printf '%s\n' "$2" >"$FX/$1.json"; }
 sc() { "$SCRIPTS/supersede-check.sh" --repo o/r "$@"; }
-# edit REPO FILE LINE TEXT: replace line LINE of FILE with TEXT (which may hold \n).
-edit() { awk -v l="$3" -v t="$4" 'NR == l { print t; next } { print }' "$1/$2" >"$1/$2.new" && mv "$1/$2.new" "$1/$2"; }
+# edit REPO FILE LINE TEXT: replace line LINE of FILE with TEXT (which may hold \n). TEXT goes
+# through the environment, not awk -v: BSD awk (macOS) refuses a newline in a -v value.
+edit() { T="$4" awk -v l="$3" 'NR == l { print ENVIRON["T"]; next } { print }' "$1/$2" >"$1/$2.new" && mv "$1/$2.new" "$1/$2"; }
 commit() { git -C "$1" commit -qam "$2" ${3:+-m "$3"}; }
 # The PR edits line 2 of f.txt and g.txt; main then rewrites both lines in later merged PRs.
 conflicting_main() { # F_SUBJECT F_BODY G_SUBJECT
