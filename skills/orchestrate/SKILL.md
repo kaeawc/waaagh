@@ -514,7 +514,8 @@ their wall caps, and lanes re-run them, which makes it worse.
   spectra issue when it cannot answer.
 - **Symptoms.** A load average well above the core count (`uptime`); hundreds of test, bundler,
   Gradle or Xcode processes; gates timing out that pass alone. To see who is responsible:
-  `spectra load --root <worktree root>` (the cause, by worktree and process family).
+  `spectra load --root <worktree root>` (the cause, by worktree and process family). For anything
+  deeper, the playbook in `skills/orchestrate/host-load.md` maps each question to a spectra tool.
 - **Every gate goes through `"$SCRIPTS/gate-slot.sh" -- <command>`**: a host-wide semaphore
   (default 3, `ORCHESTRATE_GATE_SLOTS`), bounded wait (exit 75 = no slot; report it, do not
   retry in a loop). It sources `<state dir>/gate-env.sh` first, so worker, timeout and retry caps
