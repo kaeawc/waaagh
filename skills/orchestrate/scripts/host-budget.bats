@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # Host load attribution (host-load.sh, read from a stubbed spectra) and the worktree budget and
-# live-cwd guard (wt-cleanup.sh, against stubbed lsof, du and gh on PATH). Run: bats host-budget.bats
+# live-cwd guard (wt-cleanup.sh, against a stubbed spectra and du and gh on PATH). Run: bats host-budget.bats
 
 setup() {
   load test_helper
@@ -9,20 +9,7 @@ setup() {
   mkdir -p "$BIN" "$FX"
   export FX PATH="$BIN:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   unset ORCHESTRATE_WORKTREE_ROOT
-  # lsof: this process's own cwd (a trustworthy listing) unless $FX/no-self, then $FX/cwds
-  # ("PID<TAB>path" lines); from call number $FX/late-at on, $FX/late-cwds too.
-  cat >"$BIN/lsof" <<'STUB'
-#!/usr/bin/env bash
-n=$(( $(cat "$FX/lsof-n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$FX/lsof-n"
-[ -f "$FX/no-self" ] || printf 'p%s\nn%s\n' "$$" "$(pwd -P)"
-for f in cwds late-cwds; do
-  [ -f "$FX/$f" ] || continue
-  [ "$f" = cwds ] || [ "$n" -ge "$(cat "$FX/late-at")" ] || continue
-  awk -F'\t' '{ print "p" $1; print "n" $2 }' "$FX/$f"
-done
-STUB
-  # ps: the table in $FX/ps ("pid pcpu rss comm").
-  printf '#!/bin/sh\ncat "$FX/ps"\n' >"$BIN/ps"
+  stub_spectra   # spectra owner --under answers "who works in this tree" (#331)
   # du: "<KB><TAB>path", KB from $FX/du-kb (default 1048576 = 1 GB per tree).
   printf '#!/bin/sh\nprintf "%%s\\t%%s\\n" "$(cat "$FX/du-kb" 2>/dev/null || echo 1048576)" "$2"\n' >"$BIN/du"
   # gh: `pr list --head B` prints $FX/pr-B (default []).
@@ -129,9 +116,9 @@ mkwt() { # name: a finished worktree (committed, pushed, idle 3 days)
 wtc() { "$SCRIPTS/wt-cleanup.sh" --repo-dir "$M" "$@"; }
 verdict() { printf '%s\n' "$output" | awk -F'\t' -v p="$BATS_TEST_TMPDIR/$1" '$2 == p { print $1 "\t" $3 }'; }
 
-@test "wt-cleanup keeps a worktree that any process (per lsof) has as its cwd, or a cwd below it" {
+@test "wt-cleanup keeps a worktree that any process (per spectra owner --under) has as its cwd, or a cwd below it" {
   wt_repo; mkwt idle; mkwt home; mkwt deep
-  printf '700\t%s\n701\t%s\n' "$BATS_TEST_TMPDIR/home" "$BATS_TEST_TMPDIR/deep/sub" >"$FX/cwds"
+  printf '700\t%s\n701\t%s\n' "$BATS_TEST_TMPDIR/home" "$BATS_TEST_TMPDIR/deep/sub" >"$BATS_TEST_TMPDIR/spectra-cwds"
   run wtc --apply
   [ "$status" -eq 0 ]
   [[ "$(verdict idle)" == removed* ]]
@@ -142,25 +129,27 @@ verdict() { printf '%s\n' "$output" | awk -F'\t' -v p="$BATS_TEST_TMPDIR/$1" '$2
 
 @test "wt-cleanup reads cwds again right before removing: a session that entered meanwhile keeps it" {
   wt_repo; mkwt entered
-  printf '800\t%s\n' "$BATS_TEST_TMPDIR/entered" >"$FX/late-cwds"; echo 2 >"$FX/late-at"
+  printf '800\t%s\n' "$BATS_TEST_TMPDIR/entered" >"$BATS_TEST_TMPDIR/spectra-late-cwds"; echo 2 >"$BATS_TEST_TMPDIR/spectra-late-at"
   run wtc
   [[ "$(verdict entered)" == remove* ]]
-  rm -f "$FX/lsof-n"
+  rm -f "$BATS_TEST_TMPDIR/spectra-owner-n"
   run wtc --apply
   [[ "$(verdict entered)" == $'keep\ta process is working inside it' ]]
   [ -d "$BATS_TEST_TMPDIR/entered" ]
 }
 
-@test "wt-cleanup distrusts an lsof listing without its own cwd: /proc next, else nothing is removed" {
+@test "wt-cleanup removes nothing when spectra cannot say who works in a tree (#331)" {
   wt_repo; mkwt a
-  touch "$FX/no-self"
-  # /proc stand-in: one process whose cwd is the worktree.
-  P="$BATS_TEST_TMPDIR/proc"; mkdir -p "$P/self" "$P/900"; ln -s "$BATS_TEST_TMPDIR/a" "$P/900/cwd"
-  ORCHESTRATE_PROC_DIR="$P" run wtc --apply
-  [[ "$(verdict a)" == $'keep\ta process is working inside it' ]]
-  ORCHESTRATE_PROC_DIR="$BATS_TEST_TMPDIR/no-proc" run wtc --apply
-  [[ "$(verdict a)" == $'keep\tcannot check processes (no lsof or /proc)' ]]
+  : >"$BATS_TEST_TMPDIR/spectra-cwds"
+  SPECTRA_STUB_FAIL=1 run wtc --apply
+  [[ "$(verdict a)" == $'keep\tcannot check processes: spectra owner --under failed' ]]
+  SPECTRA="$BATS_TEST_TMPDIR/none" run wtc --apply
+  [[ "$(verdict a)" == $'keep\tcannot check processes: spectra owner --under failed' ]]
   [ -d "$BATS_TEST_TMPDIR/a" ]
+  # Spectra is asked about the worktrees and the lane build root, not about every process.
+  run wtc --apply
+  [[ "$(verdict a)" == removed* ]]
+  grep -q "^owner --under --json .*$BATS_TEST_TMPDIR/a" "$BATS_TEST_TMPDIR/spectra-calls"
 }
 
 @test "wt-cleanup reports the worktree budget by count and size, exit 3 when over" {
@@ -173,7 +162,7 @@ verdict() { printf '%s\n' "$output" | awk -F'\t' -v p="$BATS_TEST_TMPDIR/$1" '$2
   [ "$status" -eq 3 ]
   [[ "$output" == *$'over budget (size): live 3 worktrees (max 5), 6.0 GB (max 5)'* ]]
   # Removing the finished ones brings it back within budget.
-  printf '1\t%s\n' "$BATS_TEST_TMPDIR/w3" >"$FX/cwds"
+  printf '1\t%s\n' "$BATS_TEST_TMPDIR/w3" >"$BATS_TEST_TMPDIR/spectra-cwds"
   run wtc --max-count 2 --max-gb 5 --apply
   [ "$status" -eq 0 ]
   [[ "$output" == *$'budget\t-\twithin budget: live 1 worktrees (max 2), 2.0 GB (max 5)'* ]]

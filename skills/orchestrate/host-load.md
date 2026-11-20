@@ -203,11 +203,12 @@ build overlapped. The lane count is the wrong unit; booted devices and boots per
 A cleanup once removed the worktree a live orchestrator session was using as its working
 directory; the session lost its cwd until the directory was recreated. `wt-cleanup.sh` therefore:
 
-- keeps any worktree that is a process's working directory, or contains one (`lsof -d cwd`;
-  `/proc/<pid>/cwd` when lsof is missing or its listing does not even include the script's own
-  cwd);
-- reads the working directories again immediately before each `git worktree remove`;
-- removes nothing when neither lsof nor `/proc` can be read;
+- keeps any worktree that is a process's working directory, or contains one, as spectra reports
+  it (`spectra owner --under <worktrees> <build root>`, #331);
+- asks again for that one tree immediately before each `git worktree remove`;
+- removes nothing when spectra cannot answer (missing, too old for `--under`, or failing).
+  Spectra's "none visible, some processes unreadable" (other users' processes) counts as none:
+  only this user's processes work in this user's worktrees;
 - never passes `--force`, so git also refuses trees with changes.
 
 A session that must keep its worktree regardless (for example while it sits idle for hours)

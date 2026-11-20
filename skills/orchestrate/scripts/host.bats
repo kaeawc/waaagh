@@ -4,6 +4,7 @@
 
 setup() {
   load test_helper
+  stub_spectra   # wt-cleanup and shared-build ask spectra who works in a tree (#331)
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   export ORCHESTRATE_SLOT_DIR="$BATS_TEST_TMPDIR/slots" SLOT_POLL=0.05 ORCHESTRATE_BUILD_ROOT="$BATS_TEST_TMPDIR/build"
   unset ORCHESTRATE_GATE_ENV ORCHESTRATE_BUILD_DIRS ORCHESTRATE_LANE_ID

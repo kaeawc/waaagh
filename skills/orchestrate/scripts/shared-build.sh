@@ -36,6 +36,8 @@
 set -euo pipefail
 # This script's directory with no subshell or dirname process: every script start pays for it (#112).
 case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
+# shellcheck source=_lib.sh
+source "$here/_lib.sh"
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 # shellcheck source=_build_dirs.sh
@@ -202,5 +204,5 @@ find "$stage" -mindepth 1 ! -name .used -exec chmod a-w {} + 2>/dev/null || true
 mv "$stage" "$final"
 lock_release
 # Keep shared builds within the cap; the build just made is the newest and always stays.
-if cwds=$(proc_cwds | cut -f2-); then shared_builds_sweep yes "$cwds" "$final" >&2; fi
+if cwds=$(proc_cwds "$(build_root)" | cut -f2-); then shared_builds_sweep yes "$cwds" "$final" >&2; fi
 finish built "$final"
