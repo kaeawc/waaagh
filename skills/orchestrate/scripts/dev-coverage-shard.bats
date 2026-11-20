@@ -199,7 +199,9 @@ JSON
   y=$(cat "$wf")
   n=$(sed -n 's/.*dev\/coverage.sh --shard \${{ matrix.shard }}\/\([0-9][0-9]*\).*/\1/p' "$wf")
   [ -n "$n" ]
-  [[ "$y" == *"shard: [$(seq -s ', ' 1 "$n")]"* ]] || { echo "matrix does not list shards 1..$n"; false; }
+  # The list built without seq -s, which ends with a separator on macOS.
+  want=$(seq 1 "$n" | paste -sd, - | sed 's/,/, /g')
+  [[ "$y" == *"shard: [$want]"* ]] || { echo "matrix does not list shards 1..$n"; false; }
   [[ "$y" == *"name: coverage-shard-\${{ matrix.shard }}"* ]]
   [[ "$y" == *"pattern: coverage-shard-*"* ]]
   [[ "$y" == *"dev/coverage.sh --merge shards/*"* ]]
