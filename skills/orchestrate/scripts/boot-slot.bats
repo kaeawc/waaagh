@@ -18,10 +18,14 @@ echo "$*" >>"$LOADF.calls"
 l=$(cat "$LOADF" 2>/dev/null || true)
 [[ "$l" != unreadable ]] || exit 1
 printf 'verdict\tADMIT\tok\nload\t%s\t16 CPUs, limit 24.0\n' "$l"
+# Device rows from $LOADF.devices ("<booted> <recent>") and $LOADF.own (this lane's booted count).
+if [[ -f "$LOADF.devices" ]]; then read -r b r <"$LOADF.devices"; printf 'devices\t%s\t%s\t300\n' "$b" "$r"; fi
+if [[ -f "$LOADF.own" ]]; then printf 'devices-root\t/wt/lane\t%s\t0\n' "$(cat "$LOADF.own")"; fi
 awk -v l="$l" 'BEGIN { exit (l + 0 >= 24) ? 3 : 0 }'
 STUB
   chmod +x "$T/stubs/host-load.sh"
   echo 5.20 >"$LOADF"
+  echo "0 0" >"$LOADF.devices"   # no devices booted
 }
 
 boot() { "$SCRIPTS/boot-slot.sh" --settle 0 "$@"; }
@@ -38,8 +42,8 @@ teardown() { release a; release b; }
   run boot -- bash -c 'exit 7'
   [ "$status" -eq 7 ]
   [ "$(holders)" -eq 0 ]
-  # Only the load is asked for: no process tables.
-  [ "$(sort -u "$LOADF.calls")" = "--top 0" ]
+  # Only the load and device rows are asked for (no process tables), for this lane's worktree.
+  [[ "$(sort -u "$LOADF.calls")" == "--top 0"* ]]
 }
 
 @test "boots go one at a time; the second waits for the first" {
@@ -68,7 +72,7 @@ teardown() { release a; release b; }
   echo 48.00 >"$LOADF"
   run boot --wait 0 -- true
   [ "$status" -eq 75 ]
-  [[ "$output" == *"load 48.00 still at or above 48.0 after 0s"* ]]
+  [[ "$output" == *"still waiting for the load to fall (48.00, limit 48.0) after 0s"* ]]
   echo 20.00 >"$LOADF"
   run boot --wait 0 --load-factor 1 -- true
   [ "$status" -eq 75 ]
@@ -120,6 +124,39 @@ teardown() { release a; release b; }
   [ "$status" -eq 75 ]
   release a
   wait
+}
+
+@test "a boot waits while too many devices are booted or booted recently, and names a lane's own device (#334)" {
+  # A spectra too old to count devices is named, and the gate is the load alone.
+  rm "$LOADF.devices"
+  run boot -- bash -c 'echo booted'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spectra reports no device counts"* ]]
+  # The host has 4 devices booted (the default max): wait, then go once one is shut down.
+  echo "4 0" >"$LOADF.devices"
+  boot -- bash -c "echo booted >'$T/out'" 2>"$T/err" &
+  await 'grep -c "waiting for a device to shut down (4 booted, max 4)" "$T/err" >/dev/null'
+  [ ! -e "$T/out" ]
+  echo "3 0" >"$LOADF.devices"
+  wait
+  [ "$(cat "$T/out")" = booted ]
+  # Three boots in the window (the default max): wait; --max-boots raises it.
+  echo "1 3" >"$LOADF.devices"
+  run boot --wait 0 -- true
+  [ "$status" -eq 75 ]
+  [[ "$output" == *"still waiting for recent boots to settle (3 in 300s, max 3) after 0s"* ]]
+  run boot --wait 0 --max-boots 4 -- true
+  [ "$status" -eq 0 ]
+  ORCHESTRATE_BOOT_MAX_BOOTED=1 run boot --wait 0 --max-boots 9 -- true
+  [ "$status" -eq 75 ]
+  # This lane already has a device booted: said once, and it does not block the boot.
+  echo "1 0" >"$LOADF.devices"; echo 1 >"$LOADF.own"
+  run boot -- bash -c 'echo booted'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"this lane already has 1 device(s) booted: keep one booted device per lane"* ]]
+  [[ "$output" != *"no device counts"* ]]
+  run boot --max-booted 0 -- true
+  [ "$status" -eq 2 ]
 }
 
 @test "usage, and the briefs and docs send device boots through the gate" {

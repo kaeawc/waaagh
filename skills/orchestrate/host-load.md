@@ -185,8 +185,13 @@ build overlapped. The lane count is the wrong unit; booted devices and boots per
   `--load-factor`, `ORCHESTRATE_BOOT_LOAD_FACTOR`), and the slot is kept 30 seconds afterwards
   (`--settle`) so the next boot does not land on this one's start-up. Bounded wait (`--wait`,
   default 900 seconds); exit 75 means it did not start: report it, do not retry in a loop.
+- **It also counts devices** (spectra's `devices` block, kaeawc/spectra#602, read through
+  `host-load.sh`'s `devices` rows): a boot waits while the host has 4 or more devices booted
+  (`--max-booted`, `ORCHESTRATE_BOOT_MAX_BOOTED`) or 3 or more booted in the last 5 minutes
+  (`--max-boots`, `ORCHESTRATE_BOOT_MAX_RECENT`), as well as while the load is high (#334).
 - **One booted device per lane.** A matrix over runtimes or devices runs them one at a time,
-  shutting each down before booting the next.
+  shutting each down before booting the next. `boot-slot.sh` says so when the lane's own worktree
+  already has a device booted.
 - **The gate is in the lane's brief**, not left to the orchestrator noticing a spike
   (`roles/verification.md`, `roles/verify-batch.md`).
 - **On a spike, pause lanes; do not abort them.** Message the running device lanes to stop
