@@ -30,7 +30,8 @@
 # Exit: 0 ok | 3 conflict | 4 the open PRs (check, add) or an issue (closed: the others are still
 #       printed) could not be read; no verdict, see gh-read.sh | 2 usage
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal

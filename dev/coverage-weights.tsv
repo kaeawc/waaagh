@@ -62,8 +62,10 @@ loops.bats	5
 main-health-auto-rerun.bats	8
 main-health-reruns.bats	4
 merge-holds.bats	11
-merge-queue-gaps.bats	27
-merge-queue.bats	24
+merge-queue-gaps.bats	14
+merge-queue-recovery.bats	12
+merge-queue-review.bats	13
+merge-queue.bats	12
 merge-selection.bats	6
 merge-sensitive-gaps.bats	7
 merge-sensitive.bats	10
@@ -75,7 +77,8 @@ pr-merge-rest.bats	10
 pr-ready-behind.bats	11
 pr-ready-gaps.bats	6
 pr-ready-pages.bats	14
-pr-rest.bats	39
+pr-rest-parity.bats	26
+pr-rest.bats	13
 regen-merge-gaps.bats	3
 regen-merge.bats	4
 regression-gates.bats	11
@@ -92,7 +95,8 @@ reviewed-drafts.bats	10
 scripts-dir.bats	10
 selftest-lanes.bats	6
 selftest-ops.bats	11
-selftest-pr.bats	24
+selftest-pr-merge.bats	10
+selftest-pr.bats	14
 session-topology.bats	7
 shipped-blocked.bats	11
 slot-race.bats	7

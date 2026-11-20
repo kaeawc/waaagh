@@ -25,7 +25,8 @@
 # its worktree whatever happens locks it: `git worktree lock --reason "<session>" <path>`.
 # Exit: 0 | 3 over the worktree budget | 2 usage
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 # shellcheck source=_build_dirs.sh

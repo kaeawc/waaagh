@@ -34,7 +34,8 @@
 # Exit: CMD's exit code | 75 another lane's build not done within --wait | 1 an --artifact missing
 #       | 2 usage
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 # shellcheck source=_build_dirs.sh

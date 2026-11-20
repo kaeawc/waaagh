@@ -23,7 +23,8 @@
 # Receipt (JSON, schema 1): key, command, env_signature, fingerprint_before, fingerprint_after,
 #   exit, result, log, excerpt, runner, verification, started_at, finished_at, finished_epoch.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 
