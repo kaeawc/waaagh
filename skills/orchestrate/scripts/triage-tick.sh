@@ -536,7 +536,10 @@ for d in "$(slot_root)"/{gate,heavy,boot}/slot-*; do
   [[ -f "$d/holder" ]] && slot_live "$d" || continue
   [[ -n "$(find "$d/holder" -mmin "+$((stall_min - 1))" 2>/dev/null)" ]] || continue
   p=$(sed -n 1p "$d/holder") lbl=$(sed -n 3p "$d/holder")
-  m=$(( ($(date +%s) - $(stat -f %m "$d/holder" 2>/dev/null || stat -c %Y "$d/holder")) / 60 ))
+  # GNU stat first: on Linux `stat -f` reads the file system, not the file, and prints no epoch.
+  t=$(stat -c %Y "$d/holder" 2>/dev/null || stat -f %m "$d/holder" 2>/dev/null) || continue
+  [[ "$t" =~ ^[0-9]+$ ]] || continue
+  m=$(( ($(date +%s) - t) / 60 ))
   pool=${d%/slot-*}; cand+=("${pool##*/} $p $m ${lbl:--}"); pids="${pids:+$pids,}$p"
 done
 if ((${#cand[@]})); then
