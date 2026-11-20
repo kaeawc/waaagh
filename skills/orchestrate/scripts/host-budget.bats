@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
-# Host load attribution (host-load.sh) and the worktree budget and live-cwd guard (wt-cleanup.sh),
-# against stubbed ps, lsof, du and gh on PATH. Run: bats host-budget.bats
+# Host load attribution (host-load.sh, read from a stubbed spectra) and the worktree budget and
+# live-cwd guard (wt-cleanup.sh, against stubbed lsof, du and gh on PATH). Run: bats host-budget.bats
 
 setup() {
   load test_helper
@@ -35,68 +35,76 @@ STUB
   chmod +x "$BIN"/*
 }
 
-# --- host-load.sh -----------------------------------------------------------------------------
-hl() { ORCHESTRATE_HOST_CPUS=16 "$SCRIPTS/host-load.sh" "$@"; }
+# --- host-load.sh (readings and attribution from spectra, #330) --------------------------------
+hl() { "$SCRIPTS/host-load.sh" "$@"; }
 row() { printf '%s\n' "$output" | awk -F'\t' -v k="$1" '$1 == k && !done { sub("^[^\t]*\t", ""); print; done = 1 }'; }
-
-@test "host-load holds on load and names Spotlight indexing as the cause, with the owner action" {
-  R="$BATS_TEST_TMPDIR/wt"; mkdir -p "$R/lane-a/src"
-  cat >"$FX/ps" <<EOF
-  310 160.0 18874368 /usr/sbin/fseventsd
-  311  90.0  2097152 /System/Library/Frameworks/CoreServices.framework/mds_stores
-  312  60.0  1048576 mds
-  400  20.0   524288 node
-  401   0.1     2048 bash
-EOF
-  printf '400\t%s\n' "$R/lane-a/src" >"$FX/cwds"
-  ORCHESTRATE_HOST_LOAD1=120.5 ORCHESTRATE_HOST_FREE_MB=20480 run hl --worktree-root "$R"
-  [ "$status" -eq 3 ]
-  [[ "$(row verdict)" == $'HOLD\t1-min load 120.5 >= 24.00 (1.5 x 16 CPUs)' ]]
-  [[ "$(row cause)" == $'indexing\tfseventsd 160.0%, mds_stores 90.0%, mds 60.0%' ]]
-  [[ "$(row hint)" == *"exclude $R from Spotlight (System Settings > Spotlight > Search Privacy) or plan a reboot"* ]]
-  # Top tables: by CPU and by RSS, each process tied to its worktree.
-  [[ "$(row top-cpu)" == $'310\t160.0\t18432\tfseventsd\t-' ]]
-  [[ "$output" == *$'top-cpu\t400\t20.0\t512\tnode\tlane-a'* ]]
-  [[ "$(row top-rss)" == $'310\t160.0\t18432\tfseventsd\t-' ]]
-  [ "$(printf '%s\n' "$output" | grep -c '^top-cpu')" -eq 5 ]
-  run hl --worktree-root "$R" --top 2
-  [ "$(printf '%s\n' "$output" | grep -c '^top-rss')" -eq 2 ]
+# load_json JSON: what spectra load answers beyond the stub's readings (cause, tables, families).
+load_json() { printf '%s\n' "$1" >"$BATS_TEST_TMPDIR/spectra-load.json"; }
+proc() { # PID CPU RSS_KIB COMMAND DIR
+  jq -cn --argjson p "$1" --argjson c "$2" --argjson r "$3" --arg n "$4" --arg d "$5" \
+    '{pid: $p, command: $n, cpu_pct: $c, rss_kib: $r} + (if $d == "" then {dir: "unknown"} else {cwd: $d, dir: $d} end)'
 }
 
-@test "host-load attributes lane load to the worktree, and other load to its process" {
-  R="$BATS_TEST_TMPDIR/wt"; mkdir -p "$R/lane-b" "$R/lane-c"
-  printf '  500 300.0 1048576 java\n  501 150.0 524288 node\n  502 40.0 1024 WindowServer\n' >"$FX/ps"
-  printf '500\t%s\n501\t%s\n' "$R/lane-b" "$R/lane-c" >"$FX/cwds"
-  ORCHESTRATE_HOST_LOAD1=40 ORCHESTRATE_HOST_FREE_MB=20480 run hl --worktree-root "$R"
+@test "host-load holds on load and names Spotlight indexing as the cause, with the owner action" {
+  stub_spectra; export SPECTRA_STUB_CPUS=16
+  R="$BATS_TEST_TMPDIR/wt"; mkdir -p "$R/lane-a/src"; R=$(cd "$R" && pwd -P)
+  load_json "$(jq -n --argjson a "$(proc 310 160.0 18874368 fseventsd "")" --argjson b "$(proc 400 20.04 524288 node "$R/lane-a/src")" \
+    '{cause: {kind: "indexing", detail: "indexing leads the CPU table (fseventsd, mds_stores)", cpu_pct: 310},
+      top_cpu: [$a, $b], top_rss: [$a], families: [{name: "Spotlight", kind: "indexing", members: 3, cpu_pct: 310.0, rss_kib: 22020096}]}')"
+  SPECTRA_STUB_LOAD1=120.5 SPECTRA_STUB_FREE_GB=20 run hl --worktree-root "$R"
   [ "$status" -eq 3 ]
-  [[ "$(row cause)" == $'lanes\tjava 300.0%, node 150.0%' ]]
-  [[ "$(row hint)" == "lane processes lead"* ]]
-  [[ "$output" == *$'top-cpu\t500\t300.0\t1024\tjava\tlane-b'* ]]
-  printf '  600 900.0 1048576 backupd\n  601 10.0 1024 node\n' >"$FX/ps"
-  ORCHESTRATE_HOST_LOAD1=40 ORCHESTRATE_HOST_FREE_MB=20480 run hl --worktree-root "$R"
-  [[ "$(row cause)" == $'other\tbackupd 900.0%, node 10.0%' ]]
+  [[ "$(row verdict)" == $'HOLD\t1-min load 120.5 >= 24.00 (1.5 x 16 CPUs)' ]]
+  [[ "$(row cause)" == $'indexing\tindexing leads the CPU table (fseventsd, mds_stores)' ]]
+  [[ "$(row hint)" == *"exclude $R from Spotlight (System Settings > Spotlight > Search Privacy) or plan a reboot"* ]]
+  # Top tables: by CPU and by RSS, each process tied to its worktree; then the process families.
+  [[ "$(row top-cpu)" == $'310\t160\t18432\tfseventsd\t-' ]]
+  [[ "$output" == *$'top-cpu\t400\t20\t512\tnode\tlane-a'* ]]
+  [[ "$(row top-rss)" == $'310\t160\t18432\tfseventsd\t-' ]]
+  [[ "$(row family)" == $'Spotlight\tindexing\t3\t310\t21504' ]]
+  # --top N caps each table.
+  run hl --worktree-root "$R" --top 1
+  [ "$(printf '%s\n' "$output" | grep -c '^top-cpu')" -eq 1 ]
+}
+
+@test "host-load names the lane worktree that leads, a CI runner, and other load by spectra's detail" {
+  stub_spectra; export SPECTRA_STUB_CPUS=16 SPECTRA_STUB_LOAD1=40
+  R="$BATS_TEST_TMPDIR/wt"; mkdir -p "$R/lane-b"; R=$(cd "$R" && pwd -P)
+  load_json "$(jq -n --arg r "$R" --argjson a "$(proc 500 300.0 1048576 java "$R/lane-b")" \
+    '{cause: {kind: "roots", root: $r, worktree: "lane-b", detail: "worktree lane-b leads the CPU table", cpu_pct: 300}, top_cpu: [$a]}')"
+  run hl --worktree-root "$R"
+  [ "$status" -eq 3 ]
+  [[ "$(row cause)" == $'lanes\tworktree lane-b leads the CPU table' ]]
+  [[ "$(row hint)" == "lane processes lead (worktree lane-b): start no lane"* ]]
+  [[ "$output" == *$'top-cpu\t500\t300\t1024\tjava\tlane-b'* ]]
+  load_json '{"cause": {"kind": "ci-runner", "detail": "a GitHub Actions runner leads the CPU table"}}'
+  run hl --worktree-root "$R"
+  [[ "$(row cause)" == $'ci-runner\ta GitHub Actions runner leads the CPU table' ]]
+  [[ "$(row hint)" == "a CI runner on this host leads: lower the lane cap"* ]]
+  load_json '{"cause": {"kind": "other", "detail": "process backupd (pid 600) leads the CPU table"}}'
+  run hl --worktree-root "$R"
+  [[ "$(row cause)" == $'other\tprocess backupd (pid 600) leads the CPU table' ]]
   [[ "$(row hint)" == *"do not stop it yourself"* ]]
 }
 
 @test "host-load admits only under the load limit with 8 GB free; backs off under 4 GB; third slot at 12 GB" {
-  printf '  1 1.0 1024 launchd\n' >"$FX/ps"
-  ORCHESTRATE_HOST_LOAD1=10 ORCHESTRATE_HOST_FREE_MB=13000 run hl
+  stub_spectra; export SPECTRA_STUB_CPUS=16
+  SPECTRA_STUB_LOAD1=10 SPECTRA_STUB_FREE_GB=12.7 run hl
   [ "$status" -eq 0 ]
   [[ "$(row verdict)" == ADMIT* ]]
   [ "$(row device-slots)" = 3 ]
-  ORCHESTRATE_HOST_LOAD1=10 ORCHESTRATE_HOST_FREE_MB=9000 run hl
+  SPECTRA_STUB_LOAD1=10 SPECTRA_STUB_FREE_GB=8.8 run hl
   [ "$status" -eq 0 ]
   [ "$(row device-slots)" = 2 ]
-  ORCHESTRATE_HOST_LOAD1=23.9 ORCHESTRATE_HOST_FREE_MB=6000 run hl
+  SPECTRA_STUB_LOAD1=23.9 SPECTRA_STUB_FREE_GB=5.86 run hl
   [ "$status" -eq 3 ]
-  [[ "$(row verdict)" == $'HOLD\tfree memory 5.9 GB < 8 GB' ]]
-  ORCHESTRATE_HOST_LOAD1=24 ORCHESTRATE_HOST_FREE_MB=9000 run hl
+  [[ "$(row verdict)" == $'HOLD\tfree memory 5.8 GB < 8 GB' ]]
+  SPECTRA_STUB_LOAD1=24 SPECTRA_STUB_FREE_GB=8.8 run hl
   [ "$status" -eq 3 ]
-  ORCHESTRATE_HOST_LOAD1=1 ORCHESTRATE_HOST_FREE_MB=3000 run hl
+  SPECTRA_STUB_LOAD1=1 SPECTRA_STUB_FREE_GB=2.9 run hl
   [ "$status" -eq 4 ]
   [[ "$(row verdict)" == BACKOFF* ]]
   # Thresholds are flags; --top 0 skips the process tables.
-  ORCHESTRATE_HOST_LOAD1=30 ORCHESTRATE_HOST_FREE_MB=9000 run hl --load-factor 2 --top 0
+  SPECTRA_STUB_LOAD1=30 SPECTRA_STUB_FREE_GB=8.8 run hl --load-factor 2 --top 0
   [ "$status" -eq 0 ]
   [[ "$output" != *top-cpu* && "$output" != *cause* ]]
   run hl --load-factor x

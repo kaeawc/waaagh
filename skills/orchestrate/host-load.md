@@ -10,20 +10,24 @@ and no lane was the cause.
 Before starting a lane (and in every tick that wants to refill), run:
 
 ```bash
-"$SCRIPTS/host-load.sh"          # exit 0 ADMIT, 3 HOLD, 4 BACKOFF
+"$SCRIPTS/host-load.sh"          # exit 0 ADMIT, 3 HOLD, 4 BACKOFF, 5 spectra missing or failed
 ```
+
+The readings and the attribution come from spectra (`spectra load --json`, required; #330): the
+load, CPUs and available memory, what leads the CPU table, the top processes and the process
+families (Xcode, simulator, emulator, build tools). The admission rules below are waaagh's.
 
 `triage-tick.sh snapshot` runs it too: its last line is `host <verdict> cause=<c> ...`, and a
 HOLD or BACKOFF turns the `dispatch=<n>` reason into `host-hold`.
 
-- **Admit** only with the 1-minute load below 1.5x the CPU count and at least 8 GB free (free +
-  inactive + speculative pages on macOS, `MemAvailable` on Linux).
+- **Admit** only with the 1-minute load below 1.5x the CPU count and at least 8 GB free (spectra's
+  available memory; when it cannot be read, memory holds nothing).
 - **Hold** (exit 3): start nothing new, keep running lanes. **Back off** (exit 4, under 4 GB
   free): start nothing and let running lanes finish before refilling.
 - **Device slots:** a third device slot per platform only at 12 GB free or more; the
   `device-slots` row says 2 or 3. Pass it on to `triage-tick.sh --device-slots`.
 - A hold is never just a number. Report the `cause` and `hint` rows in the status: the top
-  processes by CPU and by RSS, each tied to the worktree it runs in.
+  processes by CPU and by RSS, each tied to the worktree it runs in, and the `family` rows.
 
 ## Acting on the cause
 
@@ -31,7 +35,9 @@ HOLD or BACKOFF turns the `dispatch=<n>` reason into `host-hold`.
 |---|---|---|
 | `indexing` | `fseventsd` or Spotlight (`mds`, `mds_stores`, `mdworker`) leads, usually churning on many worktrees full of `node_modules` and build output | Shrink the worktree set first (`wt-cleanup.sh --apply`). Then raise an owner blocker: exclude the worktree root from Spotlight (System Settings > Spotlight > Search Privacy). `fseventsd` keeps its memory until a restart, so if its RSS stays high, ask the owner to plan a reboot. Waiting does not fix it. |
 | `lanes` | Processes whose working directory is in a lane worktree lead | Hold; check gates go through `gate-slot.sh` and that finished lanes stopped the PIDs they started. The worktree column names the lane. |
+| `ci-runner` | A self-hosted CI runner on this host leads (spectra's cause once kaeawc/spectra#603 lands; until then it shows as `other` naming the runner's `_work` directory) | Lower the lane cap while it runs; do not look for a runaway lane. |
 | `other` | Something outside the lanes leads (a backup, a browser, an IDE) | Tell the owner what it is. Do not stop it. |
+| `idle` | Nothing leads the CPU table | The load is falling or was brief: read it again before holding. |
 
 These are owner actions or waits. Nothing in this file kills, renices or quits a process.
 

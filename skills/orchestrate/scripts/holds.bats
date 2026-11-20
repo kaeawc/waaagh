@@ -203,7 +203,7 @@ esac
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/gh"
   unset ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_HOST_LOAD
-  export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
+  stub_spectra   # an idle host: host-load.sh reads it through spectra (#330)
 }
 
 @test "the tick counts holds and names every stale one with its reason as hold-stale" {

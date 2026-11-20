@@ -212,7 +212,7 @@ R
 
 @test "triage-tick.sh snapshot: 300 open PRs whose closing references add up to more than 128 KiB" {
   ST="$ORCHESTRATE_STATE_DIR/o__r"; mkdir -p "$ST"
-  export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
+  stub_spectra   # an idle host: host-load.sh reads it through spectra (#330)
   unset ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_HOST_LOAD
   jq -n '[range(300) | . as $i | {number: (1000 + $i), closingIssuesReferences: [range(50) | {number: (5000 + $i * 50 + .)}]}]' >"$FX/prs.json"
   big "$FX/prs.json"

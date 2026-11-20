@@ -132,7 +132,7 @@ calls_of() { if [ -f "$FX/calls" ]; then awk 'END { print NR }' "$FX/calls"; els
 tick_fixture() {
   stub_gh_routes
   stub_pr_ready
-  export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
+  stub_spectra   # an idle host: host-load.sh reads it through spectra (#330)
   unset ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_HOST_LOAD
   gh_route 'api repos/o/r/actions/runs?*' runs.json
   gh_route 'pr list*' prs.json

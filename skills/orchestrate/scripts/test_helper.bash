@@ -73,6 +73,37 @@ seed_origin_copy() {
   cp -R "$BATS_FILE_TMPDIR/seed-template/origin.git" "$BATS_FILE_TMPDIR/seed-template/seed" "$BATS_TEST_TMPDIR/"
   git -C "$BATS_TEST_TMPDIR/seed" remote set-url origin "$BATS_TEST_TMPDIR/origin.git"
 }
+# --- Stubbing spectra (#329, #330) ---------------------------------------------------------------
+# waaagh requires spectra for host readings. No test reads the real host: SPECTRA points at
+# $BATS_TEST_TMPDIR/bin/spectra, which does not exist until a test calls stub_spectra, so a suite
+# that reaches spectra without stubbing it gets spectra's "not found" error, on a Mac that has
+# spectra installed and on CI alike.
+export SPECTRA="${BATS_TEST_TMPDIR:-${BATS_FILE_TMPDIR:-/nonexistent}}/bin/spectra"
+# stub_spectra: that spectra. `capabilities --json` declares load and orphans. `load --json` prints
+# an idle host: SPECTRA_STUB_LOAD1 (default 0.5), SPECTRA_STUB_CPUS (8), SPECTRA_STUB_FREE_GB (32;
+# "null" when memory could not be read), read at each call, with $BATS_TEST_TMPDIR/spectra-load.json
+# (cause, top_cpu, top_rss, families, ...) merged over it when it exists. SPECTRA_STUB_FAIL=1 makes
+# load print an error and exit 1. Every call is appended to $BATS_TEST_TMPDIR/spectra-calls.
+stub_spectra() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat >"$BATS_TEST_TMPDIR/bin/spectra" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"$BATS_TEST_TMPDIR/spectra-calls"
+case "${1:-}" in
+  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"test","interfaces":[{"name":"load"},{"name":"orphans"}]}' ;;
+  help) printf 'Subcommands:\n  load  x\n  orphans  x\n' ;;
+  load)
+    [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: load failed" >&2; exit 1; }
+    over='{}'; [ ! -f "$BATS_TEST_TMPDIR/spectra-load.json" ] || over=$(cat "$BATS_TEST_TMPDIR/spectra-load.json")
+    jq -n --argjson l "${SPECTRA_STUB_LOAD1:-0.5}" --argjson c "${SPECTRA_STUB_CPUS:-8}" --argjson g "${SPECTRA_STUB_FREE_GB:-32}" \
+      --argjson o "$over" '{verdict: "admit", load1: $l, cpus: $c, available_gb: $g,
+        cause: {kind: "none", detail: "host is idle"}, top_cpu: [], top_rss: [], families: []} + $o' ;;
+  *) echo "spectra stub: unexpected call: $*" >&2; exit 9 ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/spectra"
+}
+
 # --- Stubbing gh ----------------------------------------------------------------------------
 # Tests stub gh with an executable $BATS_TEST_TMPDIR/bin/gh first on PATH. Every read that goes
 # through gh-read.sh (most helpers' GitHub reads) gets `--include` appended to each `gh api` call

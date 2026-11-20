@@ -88,8 +88,18 @@ fi
 export FX="$work/fx" PATH="$work/bin:$PATH" ORCHESTRATE_STATE_DIR="$work/state" ORCHESTRATE_AUTHOR=me
 export REAL_JQ="$real_jq"
 export ORCHESTRATE_NOW=1790510400
-# triage-tick.sh reads host-load.sh: fixed readings, not this machine's load
-export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
+# triage-tick.sh reads host-load.sh, which reads spectra: a stub with fixed readings, not this
+# machine's load (#330).
+cat >"$work/bin/spectra" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"bench","interfaces":[{"name":"load"}]}' ;;
+  load) echo '{"verdict":"admit","load1":0.5,"cpus":8,"available_gb":32,"cause":{"kind":"none","detail":"host is idle"},"top_cpu":[],"top_rss":[],"families":[]}' ;;
+  *) echo "bench spectra stub: unexpected call: $*" >&2; exit 9 ;;
+esac
+STUB
+chmod +x "$work/bin/spectra"
+export SPECTRA="$work/bin/spectra"
 
 # Wall clock in seconds: EPOCHREALTIME (bash 5) has microseconds; bash 3.2 falls back to whole seconds.
 clock() { local t=${EPOCHREALTIME:-$(date +%s)}; printf '%s\n' "${t/,/.}"; }

@@ -166,7 +166,7 @@ row() { printf '%s\n' "$output" | awk -F'\t' -v n="$1" '$2 == n'; }
 }
 
 @test "triage-tick.sh snapshot leaves verify-on-main issues out of the dispatch count, with or without --exclude-label" {
-  export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
+  stub_spectra   # an idle host: host-load.sh reads it through spectra (#330)
   unset ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_HOST_LOAD
   echo '[{"workflowName":"Test","status":"completed","conclusion":"success","headSha":"aaaaaaaaaaaa","databaseId":10,"createdAt":"2026-09-27T01:00:00Z"}]' >"$FX/runs.json"
   echo '[{"number":3,"labels":[]},{"number":4,"labels":[{"name":"verify-on-main"}]},{"number":5,"labels":[{"name":"blocked"}]},{"number":6,"labels":[{"name":"check-main"}]}]' >"$FX/issues.json"
