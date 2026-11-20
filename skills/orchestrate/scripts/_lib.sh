@@ -3,7 +3,7 @@
 # Env: ORCHESTRATE_STATE_DIR (default ~/.claude/orchestrate), ORCHESTRATE_AUTHOR (default: the
 # authenticated gh user, cached an hour: ORCHESTRATE_AUTHOR_TTL), ORCHESTRATE_NOW (epoch seconds; tests only), ORCHESTRATE_GH_BUDGET=1
 # (pace every gh call through gh-budget.sh; see orch_gh_priority below), ORCHESTRATE_GH_API
-# (auto|rest|graphql; see orch_gh_api below).
+# (auto|rest|graphql; see orch_gh_api below), SPECTRA (the spectra binary; see orch_spectra_require below).
 
 orch_now() { echo "${ORCHESTRATE_NOW:-${EPOCHSECONDS:-$(date +%s)}}"; }   # EPOCHSECONDS: bash 5
 
@@ -315,6 +315,50 @@ orch_rest_pr() {
 # and sweeps. With ORCHESTRATE_GH_BUDGET=1, sourcing this file also puts the gh shim (gh-shim/gh)
 # first on PATH, so every gh call, gh-read.sh's and third-party scripts' included, is paced.
 orch_gh_priority() { export GH_BUDGET_PRIORITY="$1"; }
+
+# --- spectra (#329): waaagh requires it for every host-level question -------------------------
+# Spectra (github.com/kaeawc/spectra) observes the machine: load and its cause, process
+# attribution, leftover processes, booted devices, toolchain faults. waaagh decides and coordinates.
+# It is a hard dependency: a script that needs spectra calls orch_spectra_require with the
+# capabilities it uses, and stops with one named error when spectra or a capability is missing.
+# There is no fallback to waaagh's own host inspection.
+# SPECTRA: the spectra binary (default `spectra` on PATH; tests point it at a stub).
+# A capability is met when `spectra capabilities --json` lists it. Until spectra declares its
+# diagnostic commands there (kaeawc/spectra#612), a subcommand that `spectra help` lists also meets it.
+ORCH_SPECTRA_INSTALL="install spectra: brew install kaeawc/tap/spectra, or build it from https://github.com/kaeawc/spectra (make build)"
+_orch_spectra_caps="" _orch_spectra_help=""
+orch_spectra_bin() { echo "${SPECTRA:-spectra}"; }
+# orch_spectra_require CAP...: 0 when spectra runs and meets every CAP; otherwise one line on
+# stderr naming what is missing and how to install it, and 1. Each spectra read happens once per
+# process.
+orch_spectra_require() {
+  local bin cap missing=""
+  bin=$(orch_spectra_bin)
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    echo "spectra: not found ($bin). waaagh requires it; $ORCH_SPECTRA_INSTALL" >&2
+    return 1
+  fi
+  if [[ -z "$_orch_spectra_caps" ]]; then
+    _orch_spectra_caps=$("$bin" capabilities --json 2>/dev/null |
+      jq -r 'select(.schema.name == "spectra.capabilities") | .interfaces[]?.name' 2>/dev/null) || _orch_spectra_caps=""
+    if [[ -z "$_orch_spectra_caps" ]]; then
+      echo "spectra: $bin capabilities --json gave no capability list; waaagh needs a spectra with the capabilities contract. $ORCH_SPECTRA_INSTALL" >&2
+      return 1
+    fi
+  fi
+  for cap in "$@"; do
+    grep -qxF -- "$cap" <<<"$_orch_spectra_caps" && continue
+    [[ -n "$_orch_spectra_help" ]] || _orch_spectra_help=$("$bin" help 2>&1 | awk '/^Subcommands:/ { on = 1; next } on && /^$/ { exit } on && /^  [a-z]/ { print $1 }' || true)
+    grep -qxF -- "$cap" <<<"$_orch_spectra_help" || missing="${missing:+$missing }$cap"
+  done
+  if [[ -n "$missing" ]]; then
+    echo "spectra: $bin lacks: $missing. Update it; $ORCH_SPECTRA_INSTALL" >&2
+    return 1
+  fi
+}
+# orch_spectra ARGS...: run spectra with ARGS (after orch_spectra_require). Every spectra call in
+# the scripts goes through here, so tests stub one place (spectra-lib.bats lints it).
+orch_spectra() { "$(orch_spectra_bin)" "$@"; }
 if [[ "${ORCHESTRATE_GH_BUDGET:-0}" == 1 ]]; then
   _orch_shim="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gh-shim"
   case ":$PATH:" in *":$_orch_shim:"*) ;; *) export PATH="$_orch_shim:$PATH" ;; esac
