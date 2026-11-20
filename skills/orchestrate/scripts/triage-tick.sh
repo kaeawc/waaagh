@@ -61,6 +61,12 @@
 #                  root>, #332): parent gone, cwd in a worktree; by-design daemons left out. A
 #                  removed worktree is named <name>(removed:<n>). Evidence only: nothing here kills.
 #                  Omitted with no worktree root; "unknown" when spectra is missing or fails.
+#       slot-stalled <pool> pid=<p> held=<m>m label=<l> | slot-stalled unknown pids=<p>,...
+#                  one line per held gate, heavy or boot slot older than
+#                  ORCHESTRATE_SLOT_STALL_MINUTES (10) whose holder and all its descendants are idle
+#                  (spectra idle --pids, #333): a holder waiting on itself, or on nothing, holds every
+#                  other lane's build back while kill -0 still calls it alive. "unknown" when spectra
+#                  is missing or fails. Nothing is released or killed here.
 #       holds n=<k> stale=<m>      merge-loop holds in <state dir>/holds (hold.sh); omitted with none.
 #                  Then one line per hold older than --hold-hours (default
 #                  ORCHESTRATE_HOLD_STALE_HOURS, 12) or of unknown age (an old-format line):
@@ -80,6 +86,8 @@
 #     are open), dispatch=<n> (only with a free device slot, or with no slot types configured),
 #     issue-list-truncated, dispatch-stale=<n> (`cloud-dispatch.sh expire --issue N`, then dispatch
 #     it again), dispatch-capped=<m> (route it to a local lane, or read why its sessions ended),
+#     slot-stalled=<n> (an idle holder keeps a slot: message the lane named by its label to stop
+#     that PID or say what it waits on; release nothing yourself),
 #     orphans=<n> (leftover lane processes: tell the lane that started them to stop the PIDs it
 #     recorded, or report them; kill nothing yourself),
 #     host-hold (in place of dispatch=<n> while the host line is HOLD or BACKOFF; "host unknown"
@@ -521,6 +529,38 @@ if [[ "$dispatch" =~ ^[0-9]+$ ]] && ((dispatch > 0)) && [[ -z "$device" || "$fre
   case "$host" in "host HOLD "* | "host BACKOFF "*) reasons+=("host-hold") ;; *) reasons+=("dispatch=$dispatch") ;; esac
 fi
 
+# Stalled slots (#333): a held slot past the stall age whose holder and descendants are idle.
+stalled="" cand=() pids=""
+stall_min=${ORCHESTRATE_SLOT_STALL_MINUTES:-10}
+for d in "$(slot_root)"/{gate,heavy,boot}/slot-*; do
+  [[ -f "$d/holder" ]] && slot_live "$d" || continue
+  [[ -n "$(find "$d/holder" -mmin "+$((stall_min - 1))" 2>/dev/null)" ]] || continue
+  p=$(sed -n 1p "$d/holder") lbl=$(sed -n 3p "$d/holder")
+  # GNU stat first: on Linux `stat -f` reads the file system, not the file, and prints no epoch.
+  t=$(stat -c %Y "$d/holder" 2>/dev/null || stat -f %m "$d/holder" 2>/dev/null) || continue
+  [[ "$t" =~ ^[0-9]+$ ]] || continue
+  m=$(( ($(date +%s) - t) / 60 ))
+  pool=${d%/slot-*}; cand+=("${pool##*/} $p $m ${lbl:--}"); pids="${pids:+$pids,}$p"
+done
+if ((${#cand[@]})); then
+  idle_pids="" irc=1
+  if orch_spectra_require idle 2>/dev/null; then
+    irc=0; ij=$(orch_spectra idle --pids "$pids" --min-age "${stall_min}m" --json 2>/dev/null) || irc=$?   # 3: some found
+    ((irc != 0 && irc != 3)) || idle_pids=$(jq -er '.result.holders | arrays | .[].pid' <<<"$ij" 2>/dev/null) || ((irc == 0 && $? == 4)) || irc=1
+  fi
+  if ((irc == 0 || irc == 3)); then
+    for c in "${cand[@]}"; do
+      read -r pool p m lbl <<<"$c"
+      grep -qx "$p" <<<"$idle_pids" || continue
+      stalled+="slot-stalled $pool pid=$p held=${m}m label=$lbl"$'\n'
+    done
+    n=$(grep -c . <<<"$stalled" || true)
+    ((n == 0)) || reasons+=("slot-stalled=$n")
+  else
+    stalled="slot-stalled unknown pids=$pids"$'\n'
+  fi
+fi
+
 # Leftover lane processes (spectra orphans, #332): evidence for the report; nothing here kills.
 orphans=""
 if wtroot=$(orch_worktree_root); then
@@ -615,6 +655,7 @@ echo "cron $cron"
 echo "$threads"
 echo "$host"
 [[ -z "$orphans" ]] || echo "$orphans"
+[[ -z "$stalled" ]] || printf '%s' "$stalled"
 [[ -z "$holds_line" ]] || echo "$holds_line"
 [[ -z "$stale_holds" ]] || sed 's/^/hold-stale /' <<<"$stale_holds"
 [[ -z "$repairs_line" ]] || echo "$repairs_line"
