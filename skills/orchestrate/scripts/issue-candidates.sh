@@ -43,7 +43,8 @@
 # over REST a merged PR's closing references come only from its body (how=body).
 # Exit: 0 ok | 2 usage | 4 issues or merged PRs could not be read.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority low
@@ -175,7 +176,7 @@ case "$cmd" in
         elif . == "macos-xcode" then "macos" else . end;
       def keywords: {android: "android|emulator|pixel", ios: "\\bios\\b|simulator|iphone|ipad",
         macos: "macos|xcode|\\bmac\\b"}[.] // .;
-      def verdict_re: "^[\\s>*_-]*device (?:verification|evidence)[*_]*\\s*:\\s*[*_]*(?<v>pass|fail)\\b(?<rest>.*)$";
+      def verdict_re: "^[\\s>*_-]*device (?:verification|evidence)[*_]*\\s*:\\s*[*_]*\\s*(?<v>pass|fail)\\b(?<rest>.*)$";
       def epoch: sub("\\.[0-9]+"; "") | fromdateiso8601;
       ([$prs[] | {ref: "#\(.number)", t: (.mergedAt | epoch),
           closes: ([(.closingIssuesReferences // [])[].number] + ((.body // "") | closes)),

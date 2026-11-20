@@ -22,7 +22,8 @@
 # Exit: 0 ok (or no loops) | 2 usage | 3 a loop is not running (stale, dead, ended or never) |
 #       4 a loop's script is missing from <state dir>/bin/ (takes precedence over 3)
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal

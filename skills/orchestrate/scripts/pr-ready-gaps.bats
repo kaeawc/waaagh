@@ -43,10 +43,10 @@ STUB
 }
 
 OKC='[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}]'
+# shellcheck source=pr_fixture.bash
+source "${BATS_TEST_DIRNAME}/pr_fixture.bash"
 pr_row() { # number [labels-json] [checks-json]
-  jq -cn --argjson n "$1" --argjson l "${2:-[]}" --argjson c "${3:-$OKC}" \
-    '{number:$n,author:{login:"me"},isDraft:false,isCrossRepository:false,baseRefName:"main",headRefName:("b"+($n|tostring)),
-      headRefOid:("abcdef0123456789"+($n|tostring)),mergeable:"MERGEABLE",labels:$l,statusCheckRollup:$c}'
+  pr_fixture_row "$1" me false false MERGEABLE "${3:-$OKC}" "${2:-[]}" "$(jq -cn --argjson n "$1" '{headRefName:("b"+($n|tostring))}')"
 }
 threads() { # N PAGE RESOLVED UNRESOLVED -> a page of that many resolved and unresolved threads
   jq -n --argjson r "$3" --argjson u "$4" \

@@ -37,11 +37,11 @@ STUB
 
 OKC='[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}]'
 BADC='[{"name":"build","conclusion":"FAILURE","startedAt":"2026-09-27T01:00:00Z"}]'
+# shellcheck source=pr_fixture.bash
+source "${BATS_TEST_DIRNAME}/pr_fixture.bash"
 pr() { # number branch [labels-json] [checks-json] [author]
-  jq -cn --argjson n "$1" --arg b "$2" --argjson l "${3:-[]}" --argjson c "${4:-$OKC}" --arg a "${5:-me}" \
-    '{number:$n,author:{login:$a},isDraft:false,isCrossRepository:false,baseRefName:"main",headRefName:$b,
-      headRefOid:("abcdef0123456789"+($n|tostring)),mergeable:"MERGEABLE",
-      labels:($l | map({name:.})),statusCheckRollup:$c}'
+  pr_fixture_row "$1" "${5:-me}" false false MERGEABLE "${4:-$OKC}" \
+    "$(jq -c 'map({name:.})' <<<"${3:-[]}")" "$(jq -cn --arg b "$2" '{headRefName:$b}')"
 }
 ready() { "$SCRIPTS/pr-ready.sh" --repo o/r --base main --author me "$@"; }
 

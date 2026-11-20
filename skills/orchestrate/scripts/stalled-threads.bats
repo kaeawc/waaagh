@@ -98,7 +98,12 @@ write_prs() {
 }
 
 @test "the triage tick raises stalled=<n> and prints the stalled PRs" {
-  run "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main
+  # One sibling stubbed (#272): thread-sweep.sh answers with its summary line and the tick reads it,
+  # with no fake gh driving the real scan. The scan itself is covered by the scan tests above.
+  mkdir -p "$BATS_TEST_TMPDIR/stubs"
+  printf '#!/usr/bin/env bash\necho "threads unresolved=6 answered=1 resolve-now=- repair=#80,#81 stalled=#80"\n' >"$BATS_TEST_TMPDIR/stubs/thread-sweep.sh"
+  chmod +x "$BATS_TEST_TMPDIR/stubs/thread-sweep.sh"
+  ORCHESTRATE_SCRIPTS_DIR="$BATS_TEST_TMPDIR/stubs" run "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "${lines[0]}" == "verdict act "*"stalled=1"* ]]
   [ "$(snap_line threads)" = "threads unresolved=6 answered=1 resolve-now=- repair=#80,#81 stalled=#80" ]

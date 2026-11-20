@@ -2,10 +2,14 @@
 # The coverage workflow fails when a script drops below its floor or a script has no row here. It runs
 # on PRs that change scripts (#157): a PR that adds branches to a script must cover them, or it goes red.
 # Set at the credited % (dev/coverage.sh, #147) rounded down, minus 1. Raise a floor in the PR that adds the tests.
+skills/orchestrate/scripts/_build_dirs.sh	94
 skills/orchestrate/scripts/_lib.sh	94
 skills/orchestrate/scripts/_slots.sh	99
 skills/orchestrate/scripts/bench.sh	99
+skills/orchestrate/scripts/boot-slot.sh	85
+skills/orchestrate/scripts/branch-idle.sh	99
 skills/orchestrate/scripts/campaign.sh	94
+skills/orchestrate/scripts/ci-backlog.sh	85
 skills/orchestrate/scripts/claim-check.sh	95
 skills/orchestrate/scripts/cloud-dispatch.sh	96
 skills/orchestrate/scripts/counters.sh	91
@@ -41,17 +45,24 @@ skills/orchestrate/scripts/merge-queue.sh	93
 skills/orchestrate/scripts/merge-sensitive.sh	95
 skills/orchestrate/scripts/open-blockers.sh	99
 skills/orchestrate/scripts/pr-claim.sh	97
+skills/orchestrate/scripts/pr-footer.sh	99
 skills/orchestrate/scripts/pr-intake.sh	92
 skills/orchestrate/scripts/pr-merge.sh	97
 skills/orchestrate/scripts/pr-ready.sh	98
 skills/orchestrate/scripts/regen-merge.sh	94
 skills/orchestrate/scripts/relay.sh	94
+skills/orchestrate/scripts/repair-writer.sh	94
 skills/orchestrate/scripts/review-followup.sh	96
 skills/orchestrate/scripts/review-gate.sh	96
 skills/orchestrate/scripts/review-ledger.sh	97
+skills/orchestrate/scripts/shared-build.sh	99
+skills/orchestrate/scripts/shipped-blocked.sh	99
 skills/orchestrate/scripts/supersede-check.sh	90
 skills/orchestrate/scripts/thread-resolve.sh	97
 skills/orchestrate/scripts/thread-sweep.sh	94
 skills/orchestrate/scripts/triage-tick.sh	94
+skills/orchestrate/scripts/update-pace.sh	97
 skills/orchestrate/scripts/validate.sh	96
+skills/orchestrate/scripts/verify-on-main.sh	94
 skills/orchestrate/scripts/wt-cleanup.sh	95
+skills/orchestrate/scripts/push-verify.sh	80

@@ -77,7 +77,9 @@ to Opus or split the task, as a stated decision.
 - Launch independent lanes in one message. Agents that poll in the background stall: every role
   is single-pass, and you relaunch it when its inputs change.
 - Every lane brief names its worktree as an absolute path, and the lane works only there (the
-  lane-safety hook refuses deletions and shell writes outside it).
+  lane-safety hook refuses deletions and shell writes outside it). It also names your own checkout
+  as forbidden (`{{FORBIDDEN}}`, listed in `lane-forbidden`; `lane-safety.md` rule 7): a subagent
+  starts in your cwd and must not edit it.
 
 **Choosing the reviewer.** One independent Opus reviewer per lane. Tiny or mechanical diff: review
 it yourself. Add a second lens only for a risk surface one reviewer cannot cover (concurrency,
@@ -93,6 +95,12 @@ review on every poll or push.
   `git worktree` a jj checkout.
 - **One writer per branch or overlapping file set.** Parallel lanes get disjoint file scopes and
   separate worktrees. Every brief names its scope and the files other lanes own.
+- **That holds across sessions too** (#214). A cloud session that opened a PR stays a live writer
+  while the PR is open: idle is not done, and it wakes on the PR's CI, review and bot events.
+  `cloud-dispatch.sh record --kind repair` therefore posts one `REPAIR-START` marker on the PR
+  (`repair-writer.sh mark`), and the implement brief stops before any push once one is there. The
+  tick's `repair-writer.sh check` flags a second writer the commit metadata shows
+  (`repair-writers=<n>`); re-read the head SHA right before recording a review verdict.
 - Implementation lanes leave changes uncommitted and run no mutating VCS commands; you commit and
   push. (The PR doctor and supersede-evidence roles commit on their own branches, per their briefs.)
 - **A device belongs to one agent at a time.** Anything that drives an emulator, simulator or
@@ -104,8 +112,9 @@ review on every poll or push.
 - **Device-call safety.** Every device call names its device explicitly or runs inside a held
   session: a sessionless call can auto-target the user's own device. Never read a device-listing
   resource that probes every attached device. Before dismissing a system dialog, capture the
-  crash/ANR evidence; for a system-process ANR choose "Wait", never "Close app". On a loaded host,
-  one booted device per role.
+  crash/ANR evidence; for a system-process ANR choose "Wait", never "Close app". One booted device
+  per role, booted through `"$SCRIPTS/boot-slot.sh" -- <boot command>`: one boot at a time on the
+  host, and only while the load is below 3x the CPU count (`skills/orchestrate/host-load.md`).
 - **Never kill what you did not start.** No `pkill`/`killall`/kill-by-pattern, by you or any role:
   only a PID that agent launched and recorded. Finished lanes can leave orphan test processes that
   keep host load high, so every lane records the PIDs it starts and cleanup kills exactly those.
@@ -177,6 +186,10 @@ When a PR changes what an input means (units, coordinate space, encoding, defaul
 must carry a written-out "Callers of changed functions" section listing every caller, internal
 ones included, and whether each still passes the right meaning; a focused brief never waives it
 (#211). Where a repo uses Claude Code Review, put the same rule in the repo's review instructions.
+A reviewer reads refs with `git show` and `git diff` and never checks out in an existing worktree;
+when one returns, confirm your own checkout is still on its branch (`git rev-parse --abbrev-ref
+HEAD` prints the branch; `HEAD` means it was detached), since an edit or merge there would land on
+the wrong base (#317). With your checkout in `lane-forbidden`, the hook refuses the checkout.
 Record every verdict the moment it comes back: `"$SCRIPTS/review-ledger.sh" record --pr N --verdict
 ship|fix-first|rethink --head <sha> --findings <file>`: a ship whose findings lack the
 `input-meaning:` line, or the callers section when it says `changed`, is recorded `incomplete`
@@ -220,6 +233,11 @@ Act on it or surface the disagreement to the user.
 - Label results `verified-local` or `verified-ci`. While CI is backlogged, "fixed" means
   local-only until a post-merge run on the default branch completes. A run cancelled by a
   concurrency group is a cancellation, not a failure.
+- A passing sub-package or sub-project build does not prove the aggregate build. Where a root
+  manifest and per-package manifests compile the same sources (a root `Package.swift` beside
+  sub-package ones), a lane that touches them builds both before it says the gates pass, or the
+  repo's pre-push gate gains the root build: a lane once passed the sub-package's full `swift test`
+  and CI's required root build failed with `no such module` (#316).
 - Lane reports are claims. Read the diff and spot-check the quoted verification against the tree.
   Before relaying "merged", "closed", "verified" or "no device check needed" to the owner, confirm
   it with one read of the source of truth (`scripts/claim-check.sh`; `regression-gates.md`).
@@ -445,6 +463,15 @@ against its PR's own changes.
   main in on its next pass. The strict setting is read from rulesets and classic protection; the
   classic read needs admin and may 404, and unknown counts as not strict: set
   `MERGE_QUEUE_UPDATE_BEHIND=always` there to merge every base move in.
+- **Stagger branch updates when CI shares this host** (#219). Every update-branch, base-merge push
+  or rerun starts a CI run; when the repo's CI runs on self-hosted runners on the machine that
+  hosts the lanes, a batch of them stalls the lanes. Never loop `gh pr update-branch` over a list:
+  `"$SCRIPTS/update-pace.sh" run --pr N...` (in merge order) updates them under the pacing set by
+  `ORCHESTRATE_UPDATE_CAP` (per pass), `ORCHESTRATE_UPDATE_GAP` (seconds between updates) and
+  `ORCHESTRATE_UPDATE_HOST_GATE=1` (defer while `host-load.sh` says HOLD or BACKOFF or a heavy
+  build runs), and lists the rest as `deferred` for the next pass. The merge queue and the rebase
+  bot pace their pushes the same way. Pacing is off unless set: set it for such a repo (e.g. cap 3,
+  gap 600, host gate on).
 - **Ratchet and baseline files** (lint counts, size caps, type-error baselines) conflict on almost
   every stacked merge: take the default branch's copy and regenerate it, never hand-merge.
   `"$SCRIPTS/regen-merge.sh"` does this from `<state dir>/generated-files.tsv` and refuses an
@@ -487,7 +514,19 @@ their wall caps, and lanes re-run them, which makes it worse.
 - **Gradle and Xcode run alone.** `gate-slot.sh` routes them to `heavy-build-slot.sh`: one heavy
   build at a time, started only after running gates drain, with no new gate meanwhile, and
   `org.gradle.workers.max` capped (`HEAVY_BUILD_WORKERS`, default 2). Never run a Node gate and a
-  native build at once.
+  native build at once. Both wrappers are re-entrant: one called inside a wrapped command (a gate
+  script that wraps its own Gradle step) runs in the slot already held instead of waiting on it.
+- **No shared build output.** Both wrappers give each lane a private build dir
+  (`ORCHESTRATE_LANE_BUILD_DIR`) and point TMPDIR, XDG cache, Xcode derived data and Gradle's
+  project cache into it, from a per-repo table. `wt-cleanup.sh` removes the dir once its worktree
+  is gone (`skills/orchestrate/host-load.md`).
+- **One build per commit for verification lanes.** Device and verification lanes on the same
+  commit build through `"$SCRIPTS/shared-build.sh" --class device` (or `verify`): the first builds,
+  the rest reuse its artifacts. Stagger device boots (`skills/orchestrate/host-load.md`).
+- **No shared Gradle daemon.** The heavy slot runs Gradle with `org.gradle.daemon=false`: a daemon
+  started in one lane's sandbox, or on a JDK since upgraded away, breaks every later build that
+  reconnects to it. Never `./gradlew --stop`; it stops other lanes' builds
+  (`skills/orchestrate/host-load.md`).
 - Run the changed-files prepush check once per slice, not once per commit.
 - **Finished worktrees** go through `"$SCRIPTS/wt-cleanup.sh"` (dry run; `--apply` to remove): only
   clean, idle, pushed, unlocked, unprotected worktrees nobody is working in, via `git worktree
@@ -505,6 +544,23 @@ their wall caps, and lanes re-run them, which makes it worse.
 A job that only passes on retry, or only from a build-cache hit, hides a red main. The red-main
 fix lane must check whether the greens were real: look for a failed first attempt, a cache restore
 that skipped the work, or a rerun, before declaring the branch healthy.
+
+**Known-flake red main reruns itself.** `main-health.sh --auto-rerun` (or
+`ORCHESTRATE_MAIN_AUTO_RERUN=1`, which also reaches the merge queue and the triage tick) classifies
+each red run with the repo's classifier (`--classifier`, else `ORCHESTRATE_CLASSIFIER_CMD`). When
+every one is rerunnable (flake, known-flake, infra, RERUN or RERUN-DONT-FIX), it re-runs each once
+per run id through `triage-tick.sh rerun` (failed jobs, or the whole run for a needs dependency
+that did not succeed; logged to `reruns.log`), and `MAIN_RED` stays until the rerun is green. An
+investigate or unclassified run, or a rerun that failed again, is named as `auto-rerun=held` and
+goes to a fix lane: a known flake that fails twice is a real red (#270).
+
+**Sizing the CI backlog.** Never count a `status=queued` run listing: it returns ghosts, runs
+created weeks ago that completed long since (70 once, back seven weeks), while a run whose own
+status is still queued can already have jobs on runners. `"$SCRIPTS/ci-backlog.sh"` reads the runs
+created inside a window (`--window`, default 360 minutes) and counts their queued and in-progress
+jobs by runner label; `ghost=<n>` names the listed runs with nothing left to run. Anything that
+cancels superseded runs filters by created time the same way and treats "run is completed" (HTTP
+409) as done, never as a failure to retry (#315).
 
 **Per-test timing budgets.** A test that breaches its own time budget (for example a 100 ms cap)
 on the default branch, and still breaches it when re-run alone, is a real red, not a flake: the
@@ -553,7 +609,7 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
   lane reproduces it; a reproduction is spent only when it fails again on the same head, and the
   signature is then recorded. A check that failed only because a job it needs was abandoned,
   cancelled or skipped is re-run in full (`rerun --full`), never `--failed`, and several PRs
-  hitting that within the hour is a runner-pool problem (`"$SCRIPTS/failure-triage.sh"`,
+  hitting that within the hour is a runner-pool problem; a package install that could not reach its public mirror is infrastructure too, and several PRs hitting it is one outage to fix once (`"$SCRIPTS/failure-triage.sh"`,
   `failure-triage.md`, which also
   covers what to put in cloud briefs: container knobs and never killing by pattern).
 - GitHub reads in the scripts go through `"$SCRIPTS/gh-read.sh"`: bounded retries for network and
@@ -618,6 +674,10 @@ Keep the loop running through ordinary trouble. Stop refilling and report when:
    cannot, so cloud briefs say reply on each thread and do not resolve; after each repair,
    `scripts/thread-sweep.sh resolve` settles threads whose last reply links an issue or names a
    pushed fix.
+   **Review rounds** (`review-rounds.md`, #257): a bot reviewer re-reviews every push, so a fix
+   round is one batched push with the base merge in it; after it, optional findings are declined
+   with a reason and resolved (`review-followup.sh decline`), the new head's delta is reviewed at
+   once, and the tick's `review-loop` line names a PR past the round cap.
    **Regression gates** (`regression-gates.md`): before resolving or filing any review finding,
    check whether it is a regression of existing behaviour; if so, hold the PR and fix it first.
    A PR fixing a device-found regression carries `needs-device-recheck` until a device run on its
@@ -681,7 +741,8 @@ verification batch, check the device lock those routines use; never start a batc
 **Cloud dispatch.** When the owner wants one cloud session per `cloud-ready` issue with no click,
 the main session (subagents lack `RemoteTrigger`) creates one run-once routine per issue, paced and
 recorded through `"$SCRIPTS/cloud-dispatch.sh"`: `roles/cloud-dispatch.md`. Results come back only
-as PRs and issue comments, which the triage loop reads. A cloud-ready follow-up split from local
+as PRs and issue comments, which the triage loop reads; a dispatch with no PR after 6 h is stale
+and is expired and sent again, up to a cap (`cloud-dispatch.sh stale`/`expire`, #259); a run silent for 45 min, stuck on a permission prompt or never fired is caught sooner from a saved `list_runs` (`cloud-dispatch.sh stalled`, #260), as is one active but unpushed after 30 min (`--no-push`, #216). The standard briefs give a cloud session's local test run a 10-minute budget, then push and let CI verify; build-heavy fixes that need tests before review (a cold dependency cache is the usual stall) go to a local lane with a warm cache instead. A cloud-ready follow-up split from local
 work carries its captured fixtures on GitHub, and dispatch refuses it otherwise:
 `device-cloud-handoff.md`. The standard implement and repair briefs live in the target repository
 (`.claude/briefs/`, installed from `briefs/`, changed by PR), so each dispatched prompt is one line.
@@ -689,6 +750,8 @@ Cloud sessions refuse GraphQL (HTTP 403, `gh pr list` included): `pr-ready.sh`, 
 and `lane-claim.sh` then read the PR side over REST through `gh-rest-pr.sh` on their own, as do
 `triage-tick.sh snapshot` (dispatch queue), `thread-sweep.sh` and `thread-resolve.sh` (#136)
 (`ORCHESTRATE_GH_API=rest` skips the refused attempt); REST costs a few calls per candidate PR.
+`pr-merge.sh` merges over REST too (#266): `PUT pulls/<n>/merge` with `sha=<head>` (409: head
+moved, exit 3; 405: not mergeable, exit 5), with every guard and exit code of the GraphQL path.
 One refusal is remembered for 12 hours (`<state root>/gh-no-graphql`), issue side and PR side
 alike; a new script with a REST path uses `orch_gh_api` / `orch_gh_refused` from `_lib.sh`.
 

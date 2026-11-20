@@ -59,7 +59,8 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   [[ "$output" == *'Closes #42'* && "$output" == *'Part of #42'* ]]
   [[ "$output" == *'Do not merge.'* ]]
   [[ "$output" != *'{{'* ]]
-  [ "${#output}" -lt 1500 ]
+  # The real limit is 65,536 characters on a routine run's text (brief-size.bats, #239); hold it to half, not to the old 1500.
+  [ "${#output}" -lt 32768 ]
 }
 
 @test "a state-dir cloud-brief.md overrides the template; gates text with specials is literal" {

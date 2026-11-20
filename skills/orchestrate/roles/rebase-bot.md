@@ -27,6 +27,10 @@ live.
 4. Gates before every push: {{REBASE_GATES}}. A failing gate means do not push: leave the merge
    commit unpushed and report the first error line.
 5. A push rejected because the remote moved means someone else is writing: stop on that PR.
+6. Each push starts CI: before it, `{{SCRIPTS}}/update-pace.sh gate --repo {{REPO}} --done <pushes
+   made this pass>`. Exit 3 (`wait ...`): push nothing more this pass; report the rest as deferred
+   with that line. After each push, `{{SCRIPTS}}/update-pace.sh record --repo {{REPO}} --pr N
+   --source rebase-bot`. Take PRs in merge order, so the deferred ones are the last to merge.
 
 ## Report (under 200 words)
 Per PR: updated and pushed (new head SHA) / skipped (why) / needs a conflict lane (files) / gate

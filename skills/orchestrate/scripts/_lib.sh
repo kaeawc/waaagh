@@ -21,7 +21,7 @@ case "${BASH_SOURCE[0]}" in */*) _orch_lib_dir=${BASH_SOURCE[0]%/*} ;; *) _orch_
 # directory holding only the stubs it needs (a failing hold.sh, a pr-merge.sh with a fixed exit
 # code): every other NAME still runs from the real tree, so bashcov credits it, where a copy of
 # the tree is credited nothing. The helpers below, and the scripts whose siblings tests stub
-# (merge-queue.sh, pr-merge.sh, issue-candidates.sh), call their siblings through it.
+# (merge-queue.sh, pr-merge.sh, issue-candidates.sh, triage-tick.sh), call their siblings through it.
 orch_run() {
   local f="$_orch_lib_dir/$1"
   [[ -z "${ORCHESTRATE_SCRIPTS_DIR:-}" || ! -x "$ORCHESTRATE_SCRIPTS_DIR/$1" ]] || f="$ORCHESTRATE_SCRIPTS_DIR/$1"
@@ -55,7 +55,8 @@ orch_repo() {
 # lookup is never cached.
 orch_author() {
   if [[ -n "${ORCHESTRATE_AUTHOR:-}" ]]; then echo "$ORCHESTRATE_AUTHOR"; return; fi
-  local root="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}" host="${GH_HOST:-github.com}"
+  local root host="${GH_HOST:-github.com}"
+  root=$(orch_state_root)
   local ttl="${ORCHESTRATE_AUTHOR_TTL:-3600}" now key login t h k l
   local cache="$root/.author" hosts="${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml"
   now=$(orch_now)
@@ -75,9 +76,14 @@ orch_author() {
   echo "$login"
 }
 
+# orch_state_root -> the root of all durable campaign state: ORCHESTRATE_STATE_DIR, default ~/.claude/orchestrate.
+# The one place that default is spelled (#304).
+orch_state_root() { echo "${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}"; }
+
 # orch_state_dir OWNER/REPO -> the repo's durable campaign directory (created on demand).
 orch_state_dir() {
-  local d="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/${1//\//__}"
+  local d
+  d="$(orch_state_root)/${1//\//__}"
   [[ -d "$d" ]] || mkdir -p "$d"
   echo "$d"
 }
@@ -98,7 +104,7 @@ orch_gh_api() {
     auto) ;;
     *) echo "$1: ORCHESTRATE_GH_API must be auto, rest or graphql" >&2; return 2 ;;
   esac
-  memo="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/gh-no-graphql"
+  memo="$(orch_state_root)/gh-no-graphql"
   if read -r at 2>/dev/null <"$memo" && [[ "$at" =~ ^[0-9]+$ ]] && (($(orch_now) - at < 43200)); then
     echo rest
   else
@@ -112,7 +118,8 @@ orch_gh_api() {
 # allows the fallback (auto). Then it records the refusal for orch_gh_api. Any other failure is
 # the caller's to report.
 orch_gh_refused() {
-  local root="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}"
+  local root
+  root=$(orch_state_root)
   [[ "${ORCHESTRATE_GH_API:-auto}" == auto && "$1" == 5 && "$2" == *GraphQL* ]] || return 1
   if mkdir -p "$root" 2>/dev/null && orch_now >"$root/gh-no-graphql.tmp.$$" 2>/dev/null; then
     mv "$root/gh-no-graphql.tmp.$$" "$root/gh-no-graphql" 2>/dev/null || rm -f "$root/gh-no-graphql.tmp.$$"
@@ -132,7 +139,7 @@ orch_hold_of() {
   local rows since why f
   rows=$(orch_run hold.sh list --repo "$1" 2>/dev/null) || return 2
   rows=$(awk -F'\t' -v pr="${2#\#}" '$1 == pr { printf "#%s until:%s since:%s %s\n", $1, $2, $3, $5 }' <<<"$rows")
-  f="${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/${1//\//__}/FREEZE"
+  f="$(orch_state_root)/${1//\//__}/FREEZE"
   if [[ -z "$rows" && -f "$f" ]]; then
     IFS=$'\t' read -r since why <"$f" || true
     rows="#${2#\#} until:freeze-end since:${since:-unknown} release freeze: ${why:--}"
@@ -178,7 +185,7 @@ orch_review_hold_of() {
 # (it also lists the base's own squash commits); it first fetches BASE and refs/pull/PR/head
 # from origin into GITDIR, quietly, and reads what is there if that fails.
 orch_review_covers() {
-  local d=$1 pr=$2 r=$3 h=$4 base=$5 c ps cn ce p ok tree want after
+  local d=$1 pr=$2 r=$3 h=$4 base=$5 c ps cn ce after
   [[ "$r" != "$h" ]] || return 0
   [[ -n "$base" ]] || { echo "cannot verify: no base branch"; return 1; }
   git -C "$d" fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" </dev/null >/dev/null 2>&1 || true
@@ -194,20 +201,48 @@ orch_review_covers() {
     { echo "cannot verify: git log ${r:0:9}..${h:0:9} failed in $d"; return 1; }
   while IFS=$'\t' read -r c ps cn ce; do
     [[ -n "$c" ]] || continue
-    # shellcheck disable=SC2086 # the parent list splits on spaces on purpose
-    set -- $ps
-    (($# == 2)) || { echo "${c:0:9} is not a merge"; return 1; }
-    [[ "$cn" == GitHub && "$ce" == noreply@github.com ]] || { echo "${c:0:9} is a merge made by hand ($cn <$ce>)"; return 1; }
-    ok=no
-    for p in "$1" "$2"; do
-      ! git -C "$d" merge-base --is-ancestor "$p" "refs/remotes/origin/$base" 2>/dev/null || ok=yes
-    done
-    [[ "$ok" == yes ]] || { echo "${c:0:9} does not merge $base"; return 1; }
-    want=$(git -C "$d" merge-tree --write-tree "$1" "$2" 2>/dev/null) || { echo "${c:0:9} is not a clean merge of its parents (or git is older than 2.38)"; return 1; }
-    tree=$(git -C "$d" rev-parse "$c^{tree}")
-    [[ "${want%%$'\n'*}" == "$tree" ]] || { echo "${c:0:9} changes more than the merge of $base"; return 1; }
+    orch_update_merge "$d" "$base" "$c" "$ps" "$cn" "$ce" || return 1
   done <<<"$after"
   return 0
+}
+
+# orch_update_merge GITDIR BASE COMMIT "PARENTS" COMMITTER-NAME COMMITTER-EMAIL: is COMMIT a merge
+# GitHub made from update-branch (#210)? The test orch_review_covers and orch_last_write share: two
+# parents, committer GitHub <noreply@github.com>, one parent on origin/BASE (already fetched), and
+# a tree equal to the clean automatic merge of its parents. Returns 0, or 1 and prints why. The
+# caller passes the fields from its own `git log --format='%H%x09%P%x09%cn%x09%ce'`.
+orch_update_merge() {
+  local d=$1 base=$2 c=$3 ps=$4 cn=$5 ce=$6 p ok want tree
+  # shellcheck disable=SC2086 # the parent list splits on spaces on purpose
+  set -- $ps
+  (($# == 2)) || { echo "${c:0:9} is not a merge"; return 1; }
+  [[ "$cn" == GitHub && "$ce" == noreply@github.com ]] || { echo "${c:0:9} is a merge made by hand ($cn <$ce>)"; return 1; }
+  ok=no
+  for p in "$1" "$2"; do
+    ! git -C "$d" merge-base --is-ancestor "$p" "refs/remotes/origin/$base" 2>/dev/null || ok=yes
+  done
+  [[ "$ok" == yes ]] || { echo "${c:0:9} does not merge $base"; return 1; }
+  want=$(git -C "$d" merge-tree --write-tree "$1" "$2" 2>/dev/null) || { echo "${c:0:9} is not a clean merge of its parents (or git is older than 2.38)"; return 1; }
+  tree=$(git -C "$d" rev-parse "$c^{tree}")
+  [[ "${want%%$'\n'*}" == "$tree" ]] || { echo "${c:0:9} changes more than the merge of $base"; return 1; }
+}
+
+# orch_last_write GITDIR HEAD BASE: the newest real write on a branch (#242), for "was this PR
+# pushed recently" guards. GitHub's update-branch merge gives a PR a fresh head without anyone
+# writing to it, so the head's time says nothing about a second writer. Prints
+# `<sha><TAB><committer epoch><TAB><merges skipped>` for the commit with the newest committer time
+# among those in `git log HEAD --not origin/BASE` that are not such a merge (orch_update_merge; a
+# merge made by hand, a conflict resolution, is a write), or `-<TAB>-<TAB><n>` when there is none.
+# origin/BASE must be fetched. Returns 1 when git cannot list HEAD's commits.
+orch_last_write() {
+  local d=$1 h=$2 base=$3 log c ps cn ce ct best=- bt=- skipped=0
+  log=$(git -C "$d" log --format='%H%x09%P%x09%cn%x09%ce%x09%ct' "$h" "^refs/remotes/origin/$base" 2>/dev/null) || return 1
+  while IFS=$'\t' read -r c ps cn ce ct; do
+    [[ -n "$c" ]] || continue
+    if orch_update_merge "$d" "$base" "$c" "$ps" "$cn" "$ce" >/dev/null; then skipped=$((skipped + 1)); continue; fi
+    if [[ "$bt" == - ]] || ((ct > bt)); then best=$c bt=$ct; fi
+  done <<<"$log"
+  printf '%s\t%s\t%s\n' "$best" "$bt" "$skipped"
 }
 
 # orch_hold_hint HOLD -> what lifts a hold orch_hold_of printed: freeze.sh end, or hold.sh release.
@@ -242,7 +277,40 @@ orch_read_retry() {
   return 1
 }
 
-# orch_gh_priority high|normal|low: declare this script's GitHub budget priority (gh-budget.sh):
+# orch_gql_read N [--json] gh CMD...: a bounded GraphQL read (gh-read.sh, at most N attempts) that
+# tells the caller when GitHub refused GraphQL, which orch_read_retry hides (its stderr goes to
+# /dev/null). Prints the body and returns 0; returns 1 on any other failure (nothing printed);
+# returns 2 and prints `refused` when GraphQL was refused and ORCHESTRATE_GH_API is auto, after
+# recording the refusal (orch_gh_refused) so every later read goes to REST. The caller switches to
+# its REST path on 2 (and must not treat the printed `refused` as a body). --json asks gh-read.sh
+# to check the body is JSON.
+orch_gql_read() {
+  local n=$1 rc=0 err out jsonflag=()
+  shift
+  if [[ "${1:-}" == --json ]]; then jsonflag=(--json); shift; fi
+  [[ "${1:-}" != gh ]] || shift
+  err=$(mktemp "${TMPDIR:-/tmp}/orch-gql-err.XXXXXX")
+  out=$(orch_run gh-read.sh "${jsonflag[@]+"${jsonflag[@]}"}" --tries "$n" --budget "${ORCHESTRATE_READ_BUDGET:-60}" -- "$@" 2>"$err") || rc=$?
+  if ((rc == 0)); then rm -f "$err"; printf '%s\n' "$out"; return 0; fi
+  if orch_gh_refused "$rc" "$(cat "$err" 2>/dev/null || true)"; then rm -f "$err"; echo refused; return 2; fi
+  rm -f "$err"
+  return 1
+}
+
+# orch_rest_pr ARGS...: gh-rest-pr.sh ARGS (through orch_run). Prints its body and returns its
+# status; its stderr is shown, prefixed with the calling script and subcommand, only when it fails,
+# so the reason behind an exit 3 is not lost and a success stays quiet (#304, #310).
+orch_rest_pr() {
+  local err rc=0 out
+  err=$(mktemp "${TMPDIR:-/tmp}/orch-rest-err.XXXXXX")
+  out=$(orch_run gh-rest-pr.sh "$@" 2>"$err") || rc=$?
+  if ((rc != 0)); then echo "${0##*/}: gh-rest-pr.sh $1 failed (exit $rc): $(cat "$err" 2>/dev/null || true)" >&2; fi
+  rm -f "$err"
+  printf '%s' "$out"
+  return "$rc"
+}
+
+# orch_gh_priorityhigh|normal|low: declare this script's GitHub budget priority (gh-budget.sh):
 # high for merges and main health, normal for ticks, repairs and lanes, low for nudges, backfills
 # and sweeps. With ORCHESTRATE_GH_BUDGET=1, sourcing this file also puts the gh shim (gh-shim/gh)
 # first on PATH, so every gh call, gh-read.sh's and third-party scripts' included, is paced.
@@ -251,3 +319,33 @@ if [[ "${ORCHESTRATE_GH_BUDGET:-0}" == 1 ]]; then
   _orch_shim="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gh-shim"
   case ":$PATH:" in *":$_orch_shim:"*) ;; *) export PATH="$_orch_shim:$PATH" ;; esac
 fi
+
+# --- Rerun verdicts and reruns.log (#275): one definition for main-health, triage-tick and
+# failure-triage, so they cannot disagree about what a classifier verdict means. ---
+# orch_verdict_rerunnable VERDICT: exit 0 when the verdict says "re-run, do not fix". Case-insensitive,
+# `_` read as `-`.
+orch_verdict_rerunnable() {
+  local v
+  v=$(printf '%s' "${1-}" | tr '[:upper:]_' '[:lower:]-')
+  case "$v" in flake | known-flake | infra | rerun | rerun-dont-fix) return 0 ;; esac
+  return 1
+}
+# orch_mirror_sig FILE -> kind (apt, pip, npm or maven) when FILE shows a package install that could
+# not reach its public mirror (#217, #297): infrastructure, so a rerun is right and a code fix is not.
+# The one definition, shared by failure-triage.sh and main-health.sh.
+orch_mirror_sig() {
+  local kind=""
+  if grep -Eqi -e 'Failed to fetch https?://|Temporary failure resolving|Unable to connect to [^ ]*(ubuntu|debian|archive|security)|Could not resolve .(archive|security|deb)[^ ]*|Hash Sum mismatch|Could not get lock /var/lib/(apt|dpkg)|Some index files failed to download|Connection failed \[IP' "$1"; then kind=apt
+  elif grep -Eqi -e 'Could not fetch URL https://pypi|(Read timed out|Connection (to|aborted)|Max retries exceeded).*(pypi|files\.pythonhosted)' "$1"; then kind=pip
+  elif grep -Eqi -e 'npm (ERR!|error) (code )?(ETIMEDOUT|ECONNRESET|EAI_AGAIN|ENOTFOUND)|npm (ERR!|error) network' "$1"; then kind=npm
+  elif grep -Eqi -e 'Could not transfer artifact|Could not (GET|HEAD) .https://(repo|plugins)\.(maven|gradle)' "$1"; then kind=maven
+  fi
+  [[ -n "$kind" ]] || return 1
+  echo "$kind"
+}
+# orch_rerun_seen RUN_ID: exit 0 when the run's latest record in the log file named by the caller's
+# $reruns (its state dir's reruns.log) is anything but a refused rerun. An `intent` with no outcome
+# (the answer was lost) counts as re-run: reconciled by the snapshot, never replayed.
+orch_rerun_seen() {
+  [[ -f "${reruns:-}" ]] && awk -F'\t' -v r="run=$1" '$2 == r { last = $NF } END { exit !(last != "" && last !~ /^(full-)?failed/) }' "$reruns"
+}

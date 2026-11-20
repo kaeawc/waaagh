@@ -27,7 +27,8 @@ for arg in "$@"; do
     *) picked+="$arg " picked_list+=("$arg") ;;
   esac
 done
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -126,11 +127,10 @@ bench_case() {
   all_cases+="$name " rev_cases="$name $rev_cases"
   printf -v "needs_${name//-/_}" '%s' "$*"
 }
+# shellcheck source=pr_fixture.bash
+source "$here/pr_fixture.bash"
 pr_rows() {
-  jq -n --argjson n "$1" '[range(1; $n + 1) | {number: ., author: {login: "me"}, isDraft: false,
-    isCrossRepository: false, baseRefName: "main", headRefOid: ("abcdef0123456789" + tostring),
-    mergeable: "MERGEABLE", labels: [],
-    statusCheckRollup: [{name: "build", conclusion: "SUCCESS", startedAt: "2026-09-27T01:00:00Z"}]}]' >"$FX/prs.json"
+  pr_fixture_rows 1 "$1" me false false MERGEABLE '[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}]' | jq -s . >"$FX/prs.json"
 }
 # The REST path (#109): the stub refuses GraphQL while $FX/rest exists. Allowing it again also
 # forgets the refusal (orch_gh_api remembers it in the state root).

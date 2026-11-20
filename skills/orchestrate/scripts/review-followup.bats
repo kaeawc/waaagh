@@ -8,7 +8,7 @@ setup() {
   ROOT="$(cd "$SCRIPTS/../../.." && pwd)"
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
-  export ORCHESTRATE_NOW=1793880000   # 2026-11-05T10:40:00Z
+  export ORCHESTRATE_NOW=1793880000   # 2026-11-05T12:00:00Z
   # One review thread lives in $FX: its PR ($FX/thread-pr), resolved flag ($FX/resolved) and
   # replies ($FX/replies.json). One issue: state ($FX/istate), labels ($FX/labels, one per line)
   # and comments ($FX/icomments.json). Every write is logged to $FX/writes.
@@ -105,7 +105,7 @@ JSON
   [ "${lines[0]}" = "$(printf 'first\tPRRT_first\ta.sh:3\tclaude\tu1\tOff by one')" ]
   [ "${lines[1]}" = "$(printf 'later\tPRRT_later\tb.sh:9\tclaude\tu2\tNit: page dropped')" ]
   [[ "${lines[2]}" == own$'\t'PRRT_own* ]]
-  [ "$stderr" = "pr=7 unresolved=3 first=1 later=1 own=1 round-end=2026-11-04T10:00:00Z" ]
+  [ "$stderr" = "pr=7 unresolved=3 first=1 later=1 own=1 optional=0 round-end=2026-11-04T10:00:00Z" ]
 }
 
 @test "list: --round-end moves the round boundary" {
@@ -114,7 +114,7 @@ JSON
   [ "$status" -eq 0 ]
   [[ "${lines[1]}" == first$'\t'PRRT_later* ]]
   stderr=$(cat "$FX/err")
-  [[ "$stderr" == *"first=2 later=0 own=1 round-end=2026-11-04T15:30:00Z" ]]
+  [[ "$stderr" == *"first=2 later=0 own=1 optional=0 round-end=2026-11-04T15:30:00Z" ]]
 }
 
 @test "list: follows further pages of review threads" {

@@ -40,6 +40,10 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
 @test "lanes are claimed against duplicates and lanes re-verify state before asserting it (#24)" {
   has "$SKILL" "lane-claim.sh\" add"
   has "$ROLES/implementation-lane.md" "Search the open PRs for the issue number"
+  # Every manifest that compiles a touched file is built, not only the nearest one (#316).
+  has "$ROLES/implementation-lane.md" "Build every manifest that compiles a file you touched"
+  has "$ROLES/implementation-lane.md" "swift build --package-path"
+  has "$ROOT/skills/orchestrate/SKILL.md" "does not prove the aggregate build"
   has "$ROLES/_common.md" "re-read it with"
 }
 

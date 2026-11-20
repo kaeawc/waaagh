@@ -13,6 +13,11 @@
 # then its cursors). $FX/thread-shape: graphql (default: isResolved/isOutdated) | snake
 # (resolved/outdated) | wrapped ({"threads": [...]}). $FX/rest-fails-<sha>: that head's check-runs
 # answer HTTP 404.
+# The REST merge (#266): PUT pulls/<n>/merge needs $FX/view-<n>.json and, like GitHub, merges
+# (state MERGED, mergeCommit feedface) only when its sha= is that file's head, else HTTP 409; it is
+# logged to $FX/writes. $FX/rest-merge: 405 (not mergeable) | 5xx (502, nothing merged) | lost
+# (merged, 502 returned) | no-readback (merged, 502 returned, then the next 9 reads of pulls/<n> answer 502) | moved
+# (the head moves to 1111... just before the merge, so it answers 409).
 # Full thread nodes (thread-sweep.sh's fixtures: id, starter, latest) are served as threads tied to
 # their first comment (comments[0].databaseId; snake: root_comment_id), with pulls/<n>/comments,
 # pulls/<n>/commits and pulls/comments/<id> made from the same nodes (#136), and the two REST
@@ -45,7 +50,9 @@ REST='def rest: {number, title: (.title // ""), body: (.body // ""),
     head: {ref: .headRefName, sha: .headRefOid, repo: (if .isCrossRepository then {full_name: "fork/r"} else {full_name: "o/r"} end)},
     labels: (.labels // []), created_at: .createdAt, updated_at: .updatedAt, html_url: .url,
     mergeable: (if .mergeable == "MERGEABLE" then true elif .mergeable == "CONFLICTING" then false else null end),
-    mergeable_state: ((.mergeStateStatus // "unknown") | ascii_downcase)};
+    mergeable_state: ((.mergeStateStatus // "unknown") | ascii_downcase),
+    merge_commit_sha: (.mergeCommit.oid // null),
+    auto_merge: (if .autoMergeRequest == null then null else {merge_method: "squash"} end)};
   def status_item: .__typename == "StatusContext" or has("context");
   def rollup($sha): (map(select(.headRefOid == $sha)) | first // {}) | (.statusCheckRollup // []);'
 # Full thread nodes as REST review comments: thread i of PR n starts with comment (n*100+i+1)*10;
@@ -147,7 +154,30 @@ case "$a" in
   "api repos/o/r/pulls/"*/reviews*)
     n=${a#api repos/o/r/pulls/}; n=${n%%/*}
     jq --argjson n "$n" '(map(select(.number == $n)) | first // {}) | (.reviews // [])' "$FX/prs.json" ;;
+  "api -X PUT repos/o/r/pulls/"*/merge*)
+    n=${a#api -X PUT repos/o/r/pulls/}; n=${n%%/*}; v="$FX/view-$n.json"
+    [ -f "$v" ] || nf
+    sha=$(printf '%s\n' "$a" | sed -nE 's/.* -f sha=([^ ]*).*/\1/p')
+    echo "rest-merge $n sha=$sha" >>"$FX/writes"
+    mode=$(cat "$FX/rest-merge" 2>/dev/null || true)
+    if [ "$mode" = moved ]; then # a push lands just before the merge
+      jq '.headRefOid = "1111111111111111111111111111111111111111"' "$v" >"$v.tmp" && mv "$v.tmp" "$v"; fi
+    case "$mode" in
+      405) echo '{"message":"Pull Request is not mergeable","status":"405"}'
+        echo "gh: Pull Request is not mergeable (HTTP 405)" >&2; exit 1 ;;
+      5xx) echo "gh: HTTP 502: Bad Gateway" >&2; exit 1 ;;
+    esac
+    [ -n "$sha" ] && [ "$sha" = "$(jq -r .headRefOid "$v")" ] ||
+      { echo "gh: Head branch was modified. Review and try the merge again. (HTTP 409)" >&2; exit 1; }
+    jq '.state = "MERGED" | .mergeCommit = {oid: "feedface"}' "$v" >"$v.tmp" && mv "$v.tmp" "$v"
+    case "$mode" in
+      lost) echo "gh: HTTP 502: Bad Gateway" >&2; exit 1 ;;
+      no-readback) echo 9 >"$FX/rest-view-fails"; echo "gh: HTTP 502: Bad Gateway" >&2; exit 1 ;;
+    esac
+    echo '{"sha":"feedface","merged":true,"message":"Pull Request successfully merged"}' ;;
   "api repos/o/r/pulls/"*)
+    if [ -s "$FX/rest-view-fails" ] && [ "$(cat "$FX/rest-view-fails")" -gt 0 ]; then
+      echo $(($(cat "$FX/rest-view-fails") - 1)) >"$FX/rest-view-fails"; echo "gh: HTTP 502: Bad Gateway" >&2; exit 1; fi
     n=${a#api repos/o/r/pulls/}
     if [ -f "$FX/view-$n.json" ]; then jq "$REST"'rest' "$FX/view-$n.json"
     else one=$(jq -c --argjson n "$n" "$REST"'map(select(.number == $n)) | first // empty | rest' "$FX/prs.json"); [ -n "$one" ] || nf; echo "$one"; fi ;;

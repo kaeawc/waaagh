@@ -5,6 +5,9 @@ and the tests for this issue yourself, in the lane worktree, verify them, and re
 orchestrator reads your diff, has it validated independently and reviewed, and commits and pushes
 it: you leave it uncommitted.
 
+You may start in `{{FORBIDDEN}}`, the orchestrator's own checkout: never edit, check out, pull or
+build there. Your first write is in the lane worktree.
+
 Your prompt gives: the lane worktree (already at current `origin/{{BASE}}`), the issue text as a
 file path, the files in scope, and the files owned by other lanes. You run on Sonnet for routine,
 fully specified work and on Opus for judgment work; the orchestrator chose the model.
@@ -30,7 +33,12 @@ fully specified work and on Opus for judgment work; the orchestrator chose the m
 6. **Verification, inline and synchronous** — the suites for the touched area by explicit,
    non-empty file list (echo the list; refuse to run when it is empty), then the repo's format,
    typecheck and lint gates. Every gate runs through `{{SCRIPTS}}/gate-slot.sh --` so the host is
-   not overloaded; exit 75 means no slot came free: report it, do not loop.
+   not overloaded; exit 75 means no slot came free: report it, do not loop. The gate gives your
+   build a lane-private output dir (`$ORCHESTRATE_LANE_BUILD_DIR`: TMPDIR, derived data, Gradle
+   project cache) and runs Gradle without a daemon. Never point a build at a shared path such as
+   `/tmp/DerivedData`, and never run `./gradlew --stop` (it stops every lane's builds). A Gradle
+   build that fails in seconds with "problem occurred starting process" hit a stale daemon: re-run
+   it once through the gate before reading your code.
 
 Run every gate inline and wait for it; never background one. Record the PIDs of every process you
 start (suites, servers) and kill exactly those before you report. Commit and push nothing: the
@@ -39,6 +47,12 @@ orchestrator holds that authority.
 ## Before you report
 - `git -C <worktree> status` and `git -C <worktree> diff --stat`: only the intended files. An
   empty diff is never `complete`.
+- Build every manifest that compiles a file you touched, not only the nearest one (#316). A repo
+  can compose the same sources twice: a root `Package.swift` and a sub-package's own, a root build
+  and a module's. List them (`git -C <worktree> ls-files 'Package.swift' '*/Package.swift'`) and
+  build each whose directory holds a touched file (`swift build --package-path <dir>`, plus the
+  sub-package's `swift test`). A module one manifest defines may not exist in the other, so never
+  `@testable import` (or import a test-only module) from a non-test source.
 - Your own test run is a claim, not evidence: record it with `{{SCRIPTS}}/validate.sh run --dir
   <worktree> --cmd "<command>" --runner implementation-lane` (no `--independent`; the
   orchestrator's validator writes the independent receipt).

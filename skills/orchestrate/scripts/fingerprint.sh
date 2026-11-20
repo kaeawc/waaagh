@@ -3,8 +3,11 @@
 # A dirty tree is not identified by HEAD alone, so validation results must be keyed by this.
 #
 # Usage: fingerprint.sh [--dir PATH] [--key COMMAND] [--env NAME]... [--tool CMD]...
-#                       [--input PATH]... [--env-manifest FILE] [--show-env]
+#                       [--input PATH]... [--env-manifest FILE] [--show-env] [--fingerprint-only]
 #   (no --key)   vcs=<git|jj> base=<sha> tree=<clean|hash> fingerprint=<base12>-<tree12>
+#   --fingerprint-only   print just <base12>-<tree12>, nothing else: callers must use this rather
+#                  than parse the summary line. No fingerprint (e.g. not a checkout): exits
+#                  non-zero with nothing on stdout. Exit 2 when combined with --key/--show-env.
 #   --key CMD    v2|<fingerprint>|<os-arch>|<cmd-hash12>|<env-hash12>  (cache key for one
 #                command's result; keys without the v2 prefix are an older contract, never reuse)
 # The environment signature covers only what you declare, never the whole environment:
@@ -22,6 +25,7 @@ set -euo pipefail
 dir=.
 key_cmd=""
 show_env=no
+only_fp=no
 decl=()
 while (($#)); do
   case "$1" in
@@ -43,10 +47,16 @@ while (($#)); do
       done <"$2"
       shift 2 ;;
     --show-env) show_env=yes; shift ;;
+    --fingerprint-only) only_fp=yes; shift ;;
     -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     *) echo "fingerprint.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+if [[ "$only_fp" == yes && ( -n "$key_cmd" || "$show_env" == yes ) ]]; then
+  echo "fingerprint.sh: --fingerprint-only cannot combine with --key or --show-env" >&2
+  exit 2
+fi
 
 cd "$dir"
 
@@ -128,6 +138,8 @@ fi
 if [[ -n "$key_cmd" ]]; then
   cmd_hash=$(printf '%s' "$key_cmd" | hash_stdin)
   printf 'v2|%s|%s|%s|%s\n' "$fingerprint" "$(uname -sm | tr ' ' '-')" "${cmd_hash:0:12}" "${env_sig:0:12}"
+elif [[ "$only_fp" == yes ]]; then
+  printf '%s\n' "$fingerprint"
 elif [[ "$show_env" == yes ]]; then
   printf 'envsig=%s\n' "${env_sig:0:12}"
 else

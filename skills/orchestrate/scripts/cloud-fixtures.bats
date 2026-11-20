@@ -119,7 +119,8 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   msg=$(jq -r '.job_config.ccr.events[0].data.message' <<<"$output")
   [[ "$msg" == *"Implement the issue, with tests. Commit the captured fixtures from https://github.com/o/r/issues/7#issuecomment-40 verbatim; never hand-write, trim or regenerate them."* ]]
   [[ "$msg" != *'{{'* ]]
-  [ "${#msg}" -lt 1500 ]
+  # Real limit: 65,536 characters on a routine run's text (brief-size.bats, #239); held to half.
+  [ "${#msg}" -lt 32768 ]
 }
 
 @test "brief: --fixtures none adds nothing; an override template without the placeholder gets a line" {

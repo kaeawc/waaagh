@@ -33,7 +33,8 @@
 # Exit: 0 clear (check) or listed (paths) | 2 usage | 3 stale | 9 unverified (a read failed, or the
 #       merge-result check could not be set up): treat as not clear
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal

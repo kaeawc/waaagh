@@ -1,84 +1,9 @@
 #!/usr/bin/env bats
-# Self-test for merge-queue.sh: real git against a local bare origin, stubbed gh.
+# Self-test for merge-queue.sh: real git against a local bare origin, stubbed gh. Ordering, dependencies,
+# conflicts, check failures and pacing; recovery paths are in merge-queue-recovery.bats.
 # Run: bats scripts/merge-queue.bats
 
-# The bare origin and its seed clone with one commit, built once per file and copied into each
-# test (seed_origin_template and seed_origin_copy in test_helper.bash, #112).
-setup_file() {
-  load test_helper
-  seed_origin_template
-}
-
-setup() {
-  load test_helper
-  SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-  export ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_AUTHOR=me ORCHESTRATE_NOW=1790510400 ORCHESTRATE_READ_SLEEP=0
-  unset MERGE_QUEUE_CHECK_CMD MERGE_QUEUE_ADMIN_EVIDENCE
-  seed_origin_copy
-  FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
-  export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
-  # An unprotected server: it accepts any merge whose --match-head-commit matches. The PR head
-  # is the SHA really pushed to the local origin (or $FX/stale-head while GitHub lags).
-  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
-#!/usr/bin/env bash
-all="$*"
-echo "$all" >>"$FX/calls"
-head_of() {
-  if [ -f "$FX/stale-head" ]; then cat "$FX/stale-head"; return; fi
-  git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify "refs/heads/$(cat "$FX/branch")" || echo none
-}
-case "$all" in
-  "api repos/o/r") echo '{"default_branch":"main"}' ;;
-  *rules/branches*) echo '[]' ;;
-  "api repos/o/r/branches/"*) echo '{"protected":false}' ;;
-  *graphql*) jq -n --argjson t "$(cat "$FX/threads.json")" '{data: {repository: {p5: {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: $t}}}}}' ;;
-  "api repos/o/r/actions/runs?"*) jq '{workflow_runs: map({name: .workflowName, status, conclusion, head_sha: .headSha, id: .databaseId, created_at: .createdAt})}' "$FX/runs.json" ;;
-  "pr list"*"--state merged"*) cat "$FX/merged-prs.json" 2>/dev/null || echo '[]' ;;
-  "pr list"*--head*) [ ! -f "$FX/list-fails-$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/')" ] || { echo "HTTP 502" >&2; exit 1; }
-    rm -f "$FX/merged"; b=$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/'); echo "$b" >>"$FX/order"; echo "$b" >"$FX/branch"
-    jq -n --arg h "$(head_of)" '[{number: 5, headRefOid: $h}]' ;;
-  "pr list"*) jq -n --arg h "$(head_of)" --argjson c "$(cat "$FX/checks.json")" --arg m "$(cat "$FX/mergeable")" \
-    '[{number: 5, author: {login: "me"}, isDraft: false, isCrossRepository: false, baseRefName: "main",
-       headRefOid: $h, mergeable: $m, labels: [], statusCheckRollup: $c}]' ;;
-  "pr merge"*) want=$(echo "$all" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')
-    [ "$want" = "$(head_of)" ] || { echo "Head branch was modified"; exit 1; }
-    echo MERGED >"$FX/merged"
-    [ "$(cat "$FX/merge-mode" 2>/dev/null)" != no-readback ] || echo 3 >"$FX/view-fails" ;;
-  "pr view"*) if [ -s "$FX/view-fails" ] && [ "$(cat "$FX/view-fails")" -gt 0 ]; then
-      echo $(($(cat "$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
-    if [ -f "$FX/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}';
-    else jq -n --arg h "$(head_of)" --arg m "$(cat "$FX/mergeable")" '{state: "OPEN", isDraft: false, isCrossRepository: false,
-      headRefOid: $h, author: {login: "me"}, mergeable: $m}'; fi ;;
-  *) echo "unexpected gh call: $all" >&2; exit 9 ;;
-esac
-STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
-  echo '[{"name":"build","conclusion":"SUCCESS","startedAt":"2026-09-27T01:00:00Z"}]' >"$FX/checks.json"
-  echo MERGEABLE >"$FX/mergeable"
-  echo '[]' >"$FX/threads.json"
-  echo '[]' >"$FX/runs.json"
-  echo body >"$BATS_TEST_TMPDIR/body.md"
-}
-
-# wt NAME [FILE CONTENT]: a worktree-clone on branch NAME with one commit editing FILE.
-wt() {
-  git clone -q "$BATS_TEST_TMPDIR/origin.git" "$BATS_TEST_TMPDIR/$1" 2>/dev/null
-  git -C "$BATS_TEST_TMPDIR/$1" config user.email t@example.com
-  git -C "$BATS_TEST_TMPDIR/$1" config user.name t
-  git -C "$BATS_TEST_TMPDIR/$1" config commit.gpgsign false
-  git -C "$BATS_TEST_TMPDIR/$1" switch -q -c "$1"
-  echo "${3:-$1}" >"$BATS_TEST_TMPDIR/$1/${2:-$1.txt}"
-  git -C "$BATS_TEST_TMPDIR/$1" add -A
-  git -C "$BATS_TEST_TMPDIR/$1" commit -qm "$1"
-}
-
-mq() { "$SCRIPTS/merge-queue.sh" "$@" --repo o/r; }
-mqr() { "$SCRIPTS/merge-queue.sh" "$1" --repo o/r "${@:2}"; }
-enqueue() { # id [requires]
-  mq add --id "$1" --worktree "$BATS_TEST_TMPDIR/$1" --branch "$1" --title "t $1" \
-    --body-file "$BATS_TEST_TMPDIR/body.md" --requires "${2:--}"
-}
-outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
+load merge_queue_setup
 
 @test "add rejects a duplicate id and leaves one row" {
   wt a
@@ -97,6 +22,26 @@ outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   [ "$(outcome a)" = merged ]
   grep -q "pr merge 5 --repo o/r --squash --match-head-commit $(git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse refs/heads/a)$" "$FX/calls"
   git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/a
+}
+
+@test "paced pushes (#219): the cap and gap leave later items waiting, unpushed, for a later pass" {
+  wt a
+  wt b
+  enqueue a
+  enqueue b
+  export ORCHESTRATE_UPDATE_CAP=1 ORCHESTRATE_UPDATE_GAP=600
+  run mqr run-once
+  [ "$status" -eq 0 ]
+  [ "$(outcome a)" = merged ]
+  [ "$(outcome b)" = waiting ]
+  [[ "$output" == *"b: waiting (update paced (cap: 1 of 1 updates made this pass); a later pass pushes it)"* ]]
+  run ! git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify refs/heads/b
+  [ "$(cut -f2,3 "$ORCHESTRATE_STATE_DIR/o__r/branch-updates.log")" = $'-\tmerge-queue' ]
+  # a new pass inside the gap: still paced
+  run mqr run-once
+  [[ "$output" == *"b: waiting (update paced (gap: last update (PR -) 0s ago"* ]]
+  ORCHESTRATE_NOW=$((ORCHESTRATE_NOW + 600)) run mqr run-once
+  [ "$(outcome b)" = merged ]
 }
 
 @test "a conflict records outcome conflict, is not done, and blocks its dependent" {
@@ -261,101 +206,4 @@ outcome() { head -1 "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/$1.outcome"; }
   [ "$(outcome a)" = blocked ]
   [[ "$output" == *"fail:build"* ]]
   ! grep -q 'pr merge' "$FX/calls"
-}
-
-@test "main health is refreshed each pass: stale red is cleared by green evidence, fresh red stops the pass" {
-  wt a
-  enqueue a
-  mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"; echo "red old" >"$ORCHESTRATE_STATE_DIR/o__r/MAIN_RED"
-  echo '[{"workflowName":"CI","status":"completed","conclusion":"failure","headSha":"bbbbbbbbbbbb","databaseId":2,"createdAt":"2026-09-27T02:00:00Z"}]' >"$FX/runs.json"
-  run mqr run-once
-  [ "$status" -eq 4 ]
-  [ ! -f "$ORCHESTRATE_STATE_DIR/o__r/merge-queue/a.outcome" ]
-  echo '[{"workflowName":"CI","status":"completed","conclusion":"success","headSha":"cccccccccccc","databaseId":3,"createdAt":"2026-09-27T03:00:00Z"}]' >"$FX/runs.json"
-  run mqr run-once
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"main: green ccccccccc"* ]]
-  [ "$(outcome a)" = merged ]
-}
-
-@test "a PR that does not yet show the pushed head is waiting, then merges at the exact head" {
-  wt a
-  enqueue a
-  echo 1111111111111111111111111111111111111111 >"$FX/stale-head"
-  run mqr run-once
-  [ "$(outcome a)" = waiting ]
-  [[ "$output" == *"PR 5 shows head 111111111"* ]]
-  rm "$FX/stale-head"
-  run mqr run-once
-  [ "$(outcome a)" = merged ]
-  grep -q "match-head-commit $(git -C "$BATS_TEST_TMPDIR/a" rev-parse HEAD)" "$FX/calls"
-}
-
-@test "the admin path in the queue is limited to the named checks" {
-  wt a
-  enqueue a
-  echo '[{"name":"build","conclusion":"SUCCESS"},{"name":"sim","conclusion":"FAILURE"}]' >"$FX/checks.json"
-  export MERGE_QUEUE_ADMIN_EVIDENCE="sim: known flake" MERGE_QUEUE_ADMIN_CHECKS=sim ORCHESTRATE_FAST_PATH_OVER=0
-  echo '[{"isResolved":false,"isOutdated":false}]' >"$FX/threads.json"
-  run mqr run-once
-  [ "$(outcome a)" = blocked ]
-  run ! grep -q 'pr merge' "$FX/calls"
-  echo '[]' >"$FX/threads.json"
-  mqr retry a
-  run mqr run-once
-  [ "$(outcome a)" = merged ]
-  grep -q -- '--admin' "$FX/calls"
-}
-
-@test "a merge whose answer was lost is confirmed on the next pass, without a new push, PR or merge" {
-  wt a
-  wt b
-  enqueue a
-  enqueue b a
-  echo no-readback >"$FX/merge-mode"
-  run mqr run-once
-  [ "$(outcome a)" = waiting ]
-  [[ "$output" == *"merge outcome unknown"* ]]
-  [[ "$output" == *"b: blocked on a"* ]]
-  rm "$FX/merge-mode"; : >"$FX/calls"
-  run mqr run-once
-  [ "$(outcome a)" = merged ]
-  [[ "$output" == *"a: merged (PR 5 (confirmed on re-check))"* ]]
-  [ "$(outcome b)" = merged ]
-  # a needed one read; the only merge in this pass was b's.
-  [ "$(grep -c 'pr merge' "$FX/calls")" -eq 1 ]
-}
-
-@test "a retried item whose PR was already merged at that head is confirmed, not reopened" {
-  wt a
-  enqueue a
-  MERGE_QUEUE_CHECK_CMD='exit 1' run mqr run-once
-  [ "$(outcome a)" = checkfail ]
-  git -C "$BATS_TEST_TMPDIR/a" push -q origin a
-  # Someone merged it meanwhile: no open PR, a merged one at this exact head.
-  jq -n --arg h "$(git -C "$BATS_TEST_TMPDIR/a" rev-parse HEAD)" '[{number: 9, headRefOid: $h}]' >"$FX/merged-prs.json"
-  echo '[]' >"$FX/open-override"
-  mqr retry a
-  sed -i.bak 's/^  "pr list"\*--head\*) /  "pr list"*--head*) [ -f "$FX\/open-override" ] \&\& { cat "$FX\/open-override"; exit 0; }; /' "$BATS_TEST_TMPDIR/bin/gh"
-  run mqr run-once
-  [ "$(outcome a)" = merged ]
-  [[ "$output" == *"PR 9 (already merged at"* ]]
-  run ! grep -q 'pr create' "$FX/calls"
-  ! grep -q 'pr merge' "$FX/calls"
-}
-
-@test "a transient lookup failure parks one item as waiting and the pass goes on" {
-  wt a
-  wt b
-  enqueue a
-  enqueue b
-  touch "$FX/list-fails-a"
-  run mqr run-once
-  [ "$status" -eq 0 ]
-  [ "$(outcome a)" = waiting ]
-  [[ "$output" == *"a: waiting (PR lookup failed (transient))"* ]]
-  [ "$(outcome b)" = merged ]
-  rm "$FX/list-fails-a"
-  run mqr run-once
-  [ "$(outcome a)" = merged ]
 }

@@ -2,28 +2,40 @@
 # One review round per PR: review threads that arrive after a PR's first review round become
 # follow-up issues instead of blocking its merge (pr-ready.sh counts every unresolved thread).
 #
-# Usage: review-followup.sh list --pr N [--round-end ISO] [--repo OWNER/REPO]
+# Usage: review-followup.sh list --pr N [--round-end ISO] [--after-fix] [--repo OWNER/REPO]
 #        review-followup.sh file --pr N --thread ID (--title TEXT | --append M) [--note TEXT]
 #                                [--route cloud-ready|none] [--repo OWNER/REPO] [--dry-run]
+#        review-followup.sh decline --pr N --thread ID --reason TEXT [--repo OWNER/REPO] [--dry-run]
 #   list  read-only. One TSV row per unresolved, current (not outdated) review thread:
 #           class  thread-id  path:line  reviewer  url  summary
 #         class: first (part of the first review round) | later (started after it) | own (started
-#         by the PR author). The first round ends when the earliest review by anyone other than
-#         the PR author was submitted; --round-end overrides that time. Last line on stderr:
-#         "pr=<n> unresolved=<n> first=<n> later=<n> own=<n> round-end=<iso|none>".
+#         by the PR author) | optional (an optional finding after round 1, #257: not the author's,
+#         its first comment carries an optional marker, and it is `later` or the PR's fix round
+#         happened: a fixing or repairing row in review-ledger.sh, or --after-fix). Optional
+#         markers: a yellow or purple circle (Claude Code Review's nit and pre-existing), the word
+#         "(optional)", or a `severity: nit|optional|pre-existing` HTML comment. The first round
+#         ends when the earliest review by anyone other than the PR author was submitted;
+#         --round-end overrides that time. Last line on stderr:
+#         "pr=<n> unresolved=<n> first=<n> later=<n> own=<n> optional=<n> round-end=<iso|none>".
 #   file  settle ONE thread as a follow-up: open a new issue (--title) or add the finding to an
 #         open issue with the same root cause (--append M), reply "follow-up #M" on the thread and
 #         resolve it (thread-resolve.sh), then put the issue in the cloud dispatch queue
 #         (issue-route.sh set --route cloud-ready). An appended issue that already has a route
 #         keeps it; --route none skips routing. The issue text quotes the finding and links the
 #         thread; --note adds the filer's own line (e.g. the shared root cause).
+#   decline  answer ONE optional finding without fixing it (#257): reply "Optional, not fixed:
+#         <reason>" on the thread and resolve it (thread-resolve.sh), no issue. Refused when the
+#         thread's first comment carries no optional marker. thread-sweep.sh counts such a reply
+#         as an answer, so a cloud session that can only reply leaves it resolvable.
 # A new issue is journaled (<state dir>/ops/followup-<thread>.json) and carries a hidden marker;
 # a rerun finds it (journal, else the 100 newest issues) instead of filing it twice, and an append
 # is skipped when the issue already has that thread's marker.
-# Exit: 0 ok (or would) | 2 usage | 3 refused (thread not on the PR, or --append issue not open) |
+# Exit: 0 ok (or would) | 2 usage | 3 refused (thread not on the PR, --append issue not open, or
+#       decline of a thread with no optional marker) |
 #       4 a read failed | 5 a write failed (rerun finishes it) | 9 outcome unknown (rerun reconciles).
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority low
@@ -31,10 +43,12 @@ orch_gh_priority low
 usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
-repo="" pr="" round_end="" thread="" title="" append="" note="" route=cloud-ready dry=no
+repo="" pr="" round_end="" thread="" title="" append="" note="" route=cloud-ready dry=no after_fix=no reason=""
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
+    --after-fix) after_fix=yes; shift ;;
+    --reason) reason=$2; shift 2 ;;
     --pr) pr=$2; shift 2 ;;
     --round-end) round_end=$2; shift 2 ;;
     --thread) thread=$2; shift 2 ;;
@@ -47,10 +61,13 @@ while (($#)); do
     *) echo "review-followup.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-case "$cmd" in list | file) ;; -h | --help) orch_usage; exit 0 ;; *) usage ;; esac
+case "$cmd" in list | file | decline) ;; -h | --help) orch_usage; exit 0 ;; *) usage ;; esac
 [[ "$pr" =~ ^[0-9]+$ ]] || usage
 repo=$(orch_repo "$repo")
 ghr() { "$here/gh-read.sh" --json --tries 3 -- "$@" 2>/dev/null; }
+# The optional-finding markers (#257). thread-sweep.sh carries the same pattern for its `declined`
+# answer; keep the two in step.
+optional_re='🟡|🟣|\(optional\)|<!--\s*severity:\s*(nit|optional|pre-existing)\s*-->'
 
 case "$cmd" in
   list)
@@ -72,20 +89,28 @@ case "$cmd" in
       cursor=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo
         | if .hasNextPage then (.endCursor // "") else "" end' <<<"$page")
     done
-    jq -r --arg override "$round_end" --arg pr "$pr" '
+    # The fix round happened when the ledger has a fixing or repairing row for the PR. An
+    # unreadable ledger counts as no fix round: optional first-round threads stay `first`.
+    if [[ "$after_fix" == no ]] && "$here/review-ledger.sh" list --repo "$repo" --pr "$pr" 2>/dev/null |
+      awk -F'\t' '$3 == "fixing" || $3 == "repairing" { f = 1 } END { exit !f }'; then
+      after_fix=yes
+    fi
+    jq -r --arg override "$round_end" --arg pr "$pr" --arg re "$optional_re" --arg fixed "$after_fix" '
       .[0].author.login as $me
       | (if $override != "" then $override else
            ([.[0].reviews.nodes[] | select(.author.login != $me and .submittedAt != null) | .submittedAt]
             | min // "") end) as $end
       | [.[].reviewThreads.nodes[] | select((.isResolved | not) and (.isOutdated | not))
          | .comments.nodes[0] as $c
-         | {class: (if $c.author.login == $me then "own" elif $end == "" or $c.createdAt <= $end then "first"
-                    else "later" end),
+         | (if $c.author.login == $me then "own" elif $end == "" or $c.createdAt <= $end then "first"
+            else "later" end) as $k
+         | {class: (if $k != "own" and ($k == "later" or $fixed == "yes") and (($c.body // "") | test($re; "i"))
+                    then "optional" else $k end),
             id, at: "\(.path):\(.line // .originalLine // "-")", who: ($c.author.login // "-"), url: ($c.url // "-"),
             sum: ($c.body // "" | gsub("<[^>]*>|!\\[[^]]*\\]\\([^)]*\\)|\\*\\*"; "") | split("\n")
                   | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != "")) | (first // "-") | gsub("\t"; " ") | .[0:120])}]
       | (.[] | [.class, .id, .at, .who, .url, .sum] | @tsv),
-        ("pr=\($pr) unresolved=\(length) first=\(map(select(.class == "first")) | length) later=\(map(select(.class == "later")) | length) own=\(map(select(.class == "own")) | length) round-end=\(if $end == "" then "none" else $end end)"
+        ("pr=\($pr) unresolved=\(length) first=\(map(select(.class == "first")) | length) later=\(map(select(.class == "later")) | length) own=\(map(select(.class == "own")) | length) optional=\(map(select(.class == "optional")) | length) round-end=\(if $end == "" then "none" else $end end)"
          | "SUMMARY\t" + .)' <<<"$pages" | awk -F'\t' '$1 == "SUMMARY" { print $2 > "/dev/stderr"; next } { print }'
     ;;
 
@@ -186,5 +211,22 @@ $marker" 2>/dev/null) || { echo "unverified: issue create for thread $thread fai
       "$issue" "$verb" "$routed" >>"$state/thread-actions.log"
     echo "followup pr=$pr thread=$thread issue=#$issue route=$routed$([[ $rc == 0 ]] || echo " incomplete; rerun to finish")"
     exit "$rc"
+    ;;
+
+  decline)
+    [[ "$thread" =~ ^[A-Za-z0-9_=-]+$ && -n "${reason//[[:space:]]/}" ]] || usage
+    # shellcheck disable=SC2016  # GraphQL variables, not shell expansions
+    t=$(ghr api graphql -F id="$thread" -f query='query($id:ID!){node(id:$id){__typename
+      ... on PullRequestReviewThread{pullRequest{number} comments(first:1){nodes{body}}}}}') ||
+      { echo "review-followup: thread $thread could not be read" >&2; exit 4; }
+    [[ "$(jq -r '.data.node.__typename // ""' <<<"$t")" == PullRequestReviewThread ]] ||
+      { echo "refused: $thread is not a pull request review thread"; exit 3; }
+    [[ "$(jq -r .data.node.pullRequest.number <<<"$t")" == "$pr" ]] ||
+      { echo "refused: thread $thread is not on PR #$pr"; exit 3; }
+    jq -e --arg re "$optional_re" '.data.node.comments.nodes[0].body // "" | test($re; "i")' >/dev/null <<<"$t" ||
+      { echo "refused: thread $thread carries no optional marker; fix it, file it (file) or answer it by hand"; exit 3; }
+    args=(--repo "$repo" --pr "$pr" --thread "$thread" --reply "Optional, not fixed: ${reason//$'\n'/ }")
+    [[ "$dry" == no ]] || args+=(--dry-run)
+    exec "$here/thread-resolve.sh" "${args[@]}"   # it logs the resolve to thread-actions.log
     ;;
 esac

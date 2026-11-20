@@ -30,7 +30,8 @@
 # Exit: 0 ok | 3 conflict | 4 the open PRs (check, add) or an issue (closed: the others are still
 #       printed) could not be read; no verdict, see gh-read.sh | 2 usage
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal
@@ -83,20 +84,18 @@ with_lock() { # serialize writers; a lock older than 5 minutes is a leftover
 
 # conflicts: prints one line per overlap with an active lane or an open PR.
 conflicts() {
-  local prs rc=0 err n f
+  local prs rc=0 n f
   if [[ "$api" != rest ]]; then
-    err=$(mktemp)
-    prs=$("$here/gh-read.sh" --json -- pr list --repo "$repo" --state open --limit 200 \
-      --json number,title,body,closingIssuesReferences,files 2>"$err") || rc=$?
-    if orch_gh_refused "$rc" "$(cat "$err")"; then api=rest
-    elif ((rc != 0)); then rm -f "$err"; echo "unreadable"; return; fi
-    rm -f "$err"
+    prs=$(orch_gql_read 4 --json gh pr list --repo "$repo" --state open --limit 200 \
+      --json number,title,body,closingIssuesReferences,files) || rc=$?
+    if ((rc == 2)); then api=rest
+    elif ((rc != 0)); then echo "unreadable"; return; fi
   fi
   if [[ "$api" == rest ]]; then
-    prs=$("$here/gh-rest-pr.sh" list --repo "$repo" --limit 200 2>/dev/null) || { echo "unreadable"; return; }
+    prs=$(orch_rest_pr list --repo "$repo" --limit 200 --tries 3) || { echo "unreadable"; return; }
     if [[ -n "$files" ]]; then
       for n in $(jq -r '.[].number' <<<"$prs"); do
-        f=$("$here/gh-rest-pr.sh" files --repo "$repo" --pr "$n" 2>/dev/null) || { echo "unreadable"; return; }
+        f=$(orch_rest_pr files --repo "$repo" --pr "$n" --tries 3) || { echo "unreadable"; return; }
         prs=$(jq -c --argjson n "$n" --slurpfile f <(printf '%s\n' "$f") 'map(if .number == $n then .files = $f[0] else . end)' <<<"$prs")
       done
     fi

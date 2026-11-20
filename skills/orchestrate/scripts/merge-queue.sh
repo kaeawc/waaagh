@@ -65,13 +65,17 @@
 #                              branch protection, #251) gets the base merged in on the next pass
 #                              without it; set it when the strict setting is unreadable (classic
 #                              protection without admin rights reads as not strict)
+#      ORCHESTRATE_UPDATE_CAP, _GAP, _HOST_GATE  pace the pushes of base merges (each starts CI)
+#                              through update-pace.sh gate (#219): a paced item is `waiting
+#                              (update paced ...)` and a later pass pushes it. Unset: no pacing
 #      MERGE_QUEUE_MAIN_HEALTH_ARGS  extra main-health.sh flags (e.g. --ignore-workflow Badges)
 #      ORCHESTRATE_DIRECT_MERGE=1    deliberate ungated mode (only on the user's word): no readiness
 #                              gate here or in pr-merge.sh
 # Exit (run-once): 0 pass finished | 4 default branch red, pass stopped (hold, no outcome written)
 # The worktree must be clean and on the branch. Never forces a push and never rewrites history.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal
@@ -253,6 +257,7 @@ case "$cmd" in
       mh=$(orch_run main-health.sh --repo "$repo" --branch "$base" ${mh_args[@]+"${mh_args[@]}"} 2>&1) || true
       echo "main: $mh"
     fi
+    pushes=0
     while IFS=$'\t' read -r -u 3 qid qwt qbranch qtitle qbody qreq; do
       prev=$(outcome_of "$qid")
       [[ -z "$prev" || "$prev" == waiting || "$prev" == held ]] || continue
@@ -302,6 +307,11 @@ case "$cmd" in
       if [[ -n "$resume" ]]; then
         echo "$qid: $resume" >>"$log"
       else
+        # Every push starts CI: paced by update-pace.sh (cap per pass, gap, host load; #219). Off
+        # unless configured; a pacing script that fails does not hold the queue.
+        prc=0
+        pace=$(orch_run update-pace.sh gate --repo "$repo" --done "$pushes" 2>>"$log") || prc=$?
+        if ((prc == 3)); then set_outcome "$qid" waiting "update paced (${pace#wait }); a later pass pushes it"; continue; fi
         # Merge the base right before the push; generated-file conflicts are regenerated.
         mrc=0
         orch_run regen-merge.sh --worktree "$qwt" --base "$base" >>"$log" 2>&1 || mrc=$?
@@ -324,6 +334,10 @@ case "$cmd" in
         local_head=$(git -C "$qwt" rev-parse HEAD)
         printf '%s\n' "$local_head" >"$qdir/$qid.pushed"
         rm -f "$qdir/$qid.refresh"
+        pushes=$((pushes + 1))
+        rargs=(--repo "$repo" --source merge-queue)
+        [[ ! -f "$qdir/$qid.pr" ]] || rargs+=(--pr "$(cat "$qdir/$qid.pr")")
+        orch_run update-pace.sh record "${rargs[@]}" >>"$log" 2>&1 || true
       fi
       list_open() { orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state open --limit 100 --json number,headRefOid; }
       if ! prs=$(list_open); then set_outcome "$qid" waiting "PR lookup failed (transient)"; continue; fi

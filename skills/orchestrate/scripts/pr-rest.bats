@@ -2,45 +2,10 @@
 # The PR side without GraphQL (#109): pr-ready.sh, gh-snapshot.sh and lane-claim.sh against a gh
 # that refuses GraphQL with the cloud-session 403 and serves REST shapes (rest_stub.bash), built
 # from the same fixtures as the GraphQL suites (selftest-pr, merge-selection, pr-ready-pages), and
-# gh-rest-pr.sh's own parsing. Run: bats scripts/pr-rest.bats
+# gh-rest-pr.sh's own parsing. The heaviest parity checks (supersession, review threads, --delta)
+# are in pr-rest-parity.bats; setup in pr_rest_setup.bash. Run: bats scripts/pr-rest.bats
 
-setup() {
-  load test_helper
-  load selftest_helper
-  load rest_stub
-  SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-  stub_gh_router
-  rest_wrap
-}
-
-# both ARGS...: pr-ready.sh over GraphQL, then over REST (refused GraphQL, own state dir). The exit
-# code, every row and the summary must match; only draft and fork rows may differ in their
-# mergeable and passed columns (REST does not read them), and REST adds " api=rest". Leaves the
-# REST run in $output and $status.
-both() {
-  local gq rs gs rss
-  rm -f "$FX/rest-mode"
-  gq=$(ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state-gq" "$SCRIPTS/pr-ready.sh" "$@" 2>"$FX/gq.err") && gs=0 || gs=$?
-  touch "$FX/rest-mode"
-  rs=$(ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state-rest" "$SCRIPTS/pr-ready.sh" "$@" 2>"$FX/rs.err") && rss=0 || rss=$?
-  norm() { awk -F'\t' -v OFS='\t' '$2 == "SKIP" && ($6 == "draft" || $6 == "fork") { $4 = "-"; $5 = "-" } { print }'; }
-  sum() { tail -1 "$1" | sed -E 's/ diagnostics=[^ ]*//; s/ api=rest//'; }
-  [ "$gs" = "$rss" ] || { echo "exit: graphql=$gs rest=$rss"; cat "$FX/rs.err"; return 1; }
-  [ "$(norm <<<"$gq")" = "$(norm <<<"$rs")" ] || { echo "rows differ:"; diff <(norm <<<"$gq") <(norm <<<"$rs") || true; cat "$FX/rs.err"; return 1; }
-  [ "$(sum "$FX/gq.err")" = "$(sum "$FX/rs.err")" ] || { echo "summary: $(tail -1 "$FX/gq.err") | $(tail -1 "$FX/rs.err")"; return 1; }
-  if [ "$gs" = 0 ]; then grep -q 'api=rest' "$FX/rs.err" || { echo "no api=rest"; return 1; }; fi
-  output="$rs"$'\n'"$(cat "$FX/rs.err")"
-  status=$rss
-}
-
-verdict_both() { # checks... -> both paths agree; prints the REST verdict and detail
-  printf '%s\n' "$@" | jq -s . >"$FX/checks.json"
-  pr_row 1 me false false MERGEABLE "$(cat "$FX/checks.json")" | jq -s . >"$FX/prs.json"
-  both --repo o/r --no-threads >/dev/null || return 1
-  printf '%s\n' "$output" | awk -F'\t' '$1 == 1 { print $2 "\t" $6 }'
-}
-
-# --- the selftest-pr fixtures, through both paths -------------------------------------------
+load pr_rest_setup
 
 @test "rest: ready, waiting, blocked and skipped PRs classify as over GraphQL" {
   {
@@ -76,51 +41,6 @@ verdict_both() { # checks... -> both paths agree; prints the REST verdict and de
   [ "$(grep -c 'actions/runs?head_sha=' "$FX/rest-calls")" -eq 2 ]
 }
 
-@test "rest: only proven replacements supersede a check, as over GraphQL" {
-  echo '[]' >"$FX/rules.json"
-  T1=2026-09-27T01:00:00Z T2=2026-09-27T02:00:00Z
-  [ "$(verdict_both "$(check unit CANCELLED CI $T1 70 700)" "$(check lint SUCCESS CI $T2 70 701)")" = $'BLOCK\tfail:unit' ]
-  [ "$(verdict_both "$(check unit CANCELLED CI $T1)" "$(check lint SUCCESS CI $T2)")" = $'BLOCK\tfail:unit' ]
-  [ "$(verdict_both "$(check test FAILURE Linux $T1 71 710)" "$(check test SUCCESS Mac $T2 72 720)")" = $'BLOCK\tfail:test' ]
-  [ "$(verdict_both "$(check test FAILURE "" $T1 "" "" StatusContext)" "$(check test SUCCESS CI $T2 73 730)")" = $'BLOCK\tfail:test' ]
-  [ "$(verdict_both "$(check unit FAILURE CI $T2 74 740)" "$(check unit SUCCESS CI $T2 74 741)")" = $'READY\t-' ]
-  [ "$(verdict_both "$(check unit CANCELLED CI $T1 75 750)" "$(check unit SUCCESS CI $T2 76 760)")" = $'READY\t-' ]
-  [ "$(verdict_both "$(check unit FAILURE CI $T1 75 750)" "$(check unit SUCCESS CI $T2 76 760)")" = $'BLOCK\tfail:unit' ]
-  [ "$(verdict_both "$(check unit FAILURE CI $T1 77 770)" "$(check e2e FAILURE CI $T1 77 771)" "$(check unit SUCCESS CI $T2 77 772)")" = $'BLOCK\tfail:e2e' ]
-  [ "$(verdict_both "$(check build FAILURE CI $T1)" "$(check build SUCCESS CI $T1)")" = $'BLOCK\tfail:build' ]
-  [ "$(verdict_both "$(check 'job (${{ matrix.os }})' CANCELLED PR $T1)" "$(check build SUCCESS PR $T2)")" = $'BLOCK\tfail:job (${{ matrix.os }})' ]
-  old=$(jq -cn '{__typename: "StatusContext", context: "ci/legacy", state: "FAILURE", startedAt: "2026-09-27T01:00:00Z"}')
-  new=$(jq -cn '{__typename: "StatusContext", context: "ci/legacy", state: "SUCCESS", startedAt: "2026-09-27T02:00:00Z"}')
-  [ "$(verdict_both "$old" "$new")" = $'READY\t-' ]
-}
-
-@test "rest: review threads block, fail closed and follow pages as over GraphQL" {
-  { pr_row 1 me false false MERGEABLE "$OKC"; pr_row 2 me false false MERGEABLE "$OKC"; pr_row 3 me false false MERGEABLE "$OKC"
-    pr_row 4 me false false MERGEABLE "$OKC"; pr_row 5 me false false MERGEABLE '[{"name":"test","conclusion":"FAILURE"}]'; } |
-    jq -s . >"$FX/prs.json"
-  jq -n '{"1": [{isResolved: false, isOutdated: false}, {isResolved: false, isOutdated: true}], "2": "null", "3": "more",
-          "4": {pages: [[range(0; 100) | {isResolved: true, isOutdated: false}], [{isResolved: false, isOutdated: false}]]},
-          "5": [{isResolved: false, isOutdated: false}]}' >"$FX/threads.json"
-  both --repo o/r
-  [[ "$output" == *$'1\tBLOCK\t'*$'\tthreads=1'* ]]
-  [[ "$output" == *$'2\tBLOCK\t'*"threads=unknown"* ]]
-  [[ "$output" == *$'3\tBLOCK\t'*"threads=unknown"* ]]
-  [[ "$output" == *$'4\tBLOCK\t'*$'\tthreads=1'* ]]
-  [[ "$output" == *$'5\tBLOCK\t'*"fail:test missing-required:build few-checks=0 threads=1"* ]]
-  grep -q 'pulls/1/ccr/review_threads' "$FX/rest-calls"
-  # The same answers in the other shapes the undocumented route may use.
-  for shape in snake wrapped; do
-    echo "$shape" >"$FX/thread-shape"
-    both --repo o/r
-    [[ "$output" == *$'1\tBLOCK\t'*$'\tthreads=1'* ]]
-  done
-  # Every thread read failing: nothing is READY.
-  echo '{}' >"$FX/threads.json"; rm -f "$FX/thread-shape"
-  touch "$FX/graphql-fails"
-  both --repo o/r
-  [[ "$output" == *"ready=0"* ]]
-}
-
 @test "rest: the required-check policy and branch protection apply as over GraphQL" {
   pr_row 7 me false false MERGEABLE '[{"name":"lint","conclusion":"SUCCESS"}]' | jq -s . >"$FX/prs.json"
   both --repo o/r
@@ -134,30 +54,6 @@ verdict_both() { # checks... -> both paths agree; prints the REST verdict and de
   both --repo o/r
   [[ "$output" == *$'7\tBLOCK'*"missing-required:build,ci/legacy"* ]]
 }
-
-@test "rest: --delta, --pr and SIGPIPE-ignored runs give the same rows" {
-  ready_prs 20
-  both --repo o/r --delta
-  [ "$(printf '%s\n' "$output" | grep -c READY)" -eq 20 ]
-  both --repo o/r --delta
-  [[ "$output" == "no-change"*"changed=0"* ]]
-  jq '.[1:] | (.[0].headRefOid = "ffffffffff") | (.[1].statusCheckRollup += [{"name":"lint","conclusion":"FAILURE"}])' \
-    "$FX/prs.json" >"$FX/p2" && mv "$FX/p2" "$FX/prs.json"
-  both --repo o/r --delta
-  [[ "$output" == *$'1\tGONE'* ]]
-  [[ "$output" == *$'2\tREADY\tfffffffff'* ]]
-  [[ "$output" == *$'3\tBLOCK'*"fail:lint"* ]]
-  : >"$FX/rest-calls"
-  both --repo o/r --pr 3
-  [ "$(printf '%s\n' "$output" | grep -c $'\t')" -eq 1 ]
-  [ "$(grep -c '/check-runs' "$FX/rest-calls")" -eq 1 ]   # only the named PR is read
-  run bash -c "trap '' PIPE; ORCHESTRATE_GH_API=rest exec '$SCRIPTS/pr-ready.sh' --repo o/r --no-threads"
-  [ "$status" -eq 0 ]
-  [[ "$output" != *"Broken pipe"* ]]
-  [[ "$output" == *"api=rest"* ]]
-}
-
-# --- the merge-selection fixtures ------------------------------------------------------------
 
 @test "rest: holds, label exclusions, branch filters and bot authors select as over GraphQL" {
   sel() { # number branch labels-json [checks] [author]
@@ -207,7 +103,7 @@ case "$*" in "pr list"*) echo "HTTP 403: Resource not accessible by integration"
   ready_prs 3
   pr_row 4 me false false MERGEABLE "$OKC" '[{"name":"hold"}]' | jq -s --slurpfile p "$FX/prs.json" '$p[0] + .' >"$FX/p2"
   mv "$FX/p2" "$FX/prs.json"
-  touch "$FX/rest-mode" "$FX/rest-fails-abcdef01234567892" "$FX/rest-fails-abcdef01234567894"
+  touch "$FX/rest-mode" "$FX/rest-fails-abcdef0123456789abcdef0123456789abcdef02" "$FX/rest-fails-abcdef0123456789abcdef0123456789abcdef04"
   run "$SCRIPTS/pr-ready.sh" --repo o/r
   [ "$status" -eq 0 ]
   [[ "$output" == *$'2\tBLOCK\tabcdef012\tUNKNOWN\t0\tchecks=unknown'* ]]
@@ -265,7 +161,7 @@ rp() { "$SCRIPTS/gh-rest-pr.sh" "$@" --repo o/r; }
   run rp list
   [ "$status" -eq 0 ]
   [ "$(jq -c '.[0] | [.author.login, .isDraft, .isCrossRepository, .mergeable, .statusCheckRollup]' <<<"$output")" = '["app/dependabot",false,false,"UNKNOWN",[]]' ]
-  [ "$(jq -c '.[1] | [.isDraft, .isCrossRepository, .labels, .baseRefName, .headRefOid]' <<<"$output")" = '[true,true,[{"name":"x"}],"main","abcdef01234567892"]' ]
+  [ "$(jq -c '.[1] | [.isDraft, .isCrossRepository, .labels, .baseRefName, .headRefOid]' <<<"$output")" = '[true,true,[{"name":"x"}],"main","abcdef0123456789abcdef0123456789abcdef02"]' ]
   [ "$(jq -c '[.[0].closingIssuesReferences[].number]' <<<"$output")" = '[12,13,15]' ]
   # 250 open PRs: three pages of 100; --limit stops early.
   pr_rows 1 250 me false false MERGEABLE '[]' | jq -s . >"$FX/prs.json"
@@ -311,7 +207,7 @@ STUB
   [ "$(rp files --pr 1)" = '[{"path":"a.sh"},{"path":"b/c.md"}]' ]
   [ "$(rp review --pr 1)" = '{"state":"APPROVED","commit":"bbb"}' ]
   [ "$(rp review --pr 2)" = '{"state":null,"commit":null}' ]
-  run rp rollup --sha abcdef01234567891
+  run rp rollup --sha abcdef0123456789abcdef0123456789abcdef01
   [ "$(jq -c '.[0] | [.__typename, .name, .conclusion, .workflowName]' <<<"$output")" = '["CheckRun","build","SUCCESS","CI"]' ]
   [ "$(jq -c '.[1] | [.__typename, .context, .state]' <<<"$output")" = '["StatusContext","ci/x","PENDING"]' ]
   run rp view --pr 9
@@ -329,10 +225,10 @@ STUB
   touch "$FX/rest-mode"
   run "$SCRIPTS/gh-snapshot.sh" --repo o/r
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = "pr 1 head=abcdef01234567891 draft=no rollup=SUCCESS review=APPROVED review-commit=abcdef01234567891 reviewed=head cache=new" ]
-  [ "${lines[1]}" = "pr 2 head=abcdef01234567892 draft=yes rollup=PENDING review=NONE review-commit=- reviewed=none cache=new" ]
-  [ "${lines[2]}" = "pr 3 head=abcdef01234567893 draft=no rollup=ERROR review=CHANGES_REQUESTED review-commit=0ld reviewed=stale cache=new" ]
-  [ "${lines[3]}" = "pr 4 head=abcdef01234567894 draft=no rollup=NONE review=NONE review-commit=- reviewed=none cache=new" ]
+  [ "${lines[0]}" = "pr 1 head=abcdef0123456789abcdef0123456789abcdef01 draft=no rollup=SUCCESS review=APPROVED review-commit=abcdef0123456789abcdef0123456789abcdef01 reviewed=head cache=new" ]
+  [ "${lines[1]}" = "pr 2 head=abcdef0123456789abcdef0123456789abcdef02 draft=yes rollup=PENDING review=NONE review-commit=- reviewed=none cache=new" ]
+  [ "${lines[2]}" = "pr 3 head=abcdef0123456789abcdef0123456789abcdef03 draft=no rollup=ERROR review=CHANGES_REQUESTED review-commit=0ld reviewed=stale cache=new" ]
+  [ "${lines[3]}" = "pr 4 head=abcdef0123456789abcdef0123456789abcdef04 draft=no rollup=NONE review=NONE review-commit=- reviewed=none cache=new" ]
   grep -q 'sort=created&direction=asc' "$FX/rest-calls"
   run "$SCRIPTS/gh-snapshot.sh" --repo o/r --limit 2
   [ "$status" -eq 1 ]

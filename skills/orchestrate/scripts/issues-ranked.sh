@@ -22,7 +22,8 @@
 # Exit: 0 ok | 2 usage | 4 --drop-blocked: open-blockers.sh failed outright | 5 issues or open
 #   PRs could not be read.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority low
@@ -57,9 +58,10 @@ jq_limit=$limit
 # gh-issues.sh: GraphQL, or REST where GitHub refuses GraphQL (an open PR's closing references
 # then come from its body's closing keywords).
 read_fail() { echo "issues-ranked.sh: $1 could not be read" >&2; exit 5; }
-prs=$("$here/gh-issues.sh" prs-open --repo "$repo" --limit 300 --fields number,closingIssuesReferences) ||
+# Limits above any open count we have seen (#259): gh-issues.sh warns on stderr when one is hit.
+prs=$("$here/gh-issues.sh" prs-open --repo "$repo" --limit 1000 --fields number,closingIssuesReferences) ||
   read_fail "open pull requests"
-issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 500 --since "$since" \
+issues=$("$here/gh-issues.sh" issues --repo "$repo" --limit 1000 --since "$since" \
   --fields number,title,labels,updatedAt) || read_fail "open issues"
 # The PR and issue lists travel as files or stdin, not arguments: one argument is capped at 128 KiB (#121).
 rows=$(jq -r --slurpfile prs <(printf '%s\n' "$prs") --argjson priority "$(json_list ${priority[@]+"${priority[@]}"})" \

@@ -10,8 +10,14 @@
 #            open PR, or on PR N:   pr  thread-id  answer  ref  url
 #            answer: issue  the last reply links an issue (`#N` or an issues/N URL; not the PR itself)
 #                  | fix    the last reply names a commit of the PR (a 7-40 hex sha or a commit URL)
-#                  | stalled  our own account replied last, after the PR's head commit, and the
-#                           reply names neither: an "agreed, proposed fix" reply with no push (#209).
+#                  | declined  an optional finding answered without a fix (#257): the starter's
+#                           comment carries an optional marker (review-followup.sh list) and the
+#                           last reply starts "Optional" or "Declined" (review-followup.sh
+#                           decline writes "Optional, not fixed: <reason>"); ref `optional`
+#                  | stalled  our own account replied last, after the PR's newest own commit, and
+#                           the reply names neither: an "agreed, proposed fix" reply with no push
+#                           (#209). A GitHub update-branch merge (two parents, committer
+#                           noreply@github.com) is not a push of a fix and does not count (#242).
 #                           A reply that starts "Disagree" is a stated disagreement and stays open.
 #                           Our account is ORCHESTRATE_SELF_LOGIN, else `gh api user`, read only
 #                           when such a reply exists (a failed read leaves the thread open)
@@ -35,7 +41,8 @@
 # Exit: 0 ok | 2 usage | 4 a read failed | 5 a resolve failed (rerun finishes it) |
 #       9 a resolve's outcome is unknown (rerun reconciles).
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal
@@ -65,9 +72,9 @@ repo=$(orch_repo "$repo")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-fields='number commits(last:100){nodes{commit{oid committedDate}}}
+fields='number commits(last:100){nodes{commit{oid committedDate parents{totalCount} committer{email}}}}
   reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated
-    starter: comments(first:1){nodes{author{login} url}}
+    starter: comments(first:1){nodes{author{login} url body}}
     latest: comments(last:1){totalCount nodes{author{login} body createdAt}}}}'
 # prs_graphql -> a JSON array of pull request nodes (every open PR, or PR $pr). A failed read
 # returns gh-read.sh's exit code, with its stderr in $work/err.
@@ -99,10 +106,10 @@ prs_graphql() {
 prs_rest() {
   local nums n
   if [[ -n "$pr" ]]; then nums=$pr
-  else nums=$("$here/gh-rest-pr.sh" list --repo "$repo" 2>/dev/null | jq -r '.[].number') || return 1; fi
+  else nums=$(orch_rest_pr list --repo "$repo" | jq -r '.[].number') || return 1; fi
   : >"$work/nodes"
   for n in $nums; do
-    "$here/gh-rest-pr.sh" thread-nodes --repo "$repo" --pr "$n" 2>/dev/null >>"$work/nodes" || return 1
+    orch_rest_pr thread-nodes --repo "$repo" --pr "$n" >>"$work/nodes" || return 1
   done
   jq -sc . "$work/nodes"
 }
@@ -125,11 +132,15 @@ prs=$(prs_json) || {
 }
 
 # The jq definitions both passes below share. epoch: an ISO time as epoch seconds, null when absent
-# or unparsable. head: the epoch of the PR's last commit (0 without one). late: the thread's last
-# reply is not its starter's and came after the head commit, so whoever wrote it pushed nothing since.
+# or unparsable. head: the epoch of the PR's newest own commit, 0 without one: a commit with two
+# parents committed by GitHub (noreply@github.com) is an update-branch merge, which moves the head
+# without anyone writing (#242), so it is skipped (the API carries no tree to check it the way
+# orch_update_merge in _lib.sh does). late: the thread's last reply is not its starter's and came
+# after that commit, so whoever wrote it pushed nothing since.
 defs='
   def epoch: if type == "string" then (try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null) else null end;
-  def head: ((.commits.nodes // []) | last | .commit.committedDate // null | epoch) // 0;
+  def update_merge: (.commit.parents.totalCount // 0) == 2 and (.commit.committer.email // "") == "noreply@github.com";
+  def head: [(.commits.nodes // [])[] | select(update_merge | not) | (.commit.committedDate // null | epoch) // 0] | max // 0;
   def late($h): (.latest.nodes[0] // {}) as $l
     | (.latest.totalCount // 0) >= 2 and (($l.author.login // "") != (.starter.nodes[0].author.login // ""))
       and (($l.createdAt | epoch) // -1) > $h;
@@ -148,7 +159,9 @@ fi
 
 # One TSV row per unresolved, current thread, then a "TRUNC<TAB>n" row per PR whose threads did
 # not fit in one page.
-rows=$(jq -r --arg self "$self" "$defs"'
+# The optional-finding markers: the same pattern as review-followup.sh's optional_re.
+optional_re='🟡|🟣|\(optional\)|<!--\s*severity:\s*(nit|optional|pre-existing)\s*-->'
+rows=$(jq -r --arg self "$self" --arg re "$optional_re" "$defs"'
   def answer($n; $oids; $h):
     (.latest.nodes[0] // {}) as $l
     | if (.latest.totalCount // 0) < 2 or (($l.author.login // "") == (.starter.nodes[0].author.login // "")) then ["open", "-"]
@@ -158,6 +171,8 @@ rows=$(jq -r --arg self "$self" "$defs"'
       | ([$b | scan("\\b[0-9a-fA-F]{7,40}\\b") | ascii_downcase | . as $s
           | select(any($oids[]; startswith($s)))] | first) as $sha
       | if $iss then ["issue", "#\($iss)"] elif $sha then ["fix", $sha[0:12]]
+        elif ((.starter.nodes[0].body // "") | test($re; "i"))
+          and ($b | test("^[\\s*_>]*(optional|declined)\\b"; "i")) then ["declined", "optional"]
         elif $self != "" and ($l.author.login // "") == $self and late($h)
           and ($b | test("^[\\s*_>]*disagree"; "i") | not) then ["stalled", "-"]
         else ["open", "-"] end

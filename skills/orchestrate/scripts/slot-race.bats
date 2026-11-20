@@ -7,7 +7,7 @@
 setup() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-  export ORCHESTRATE_SLOT_DIR="$BATS_TEST_TMPDIR/slots" SLOT_POLL=0.05
+  export ORCHESTRATE_SLOT_DIR="$BATS_TEST_TMPDIR/slots" SLOT_POLL=0.05 ORCHESTRATE_BUILD_ROOT="$BATS_TEST_TMPDIR/build"
   unset ORCHESTRATE_GATE_ENV SLOT_TEST_PAUSE
   T=$BATS_TEST_TMPDIR L="$BATS_TEST_TMPDIR/log"
   mkdir -p "$T/a" "$T/b"

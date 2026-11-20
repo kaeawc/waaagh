@@ -17,6 +17,7 @@
 #        review-ledger.sh latest   --pr N [--repo OWNER/REPO]
 #        review-ledger.sh blocked  [--repo OWNER/REPO]
 #        review-ledger.sh shipped  [--repo OWNER/REPO]
+#        review-ledger.sh rounds   [--pr N] [--min K] [--repo OWNER/REPO]
 #        review-ledger.sh list     [--pr N] [--repo OWNER/REPO]
 #   record   append a verdict. A non-ship verdict also holds the PR (`hold.sh add --until
 #            review-ship`) unless it is held already; `ship` releases a hold whose condition is
@@ -46,7 +47,13 @@
 #   shipped  local only: `pr  head` for every PR whose latest verdict is ship recorded with --head.
 #            The merge paths hold such a PR (`review:stale`) once its head moved past that head,
 #            unless only GitHub-made update-branch merges came after it (orch_review_covers, #210).
-#   list     local only: every row (of one PR with --pr).
+#   rounds   local only: the fix rounds per PR (#257), one row per PR with at least one (with
+#            --min K, at least K):  pr  rounds  since  hours  reviewed
+#            rounds: its `fixing` and `repairing` rows; since: the first one's time; hours: whole
+#            hours from then to now; reviewed: the head of its newest review verdict recorded with
+#            --head (ship, fix-first, rethink or incomplete), `-` without one: re-review only the
+#            delta from that head (../review-rounds.md).
+#   list    local only: every row (of one PR with --pr).
 # The ledger is <state dir>/reviews.tsv, one row per verdict: iso  pr  verdict  head  note
 # [session] (head and note `-` when not given; the session only on repairing and repaired rows).
 # Rows are only appended; never edit the file by hand.
@@ -55,7 +62,8 @@
 #       ship verdict (recorded as `incomplete`, which holds the PR)
 #       | 7 settle: a PR's comments could not be read (its repair stays in flight)
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal
@@ -63,11 +71,11 @@ orch_gh_priority normal
 usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
-  record | fix | repair | repaired | settle | inflight | latest | blocked | shipped | list) shift ;;
+  record | fix | repair | repaired | settle | inflight | latest | blocked | shipped | rounds | list) shift ;;
   -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
-repo="" pr="" verdict="" head="" note="" session="" findings=""
+repo="" pr="" verdict="" head="" note="" session="" findings="" min=1
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -77,12 +85,14 @@ while (($#)); do
     --note) note=$2; shift 2 ;;
     --session) session=$2; shift 2 ;;
     --findings) findings=$2; shift 2 ;;
+    --min) min=$2; shift 2 ;;
     *) echo "review-ledger.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$cmd" in
   record | fix | repair | repaired | latest) [[ "$pr" =~ ^[0-9]+$ ]] || usage ;;
   list | settle | inflight) [[ -z "$pr" || "$pr" =~ ^[0-9]+$ ]] || usage ;;
+  rounds) [[ (-z "$pr" || "$pr" =~ ^[0-9]+$) && "$min" =~ ^[1-9][0-9]*$ ]] || usage ;;
 esac
 if [[ "$cmd" == record ]]; then
   case "$verdict" in
@@ -166,6 +176,14 @@ case "$cmd" in
   blocked) rows | awk -F'\t' '{ v[$2] = $3 } END { for (p in v) if (v[p] != "ship") print p "\t" v[p] }' | sort -n ;;
   shipped) rows | awk -F'\t' '{ v[$2] = $3; h[$2] = $4 } END { for (p in v) if (v[p] == "ship" && h[p] != "-") print p "\t" h[p] }' | sort -n ;;
   list) rows "$pr" ;;
+  rounds)
+    rows "$pr" | awk -F'\t' -v min="$min" '
+      $3 == "fixing" || $3 == "repairing" { n[$2]++; if (!($2 in t)) t[$2] = $1 }
+      $3 ~ /^(ship|fix-first|rethink|incomplete)$/ && $4 != "-" { h[$2] = $4 }
+      END { for (p in n) if (n[p] >= min) print p "\t" n[p] "\t" t[p] "\t" (p in h ? h[p] : "-") }' | sort -n |
+      jq -Rr --argjson now "$(orch_now)" 'split("\t") | (try (.[2] | fromdateiso8601) catch $now) as $t
+        | [.[0], .[1], .[2], (([$now - $t, 0] | max) / 3600 | floor | tostring), .[3]] | @tsv'
+    ;;
   inflight) inflight "$pr" ;;
   record | fix)
     fl=""

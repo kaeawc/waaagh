@@ -16,7 +16,14 @@ verify, and a regression surface to sweep.
    verify-<batch> --device <id>` before any `adb` or `simctl` command; exit 4: not yours, stop.
 2. Build and run from a fresh detached checkout of `origin/{{BASE}}` in your own worktree. Never
    use, restart or signal a daemon, server or app instance you did not start; isolate your own
-   (own sockets, ports, data directory) as `lane-rules.md` describes.
+   (own sockets, ports, data directory) as `lane-rules.md` describes. Build through
+   `{{SCRIPTS}}/shared-build.sh --class device --name <what> --artifact <path> -- <build cmd>` and
+   test the artifacts in the directory it prints: lanes on the same commit build once
+   (`host-load.md`). Boot every device through `{{SCRIPTS}}/boot-slot.sh -- <boot command>`: it
+   waits for the host's load to fall and for any other lane's boot to settle (exit 75: it did not
+   start; report it, do not loop). Keep one device booted; a matrix over runtimes or devices runs
+   one at a time, shutting each down (`xcrun simctl shutdown <udid>`, `adb -s <serial> emu kill`)
+   before booting the next.
 3. Every device call names its device (or runs in a session you hold): a sessionless call can
    auto-target the user's own device. Never read a device-listing resource that probes all attached
    devices. Capture crash/ANR evidence (logs, screenshot) before dismissing a system dialog, and
@@ -31,6 +38,25 @@ verify, and a regression surface to sweep.
   exact call, the decisive output and the evidence file under `{{STATE}}/verify/<batch>/`.
 - Then one representative call per feature family in the regression surface.
 - Time-box each item (about 15 minutes); mark what you cannot finish `BLOCKED` with the reason.
+
+## Verify-on-main issues (#258)
+An open issue whose fix merged in a PR that did not close it ("Part of #N": the lane's device check
+ran on a branch, not on `{{BASE}}`) carries the `verify-on-main` label
+(`{{SCRIPTS}}/verify-on-main.sh scan --apply`) and is never implementation work. They come to you as
+one batch per platform: `{{SCRIPTS}}/verify-on-main.sh batch --repo {{REPO}}` prints `batch
+<platform> #a,#b <fix refs>` rows, plus `closable` rows.
+- **Evidence first.** A `closable` row already has a PASS on a default-branch SHA posted after the
+  fix (the evidence column links it): boot no device for it; report it with that link.
+- **One pass, no code.** For each issue of your platform's batch, confirm the fix on a fresh
+  device from current `origin/{{BASE}}`, or name what is still missing. You implement nothing.
+- **Record the result where the scan reads it**: one issue comment whose first line is
+  `Device verification: PASS|FAIL on <platform> (<device>, <OS or API level>) at <tested SHA>`
+  (the line `roles/verify-batch.md` defines; `device-recheck.sh` markers count too). A PASS on a
+  SHA on `{{BASE}}` makes the issue `closable` on the next scan; a FAIL takes the label off and
+  sends it back to implementation; something still missing is a FAIL with the missing part named.
+- **Closing is the owner's** under the close policy (`{{SCRIPTS}}/../owner-decisions.md`, #87).
+  Nothing closes an issue automatically: `verify-on-main.sh` only reports `closable`. Close only
+  where your prompt allows it, through `{{SCRIPTS}}/issue-close.sh`, citing the main-SHA result.
 
 ## Reporting
 - `{{STATE}}/verify/<batch>/REPORT.md`: tested SHA, devices, then

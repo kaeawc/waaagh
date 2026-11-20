@@ -76,8 +76,8 @@ issue then gets a local route for that remainder (`issue-route.sh set`), never a
 - **Echo cost.** Every create response repeats the prompt about four times (derived_state,
   job_config, session_request, events): a 900-character brief costs about 3k tokens of orchestrator
   context per dispatch, a one-line `--brief-ref` prompt about 100. So dispatch with `--brief-ref`
-  once the briefs are in the repository; otherwise keep the brief short (the template is under 1500
-  characters; `cloud-dispatch.bats` holds it there). Never paste a response anywhere and keep only
+  once the briefs are in the repository; otherwise keep the brief short (the template is far under the 65,536-character limit on a routine run's text;
+  `cloud-dispatch.bats` holds it to half that). Never paste a response anywhere and keep only
   the trigger id: a response that reaches you as text or a file (an API call rather than the tool)
   goes through `cloud-dispatch.sh created --issue N`, which prints `created <trigger> <run_at>`,
   records it and drops the echoed prompt.
@@ -116,12 +116,103 @@ appends a row to `versions.tsv` (the bump rule, `../briefs/README.md`):
    session's run ended without that comment (the routine shows it finished or failed), record it
    yourself: `review-ledger.sh repaired --pr P --session <trigger> --note "run ended"`. A
    `repaired` PR still waits for a review of its final head; only that `ship` lets it merge.
+5. **One writer once a repair is sent** (#214). The session that opened P is still a writer: it
+   wakes on P's CI, review and bot events and can push after the repair session has. So `record
+   --kind repair --pr P` also posts one marker comment on P, starting `REPAIR-START session <trigger>:`
+   with the hidden key `<!-- waaagh:repairing pr=P session=<trigger> -->` (`repair-writer.sh mark`;
+   it reads P's comments over REST first and posts nothing when the key is there). The implement
+   brief (v4) reads P's comments before every push and stops at a `REPAIR-START`; the repair brief (v8) stops at a newer one and also at a head that is not the dispatched SHA or a descendant of it. Exit 10 means
+   the row and the `repairing` mark stand but the marker was not posted: run the `repair-writer.sh
+   mark` line it prints before the repair session starts. The triage tick runs `repair-writer.sh
+   check`: a `repair-writers` line names a PR under repair whose commits since the dispatch carry
+   two writers (session trailer, else author email) or whose branch was force-pushed. It cannot
+   tell two sessions apart that commit under one identity with no trailer, or see when an older
+   commit was pushed: GitHub's commit metadata names no pusher. So the marker is the guard and the
+   check is a backstop.
 
 ## Results come back only through PRs
 
 Cloud sessions cannot message the orchestrator. Their only output is the PR on `work/<N>-auto` and,
 when blocked, one comment on the issue. So the triage loop reads them: `pr-ready.sh` and
 `pr-intake.sh` pick up the PRs (merge bot, rebase bot and PR doctor treat them like any other PR of
-the author), and an issue in the ledger with no PR after a few hours gets its comments read. A
-`Part of #N` PR leaves the issue open for its local remainder. Do not dispatch an issue twice: the
-ledger refuses it, and a stuck one is re-routed or handed to a local lane instead.
+the author). A `Part of #N` PR leaves the issue open for its local remainder. The ledger refuses a
+second dispatch of a live one.
+
+## Stale dispatches (#259)
+
+A dispatch is not handled forever. A session that failed, stopped early or never opened a PR
+leaves its issue in the ledger with nothing to show for it, and both the queue and the tick's
+`dispatch` count leave a live dispatch out. So:
+
+- `cloud-dispatch.sh stale` lists every live dispatch older than `--hours` (default
+  `ORCHESTRATE_DISPATCH_STALE_HOURS`, 6, from its `run_at`) whose issue is still open and that no
+  open or merged PR cross-references: `stale #N dispatches=K/CAP since=<run_at> age=<h>h`, or
+  `capped #N ...` once it was dispatched `--cap` times (default `ORCHESTRATE_DISPATCH_CAP`, 3).
+  The triage tick runs it for its suspects and prints the `dispatch-stale` line.
+- For a stale issue, read its comments first (a blocked session leaves one), then
+  `cloud-dispatch.sh expire --issue N`: it checks again, appends an `expired` row to the ledger
+  and puts N back on the queue, and `next`, `payload` and `record` take it as a new dispatch. It
+  refuses (exit 3) a dispatch that is not stale yet, has a PR (repair that instead) or is closed;
+  `--force` skips that check when you know the session died. It always refuses at the cap: an issue
+  whose sessions keep ending without a PR is re-routed or handed to a local lane instead.
+
+## Stalled runs (#260)
+
+Six hours is too long to wait on a run that died early. A routine run can go silent while it still
+reports `status: active, worker_status: running`, stop on a permission prompt nobody will answer,
+end its turn with no PR, or never start at all. Only the main session can see this:
+`RemoteTrigger list_runs` and `get_run_log` are its tools, not commands a script can call. So the
+main session fetches the runs and `cloud-dispatch.sh stalled` judges them, offline:
+
+1. **When to look.** Each tick, for every live dispatch whose issue has no PR yet: about 15
+   minutes after its `run_at`, then from about an hour after it, call `RemoteTrigger list_runs`
+   for its trigger and save the JSON to a file in the state directory (one file per trigger;
+   never paste it into a brief or a comment).
+2. `cloud-dispatch.sh stalled --runs FILE --issue N` prints one line per run that needs you, and
+   nothing for a run still producing events or a trigger not yet due. It reads `status`,
+   `worker_status` and `last_event_at` and tolerates missing fields; a run it cannot judge is
+   `unknown` (exit 7): look at it yourself.
+   - `stalled #N run=R ... silent=<m>m`: running, but no event for more than `--minutes` (default
+     `ORCHESTRATE_RUN_STALL_MINUTES`, 45). Read `get_run_log` for what the run learned (for
+     example: the target file was at its size cap, so start from a separate module). Then
+     `cloud-dispatch.sh expire --issue N --force` (the run is dead though it is under the stale
+     hours) and dispatch again with a **new trigger and a new branch**: `payload --issue N ...
+     --brief-ref implement --branch work/N-auto-2 --note "<what it learned, one line>"`, then
+     `record` the new trigger as usual. The new branch keeps a run that wakes up late from
+     pushing over the new one. The cap still holds.
+   - `blocked #N run=R status=.../requires_action`: the run stopped on a permission prompt
+     (`get_run_log` ends with a `permission prompt` event) and will sit until it expires. Treat
+     it as dead. It wrote nothing, so re-fire the same trigger (`RemoteTrigger run`, then
+     `update {"enabled": false}`); no second writer lands on the branch. When the prompt was for
+     a compound command, tell the next dispatch in `--note`: one plain command per Bash call, no
+     globs outside the repository.
+   - `ended #N run=R status=.../idle`: the run ended cleanly with no PR. **Read its final message
+     first** (`get_run_log`): it often stopped on a real question, which goes to
+     `needs-decision` (post the question on the issue), not to a redispatch. Check the log also
+     for a commit it never pushed (a gate moved to the background when the turn ended): a run
+     whose PR head is older than the run's start is not done either. Redispatch, as for
+     `stalled`, only when the log shows neither a question nor work worth keeping.
+   - `nopush #N run=R ... age=<m>m` (only with `--no-push`, which you pass for a dispatch that has no
+     branch or PR on GitHub yet): the run is still active but nothing has been pushed
+     `ORCHESTRATE_RUN_NOPUSH_MINUTES` (30) after its start, though it keeps emitting events (#216: a
+     cold dependency cache and a rate-limited registry held a finished commit for an hour). Read
+     `get_run_log`; if it is waiting on a local test run, tell it nothing (it cannot be messaged),
+     so treat it as stalled: expire and redispatch with `--note "push after the cheap checks; CI
+     runs the tests"`. A `ended ... unpushed` line means the same for an idle end.
+   - `unfired #N trigger=T run_at=... late=<m>m`: the run-once trigger never started a run, more
+     than `ORCHESTRATE_RUN_UNFIRED_MINUTES` (15) after `run_at`. Fire it with `RemoteTrigger run`,
+     then `update {"enabled": false}` at once, so the late scheduler cannot start a second run on
+     the same branch.
+
+**The attribution footer (#261).** A cloud session's PR body can end with `_Generated by [Claude
+Code](https://claude.ai/code/session_…)_` even though the brief says "No attribution lines": the
+harness adds it when it creates the PR, and repeating the rule in the brief does not stop it. Once
+per merge-loop pass (`roles/triage-tick.md`), or when a cloud PR appears, run
+`{{SCRIPTS}}/pr-footer.sh --cloud`: for every open PR on a `work/<N>-auto` branch it removes that
+trailing line and a `---` rule left above it over REST (`PATCH pulls/N`) and reads the body back;
+a body without the footer is not written. A body edit does not move the head, so it needs no
+re-review. It strips only while the brief the sessions follow says "No attribution"
+(`--policy auto`, the default: `{{STATE}}/cloud-brief.md`, else `cloud-session-brief.md`; with
+`--brief-ref`, pass `--brief <checkout>/.claude/briefs/implement.md`). A repository that keeps the
+attribution says so in its brief, or sets `ORCHESTRATE_PR_FOOTER_POLICY=keep`; another footer
+wording goes in `--pattern` (or `ORCHESTRATE_PR_FOOTER_PATTERN`).

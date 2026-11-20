@@ -8,7 +8,7 @@
 # Usage: gh-issues.sh issues     [--repo R] [--fields F] [--limit N] [--label L] [--since DATE]
 #        gh-issues.sh prs-open   [--repo R] [--fields F] [--limit N]
 #        gh-issues.sh prs-merged [--repo R] [--fields F] [--limit N] [--merged QUALIFIER]
-#   common: [--tries N] [--budget SECONDS] (passed to gh-read.sh)
+#   common: [--tries N] [--budget SECONDS] (passed to gh-read.sh) [--no-limit-warning]
 #   issues      open issues, pull requests excluded. --label: only issues carrying L. --since:
 #               updated on or after DATE, newest update first. REST: GET /repos/R/issues
 #               (items with a pull_request key dropped).
@@ -23,13 +23,18 @@
 # (close[sd], fix(e[sd]), resolve[sd], optional colon, then #N); issues linked by hand in the
 # sidebar, or from another repository, are not seen. prs-merged gives [] (callers already scan
 # the body of merged PRs). REST pages hold 100 items; reads stop at --limit (default 300) or a
-# page cap (limit/100 x2, at least 2, at most 20), noting a truncation on stderr.
+# page cap (limit/100 x2, at least 2, at most 20), noting a truncation on stderr. A list that
+# holds exactly --limit items may be cut short, over GraphQL or REST: it is printed with a
+# warning on stderr ("gh-issues.sh: warning: <cmd> returned --limit N items ...") so no caller
+# drops items silently (#259); raise --limit, or check the count against it. --no-limit-warning
+# silences it for a deliberate existence check (--limit 1).
 # Env: ORCHESTRATE_GH_API=auto (default) | rest (skip the GraphQL attempt) | graphql (no
 # fallback). After a GraphQL refusal, <state root>/gh-no-graphql makes later reads on this state
 # root (PR side included) go straight to REST for 12 hours (orch_gh_api in _lib.sh).
 # Exit: 0 ok | 2 usage | 3-9 gh-read.sh's typed failure (see gh-read.sh -h).
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 # The caller's budget priority when it declared one (each caller runs this as a child).
@@ -44,7 +49,7 @@ case "$cmd" in
   -*) echo "gh-issues.sh: unknown argument: $cmd" >&2; exit 2 ;;
   *) orch_usage >&2; exit 2 ;;
 esac
-repo="" fields=number,title limit=300 label="" since="" merged="" ghr_opts=()
+repo="" fields=number,title limit=300 label="" since="" merged="" ghr_opts=() limit_warning=yes
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -54,6 +59,7 @@ while (($#)); do
     --since) since=$2; shift 2 ;;
     --merged) merged=$2; shift 2 ;;
     --tries | --budget) ghr_opts+=("$1" "$2"); shift 2 ;;
+    --no-limit-warning) limit_warning=no; shift ;;
     -h | --help) orch_usage; exit 0 ;;
     *) echo "gh-issues.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -65,6 +71,14 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 ghr() { "$here/gh-read.sh" ${ghr_opts[@]+"${ghr_opts[@]}"} --json -- "$@"; }
+# at_limit JSON-FILE: warn on stderr when the list holds --limit items (it may be cut short, #259).
+at_limit() {
+  local n
+  [[ "$limit_warning" == yes ]] || return 0
+  n=$(jq 'if type == "array" then length else 0 end' "$1" 2>/dev/null) || return 0
+  ((n < limit)) ||
+    echo "gh-issues.sh: warning: $cmd returned --limit $limit items; the list may be incomplete (raise --limit)" >&2
+}
 
 # --- GraphQL first (gh issue list / gh pr list) ---------------------------------------------------
 if [[ "$api" == graphql ]]; then
@@ -79,8 +93,8 @@ if [[ "$api" == graphql ]]; then
       [[ -z "$merged" ]] || args+=(--search "merged:$merged") ;;
   esac
   rc=0
-  ghr "${args[@]}" 2>"$work/err" || rc=$?
-  if ((rc == 0)); then exit 0; fi
+  ghr "${args[@]}" >"$work/out" 2>"$work/err" || rc=$?
+  if ((rc == 0)); then cat "$work/out"; at_limit "$work/out"; exit 0; fi
   if ! orch_gh_refused "$rc" "$(cat "$work/err")"; then
     cat "$work/err" >&2
     exit "$rc"
@@ -154,4 +168,6 @@ case "$cmd" in
     items=$(pages "search/issues?q=$(uri "$q")&sort=updated&order=desc" '.items')
     rows=$(jq -c "map($common + {mergedAt: .pull_request.merged_at, closingIssuesReferences: []})" <<<"$items") ;;
 esac
-jq -c --arg f "$fields" '($f | split(",")) as $k | map(. as $r | reduce $k[] as $x ({}; .[$x] = $r[$x]))' <<<"$rows"
+jq -c --arg f "$fields" '($f | split(",")) as $k | map(. as $r | reduce $k[] as $x ({}; .[$x] = $r[$x]))' <<<"$rows" >"$work/out"
+cat "$work/out"
+at_limit "$work/out"

@@ -16,9 +16,13 @@
 #            isDraft isCrossRepository baseRefName headRefName headRefOid labels createdAt
 #            updatedAt url closingIssuesReferences, with mergeable and mergeStateStatus "UNKNOWN"
 #            and an empty statusCheckRollup (the list endpoint carries none; use view --checks).
+#            Stopped at --limit with a full page read, it warns on stderr that the list may be
+#            incomplete (#259).
 #   view     one PR (GET pulls/<n>) in the same shape, with mergeable read (true MERGEABLE, false
 #            CONFLICTING, null UNKNOWN), mergeStateStatus from mergeable_state upper-cased
 #            (behind BEHIND, clean CLEAN, ...; absent UNKNOWN) and state OPEN|CLOSED|MERGED;
+#            mergeCommit {oid} (merge_commit_sha, only once merged; else null) and autoMergeRequest
+#            ({mergeMethod} from auto_merge; null when off), which pr-merge.sh reads back (#266);
 #            --checks adds its head's statusCheckRollup (see rollup).
 #   rollup   the statusCheckRollup of a commit: GET commits/<sha>/check-runs as CheckRun items
 #            (name, status, conclusion upper-cased, startedAt, detailsUrl, workflowName) plus
@@ -32,8 +36,9 @@
 #            optionally isOutdated/is_outdated/outdated (absent: current). A thread without a
 #            resolved flag, or any other shape, is unreadable (exit 3), never "0".
 #   thread-nodes  the PR as the GraphQL pull request node thread-sweep.sh classifies: {number,
-#            commits{nodes[{commit{oid,committedDate}}]}, reviewThreads{pageInfo{hasNextPage:false},
-#            nodes[{id, isResolved, isOutdated, starter{nodes[{author{login},url}]}, latest{totalCount,
+#            commits{nodes[{commit{oid,committedDate,parents{totalCount},committer{email}}}]},
+#            reviewThreads{pageInfo{hasNextPage:false},
+#            nodes[{id, isResolved, isOutdated, starter{nodes[{author{login},url,body}]}, latest{totalCount,
 #            nodes[{author{login},body,createdAt}]}, comments{nodes[{body}]} (the last 100)}]}}. Flags come
 #            from ccr/review_threads as in threads; bodies and authors from GET pulls/<n>/comments,
 #            commits from GET pulls/<n>/commits (neither is read when the PR has no thread). A
@@ -49,9 +54,12 @@
 # resolve(s|d) #N" (or OWNER/REPO#N naming this repository). GraphQL also counts issues linked by
 # hand in the Development sidebar; REST cannot see those. This script never tries GraphQL; when to
 # use it is the callers' choice, made with orch_gh_api / orch_gh_refused (_lib.sh).
+# --tries N (any command) bounds every gh-read.sh read at N attempts (default: its own, 4), as
+# orch_read_retry N does for callers that wrap gh directly.
 # Exit: 0 ok | 2 usage | 3 unreadable (the gh-read.sh line or the reason is on stderr)
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal
@@ -60,7 +68,7 @@ usage() { orch_usage; }
 case "${1:-}" in -h | --help) usage; exit 0 ;; -*) echo "gh-rest-pr.sh: unknown argument: $1" >&2; exit 2 ;; esac
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
-repo="" limit=300 asc=no pr="" sha="" checks=no
+repo="" limit=300 asc=no pr="" sha="" checks=no tries=""
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -69,6 +77,7 @@ while (($#)); do
     --pr) pr=$2; shift 2 ;;
     --sha) sha=$2; shift 2 ;;
     --checks) checks=yes; shift ;;
+    --tries) tries=$2; shift 2 ;;
     -h | --help) usage; exit 0 ;;
     *) echo "gh-rest-pr.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -79,9 +88,10 @@ case "$cmd" in
   rollup) [[ "$sha" =~ ^[0-9a-fA-F]+$ ]] || { usage >&2; exit 2; } ;;
   *) usage >&2; exit 2 ;;
 esac
+[[ -z "$tries" || "$tries" =~ ^[1-9][0-9]*$ ]] || { echo "gh-rest-pr.sh: --tries must be a positive number" >&2; exit 2; }
 repo=$(orch_repo "$repo")
 
-ghr() { "$here/gh-read.sh" --json -- "$@"; }
+ghr() { "$here/gh-read.sh" --json ${tries:+--tries "$tries"} -- "$@"; }
 unreadable() { echo "gh-rest-pr: $*" >&2; exit 3; }
 
 # The `gh pr list --json` shape of one REST pull request object.
@@ -102,7 +112,11 @@ shape='def pr_shape($repo):
    closingIssuesReferences: ([(.body // "")
        | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#([0-9]+)")
        | select(.[0] == null or (.[0] | ascii_downcase) == ($repo | ascii_downcase))
-       | {number: (.[1] | tonumber)}] | unique_by(.number))};'
+       | {number: (.[1] | tonumber)}] | unique_by(.number))};
+  def view_shape($repo): pr_shape($repo) + {
+    mergeCommit: (if .merged_at != null and .merge_commit_sha != null then {oid: .merge_commit_sha} else null end),
+    autoMergeRequest: (if .auto_merge == null then null
+      else {mergeMethod: ((.auto_merge.merge_method // "") | ascii_upcase)} end)};'
 
 list_prs() {
   local rows='[]' page=1 out n m order=""
@@ -118,6 +132,8 @@ list_prs() {
     ((n == 100 && m < limit)) || break
     page=$((page + 1))
   done
+  ((n < 100 || m < limit)) ||
+    echo "gh-rest-pr.sh: warning: list stopped at --limit $limit after a full page; the list may be incomplete" >&2
   printf '%s\n' "$rows"
 }
 
@@ -152,12 +168,12 @@ view_pr() {
   local out one
   out=$(ghr api "repos/$repo/pulls/$pr") || exit 3
   if [[ "$checks" == no ]]; then
-    jq -c --arg repo "$repo" "$shape"' if type == "object" and has("number") then pr_shape($repo)
+    jq -c --arg repo "$repo" "$shape"' if type == "object" and has("number") then view_shape($repo)
       else error("not a pull request") end' <<<"$out" 2>/dev/null || unreadable "PR $pr: not a pull request object"
     return
   fi
   # The row and its head in one jq; rollup sets the row's statusCheckRollup in its own.
-  one=$(jq -r --arg repo "$repo" "$shape"' if type == "object" and has("number") then pr_shape($repo)
+  one=$(jq -r --arg repo "$repo" "$shape"' if type == "object" and has("number") then view_shape($repo)
     | tojson, (.headRefOid | tostring) else error("not a pull request") end' <<<"$out" 2>/dev/null) ||
     unreadable "PR $pr: not a pull request object"
   rollup "${one#*$'\n'}" "${one%%$'\n'*}"
@@ -203,7 +219,8 @@ thread_nodes() {
     def login: (.user.login // "") | sub("\\[bot\\]$"; "");
     def items: if type == "array" then .[] else error("not a list") end;
     [$cm[] | items] as $all
-    | {number: $n, commits: {nodes: [$co[] | items | {commit: {oid: .sha, committedDate: (.commit.committer.date // null)}}]},
+    | {number: $n, commits: {nodes: [$co[] | items | {commit: {oid: .sha, committedDate: (.commit.committer.date // null),
+         parents: {totalCount: ((.parents // []) | length)}, committer: {email: (.commit.committer.email // null)}}}]},
        reviewThreads: {pageInfo: {hasNextPage: false}, nodes: [$t[0][]
          | ([.root_comment_id, .rootCommentId, .comment_id, .commentId, .first_comment_id, .firstCommentId,
              ((.comments // null) | cmts | (.[0] // {}) | (.databaseId // .database_id // .id))]
@@ -212,7 +229,7 @@ thread_nodes() {
          | (if $m == null then error("thread names no comment of the PR") else ($m.in_reply_to_id // $m.id) end) as $root
          | ([$all[] | select((.in_reply_to_id // .id) == $root)] | sort_by(.created_at // "", .id)) as $c
          | {id: ($root | tostring), isResolved: ._r, isOutdated: ._o,
-            starter: {nodes: [{author: {login: ($c[0] | login)}, url: ($c[0].html_url // "-")}]},
+            starter: {nodes: [{author: {login: ($c[0] | login)}, url: ($c[0].html_url // "-"), body: ($c[0].body // "")}]},
             latest: {totalCount: ($c | length), nodes: [{author: {login: ($c[-1] | login)}, body: ($c[-1].body // ""), createdAt: ($c[-1].created_at // null)}]},
             comments: {nodes: [$c[-100:][] | {body: (.body // "")}]}}]}}' 2>/dev/null ||
     unreadable "PR $pr: review threads could not be tied to their comments"

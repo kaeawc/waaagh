@@ -27,12 +27,19 @@ review of the new head. Never record a verdict yourself: report the PR as held b
 
 ## Steps
 1. `{{SCRIPTS}}/main-health.sh --repo {{REPO}}` — if it prints `red`, merge only the PRs your
-   prompt names as fixes for it (`--main-fix`); report the red workflow and run id.
+   prompt names as fixes for it (`--main-fix`); report the red workflow and run id. With a CI
+   classifier ({{CI_CLASSIFIER}}), add `--auto-rerun --classifier "<command>"`: a red main whose
+   every red run is a known flake, infra or rerun verdict is re-run once per run id and stays held
+   until green (`auto-rerun=requested`). Report `auto-rerun=held` (investigate, unclassified, or a
+   rerun that failed again) and `auto-rerun=error` runs as a red main for a fix lane.
 2. `{{SCRIPTS}}/hold.sh check --repo {{REPO}} --release` first: every hold whose release condition
    is met is released (and logged) before selection. Report each `unmet`, `manual` or `unknown`
    line as held, with its reason. A `held:` refusal naming `until:freeze-end` is a release freeze
    (`freeze.sh`): merge nothing this pass and report it; only the orchestrator ends it.
    `{{SCRIPTS}}/pr-ready.sh --repo {{REPO}} {{AUTHORS}} {{IGNORE_CHECKS}} {{EXCLUDE_LABELS}} [--hold N]...`
+   Save the rows to a file and run `{{SCRIPTS}}/shipped-blocked.sh --repo {{REPO}} --rows <file>`:
+   each `shipped-blocked #<pr> verdict=<v> reason=<detail>` line is a PR with a ship verdict that
+   is not READY (e.g. `reason=threads=1`, #269). Report every one; never drop BLOCK rows unread.
    Select PRs only this way: by author and readiness, excluding by hold and labels. Never filter
    the rows by branch name or prefix yourself; lanes name branches differently and a ready PR
    outside the pattern sits unmerged. If the summary shows `ready-but-skipped=<n>`, report it with
@@ -85,6 +92,6 @@ review of the new head. Never record a verdict yourself: report the PR as held b
 ## Report (under 250 words)
 Merged (number, merge SHA, admin + evidence if used); holds released this pass and holds kept
 (`#N until:<event>`, age, reason); `ready-but-skipped: <n> (<reasons>)` when
-pr-ready reported any; per unmerged PR one line with the verdict and
+pr-ready reported any; every `shipped-blocked` line; per unmerged PR one line with the verdict and
 reason (`conflict` → needs the rebase bot; `fail:` → failing check and your classification;
 `threads=` → needs a fix pass or a follow-up issue); `{{BASE}}` health; anything denied.

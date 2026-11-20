@@ -69,9 +69,20 @@
 # re-read. While Pull Requests is down it stops at once and writes <state dir>/GITHUB_OUTAGE; while
 # that file exists every run re-reads the status first and pauses (exit 10, nothing attempted or
 # logged) until Pull Requests is operational again.
+# Without GraphQL (#266): Claude Code cloud sessions refuse GraphQL (`gh pr view`, `gh pr merge`,
+# `gh pr list`) with HTTP 403. ORCHESTRATE_GH_API=rest, a refusal remembered on this state root, or
+# one met now (orch_gh_api / orch_gh_refused in _lib.sh; auto, the default, tries GraphQL first)
+# moves every read to REST (gh-rest-pr.sh view, gh-rest-pr.sh list for the --admin count) and the
+# merge to `gh api -X PUT repos/R/pulls/N/merge -f merge_method=M -f sha=<full head>`. The sha binds
+# the merge to the judged head as --match-head-commit does: GitHub answers a moved head with 409, a
+# PR it will not merge with 405; both are read back like any refusal (exit 3 when the head moved,
+# else exit 5). A 5xx is pending and journaled as above. Every guard and exit code is the same;
+# --admin sends nothing extra (the PUT merges directly; bypassing protection is the token's right).
+# The journal and the merges.log line say api=rest.
 # Appends one line per attempt to <state dir>/merges.log.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority high
@@ -100,10 +111,31 @@ done
 [[ -z "$mwt" && -z "$mcheck" || -n "$mwt" && -n "$mcheck" ]] ||
   { echo "pr-merge.sh: --worktree and --merge-check go together" >&2; exit 2; }
 case "$method" in squash | merge | rebase) ;; *) echo "pr-merge.sh: bad --method $method" >&2; exit 2 ;; esac
+api=$(orch_gh_api pr-merge.sh) || exit 2
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 state=$(orch_state_dir "$repo")
 log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "${head:0:9}" "$*" >>"$state/merges.log"; }
+
+# gql_read ARGS...: a bounded GraphQL read (gh-read.sh) into $got. Returns 0 on success; 1 when
+# it failed for another reason; 2 when GitHub refused GraphQL (then api=rest from here on).
+gql_read() {
+  local rc=0
+  got=$(orch_gql_read 3 gh "$@") || rc=$?
+  if ((rc == 2)); then got=""; api=rest; fi
+  return "$rc"
+}
+# pr_view FIELDS: the PR as `gh pr view --json FIELDS` gives it, into $got (bounded reads). Over
+# REST it is gh-rest-pr.sh view, which carries every field read here.
+pr_view() {
+  if [[ "$api" != rest ]]; then
+    local grc=0
+    gql_read pr view "$pr" --repo "$repo" --json "$1" || grc=$?
+    ((grc != 0)) || return 0
+    ((grc == 2)) || return 1
+  fi
+  got=$(orch_rest_pr view --repo "$repo" --pr "$pr" --tries 3)
+}
 
 # Merge-sensitive locks owned by this PR are released on exit, except while the merge may still be
 # in flight on GitHub (8 queued, 9 unknown, 10 pending).
@@ -122,8 +154,9 @@ journal="$state/ops/merge-pr$pr.json"
 # An unfinished earlier attempt is reconciled before anything else: never merge twice.
 if [[ -f "$journal" ]] && [[ "$(jq -r .state "$journal" 2>/dev/null)" =~ ^(intent|unknown|queued|pending)$ ]]; then
   jfull=$(jq -r .head "$journal")
-  now=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,mergeCommit,headRefOid,autoMergeRequest) ||
+  pr_view state,mergeCommit,headRefOid,autoMergeRequest ||
     { echo "unverified: an earlier merge attempt of PR $pr is unreconciled and the PR is unreadable"; exit 9; }
+  now=$got
   case "$(jq -r .state <<<"$now")" in
     MERGED)
       orch_journal "$journal" "$(jq -c --arg at "$(orch_iso "$(orch_now)")" '.state = "merged" | .reconciled_at = $at' "$journal")"
@@ -187,15 +220,21 @@ if [[ "$admin" == yes ]]; then
   ((${#excepts[@]})) || { echo "refused: --admin needs --except-check for each check it bypasses"; exit 6; }
   if [[ "${ORCHESTRATE_ADMIN_MERGE:-0}" != 1 ]]; then
     over=${ORCHESTRATE_FAST_PATH_OVER:-20}
-    open=$(gh pr list --repo "$repo" --state open --limit 300 --json number | jq length)
+    open="" lrc=0
+    if [[ "$api" != rest ]]; then gql_read pr list --repo "$repo" --state open --limit 300 --json number || lrc=$?; fi
+    if [[ "$api" == rest ]]; then lrc=0; got=$(orch_rest_pr list --repo "$repo" --limit 300 --tries 3) || lrc=1; fi
+    if ((lrc != 0)) || ! open=$(jq length <<<"$got" 2>/dev/null) || [[ ! "$open" =~ ^[0-9]+$ ]]; then
+      echo "unverified: the open PR count could not be read for the --admin fast-path check; nothing was attempted"; exit 9
+    fi
     if ((open <= over)); then
       echo "refused: --admin is fast-path only ($open open PRs, threshold >$over)"; exit 6
     fi
   fi
 fi
 
-info=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,isDraft,isCrossRepository,headRefOid,baseRefName,author,mergeable) ||
+pr_view state,isDraft,isCrossRepository,headRefOid,baseRefName,author,mergeable ||
   { echo "unverified: PR $pr could not be read; nothing was attempted"; exit 9; }
+info=$got
 ok=$(jq -r --arg head "$head" --args '
   .state == "OPEN" and (.isDraft | not) and (.isCrossRepository | not)
   and (.headRefOid | startswith($head)) and (.mergeable != "CONFLICTING")
@@ -324,11 +363,13 @@ log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "$fu
 refuse_if_held
 args=("--$method" --match-head-commit "$full")
 [[ "$admin" == yes ]] && args+=(--admin)
+via=""
+[[ "$api" != rest ]] || via=" api=rest"
 attempt="$(orch_now)-$$"
 orch_journal "$journal" "$(jq -cn --arg repo "$repo" --argjson pr "$pr" --arg head "$full" --arg attempt "$attempt" \
-  --arg at "$(orch_iso "$(orch_now)")" --arg method "$method" --arg admin "$admin" \
+  --arg at "$(orch_iso "$(orch_now)")" --arg method "$method" --arg admin "$admin" --arg api "$api" \
   '{op: "merge", repo: $repo, pr: $pr, head: $head, attempt: $attempt, method: $method, admin: $admin,
-    state: "intent", started_at: $at}')"
+    api: $api, state: "intent", started_at: $at}')"
 jset() { orch_journal "$journal" "$(jq -c --arg s "$1" --arg d "${2:-}" '.state = $s | .detail = $d' "$journal")"; }
 diag="$state/ops/merge-pr$pr-$attempt.out"
 # A 5xx, or GitHub saying the merge is already in progress: pending, never success or failure.
@@ -345,16 +386,22 @@ while :; do
   if [[ "$send" == yes ]]; then
     ((round == 1)) || diag="$state/ops/merge-pr$pr-$attempt-r$round.out"
     rc=0
-    gh pr merge "$pr" --repo "$repo" "${args[@]}" >"$diag" 2>&1 || rc=$?
+    if [[ "$api" == rest ]]; then
+      # REST: sha binds the merge to the judged head (409 when it moved; 405 not mergeable).
+      gh api -X PUT "repos/$repo/pulls/$pr/merge" -f merge_method="$method" -f sha="$full" >"$diag" 2>&1 || rc=$?
+    else
+      gh pr merge "$pr" --repo "$repo" "${args[@]}" >"$diag" 2>&1 || rc=$?
+    fi
     out=$(tail -1 "$diag")
   fi
   # Reconcile: bounded reads of the PR; its state decides, never the merge's exit code.
-  if ! after=$(orch_read_retry 3 gh pr view "$pr" --repo "$repo" --json state,mergeCommit,headRefOid,autoMergeRequest); then
+  if ! pr_view state,mergeCommit,headRefOid,autoMergeRequest; then
     jset unknown "merge exit $rc; readback failed"
     log "unverified: merge exit $rc, readback failed; attempt $attempt; output in $diag"
     echo "unverified: the merge of PR $pr may or may not have happened (exit $rc, readback failed); run again to reconcile"
     exit 9
   fi
+  after=$got
   final=$(jq -r '"\(.state) \(.mergeCommit.oid // "-")"' <<<"$after")
   # Only a still-OPEN PR at the judged head, not queued, can be pending.
   [[ "$final" == OPEN* && "$(jq -r '.headRefOid // ""' <<<"$after")" == "$full" &&
@@ -382,7 +429,7 @@ done
 if [[ "$final" == MERGED* ]]; then
   rm -f "$state/GITHUB_OUTAGE"
   jset merged "${final#MERGED }"
-  log "merged ${final#MERGED } method=$method admin=$admin${evidence:+ evidence=$evidence}${review:+ review=$review}"
+  log "merged ${final#MERGED } method=$method admin=$admin${evidence:+ evidence=$evidence}${review:+ review=$review}$via"
   if [[ "$review" == "ok unreviewed"* ]]; then
     orch_run review-gate.sh ledger add --repo "$repo" --pr "$pr" --head "$full" --note "${review#ok unreviewed }" >/dev/null ||
       echo "warning: merged PR $pr without a review but the unreviewed-merges ledger write failed" >&2

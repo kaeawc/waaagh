@@ -22,12 +22,14 @@
 #           (for example a secondary rate limit) the labels are retried once through the REST API.
 # A route label is `cloud-ready` or any label starting `needs-local:`. Issues carrying a skip label
 # are not actionable: not counted as unrouted, and `set` refuses them. Default skip labels:
-# physical-device, needs-human, blocked, desktop, epic, needs-decision (--skip-label replaces them).
+# physical-device, needs-human, blocked, desktop, epic, needs-decision, and the verify-on-main label
+# ($ORCHESTRATE_VERIFY_ON_MAIN_LABEL; verify-on-main.sh) (--skip-label replaces them).
 # Reads at most 1000 open issues (over REST where GraphQL is refused). Writes append to <state dir>/route-actions.log.
 # Exit: 0 ok (or would change) | 2 usage | 3 refused | 4 issues or labels could not be read |
 #       5 write failed (rerun finishes it) | 9 outcome unknown (the issue could not be read back).
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal
@@ -53,7 +55,7 @@ while (($#)); do
   esac
 done
 case "$cmd" in status | labels | set) ;; -h | --help) orch_usage; exit 0 ;; *) usage ;; esac
-((${#skip[@]})) || skip=(physical-device needs-human blocked desktop epic needs-decision)
+((${#skip[@]})) || skip=(physical-device needs-human blocked desktop epic needs-decision "${ORCHESTRATE_VERIFY_ON_MAIN_LABEL:-verify-on-main}")
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 skip_json=$(printf '%s\n' "${skip[@]}" | jq -R . | jq -sc .)

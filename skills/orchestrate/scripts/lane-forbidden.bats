@@ -1,0 +1,164 @@
+#!/usr/bin/env bats
+# The orchestrator's own checkout is forbidden to lanes (#218). A lane subagent inherits the
+# orchestrator's cwd; lane-safety.sh refuses its writes, deletions, mutating git and Edit/Write calls
+# under every root named in $WAAAGH_LANE_FORBID or <state root>/lane-forbidden, while the
+# orchestrator's own calls and the lane's own nested worktree stay free. Every lane brief names that
+# path through {{FORBIDDEN}}. Run: bats lane-forbidden.bats
+
+setup() {
+  load test_helper
+  SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
+  ROOT="$(cd "$SCRIPTS/../../.." && pwd)"
+  T=$BATS_TEST_TMPDIR
+  export HOME="$T/home" WAAAGH_LANE_TEMP="$T/scratch" ORCHESTRATE_STATE_DIR="$T/state"
+  unset ANDROID_HOME ANDROID_SDK_ROOT WAAAGH_LANE_ROOT WAAAGH_LANE_ALLOW WAAAGH_PROTECTED_PATHS \
+    WAAAGH_LANE_SAFETY WAAAGH_LANE_FORBID ANDROID_SERIAL TMPDIR
+  mkdir -p "$HOME" "$T/scratch" "$T/state" "$T/main"
+  git -C "$T/main" init -q
+  git -C "$T/main" commit -q --allow-empty -m init
+  git -C "$T/main" worktree add -q "$T/orch" -b orch
+  git -C "$T/main" worktree add -q "$T/lane" -b lane
+  git -C "$T/main" worktree add -q "$T/main/.claude/worktrees/l1" -b l1
+  git -C "$T/main" worktree add -q "$T/main/.claude/worktrees/l2" -b l2
+  MAIN="$T/main" ORCH="$T/orch" LANE="$T/lane" NEST="$T/main/.claude/worktrees/l1" SIB="$T/main/.claude/worktrees/l2"
+  FAILS=""
+}
+
+forbid() { printf '%s\n' "$@" >"$T/state/lane-forbidden"; }
+
+# expect VERDICT TOOL TEXT CWD AGENT [REASON]: TOOL is Bash (TEXT a command) or an edit tool (TEXT
+# its file path); AGENT is the payload's agent_id ("" for the orchestrator's own call). Mismatches
+# collect in $FAILS so one table reports every failing row (done_ asserts there were none).
+expect() {
+  local want=$1 tool=$2 text=$3 cwd=$4 agent=$5 why=${6:-} p out rc=0 got
+  p=$(jq -cn --arg t "$tool" --arg x "$text" --arg d "$cwd" --arg a "$agent" '{tool_name: $t, cwd: $d}
+    + (if $t == "Bash" then {tool_input: {command: $x}} elif $t == "NotebookEdit" then {tool_input: {notebook_path: $x}}
+       else {tool_input: {file_path: $x}} end) + (if $a == "" then {} else {agent_id: $a} end)')
+  out=$("$SCRIPTS/lane-safety.sh" <<<"$p") || rc=$?
+  if ((rc != 0)); then FAILS="$FAILS
+[$tool $text] exit $rc"; return 0; fi
+  got=allow
+  [ -z "$out" ] || got=$(jq -r '.hookSpecificOutput.permissionDecision' <<<"$out")
+  if [ "$got" != "$want" ]; then FAILS="$FAILS
+[$tool $text] in $cwd agent=$agent: want $want, got $got $out"
+  elif [ -n "$why" ] && [[ "$out" != *"$why"* ]]; then FAILS="$FAILS
+[$tool $text]: reason lacks '$why': $out"; fi
+}
+done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
+
+@test "a lane subagent started in the orchestrator's main checkout cannot change it" {
+  forbid "$MAIN"
+  for c in "echo x > f" "echo x >> $MAIN/src/a.kt" "tee notes.txt" "sed -i s/a/b/ build.gradle" \
+    "cp /etc/hosts ." "rm -rf src" "find . -name '*.o' -delete" "git commit -m wip" \
+    "git checkout -b mine" "git switch other" "git pull" "git stash" "git reset --hard" \
+    "git add -A" "git -c user.name=x merge origin/main" "cd $MAIN && git rebase origin/main" \
+    "git -C $MAIN restore ." "git --work-tree=$MAIN clean -fd" \
+    "git checkout pr-5" "git checkout --detach" "git branch -D pr-5" "git branch --delete pr-5" \
+    "git branch -m old new" "git branch -f main origin/main" "git branch -rd origin/x"; do
+    expect deny Bash "$c" "$MAIN" agent-1 "orchestrator's checkout $MAIN"
+  done
+  # The reviewer's read-only ways to see another ref, and its own detached worktree (#317).
+  for c in "git status" "git log -1" "git diff" "git fetch origin" "git worktree add $T/new -b new" \
+    "git show origin/pr-5:src/a.kt" "git diff origin/main...origin/pr-5" "git branch --list 'pr-*'" \
+    "git branch -vv" "git branch --contains HEAD" "git worktree add --detach $T/scratch/review abc123" \
+    "git branch -a" "cat f" "echo x > $T/scratch/out" "git -C $LANE commit -m wip" \
+    "cd $LANE && echo x > f" "echo ok"; do
+    expect allow Bash "$c" "$MAIN" agent-1
+  done
+  done_
+}
+
+@test "the orchestrator's own calls stay free, in its main checkout and in its linked worktree" {
+  forbid "$MAIN" "$ORCH"
+  for c in "echo x > f" "git commit -m wip" "git pull" "rm -rf build"; do
+    expect allow Bash "$c" "$MAIN" ""
+    expect allow Bash "$c" "$ORCH" ""
+  done
+  expect allow Edit "$ORCH/a.kt" "$ORCH" ""
+  # the same calls from a subagent in that linked worktree are refused
+  expect deny Bash "echo x > f" "$ORCH" agent-2 "orchestrator's checkout $ORCH"
+  expect deny Bash "git checkout main" "$ORCH" agent-2
+  expect deny Edit "$ORCH/a.kt" "$ORCH" agent-2
+  done_
+}
+
+@test "a lane in its own worktree may not reach into the orchestrator's checkout" {
+  forbid "$ORCH"
+  expect deny Bash "git -C $ORCH reset --hard" "$LANE" "" "orchestrator's checkout $ORCH"
+  expect deny Bash "echo x > $ORCH/f" "$LANE" "" "orchestrator's checkout $ORCH"
+  expect deny Bash "rm -rf $ORCH/build" "$LANE" ""
+  expect deny Bash "git worktree remove --force $ORCH" "$LANE" ""
+  expect deny Edit "$ORCH/src/a.kt" "$LANE" ""
+  expect allow Bash "git commit -m wip" "$LANE" ""
+  expect allow Bash "echo x > f" "$LANE" ""
+  expect allow Bash "git -C $ORCH status" "$LANE" ""
+  expect allow Edit "$LANE/src/a.kt" "$LANE" ""
+  done_
+}
+
+@test "a lane worktree nested in the forbidden checkout keeps its own tree, not its siblings'" {
+  forbid "$MAIN"
+  expect allow Bash "echo x > f" "$NEST" agent-3
+  expect allow Bash "git commit -m wip" "$NEST" agent-3
+  expect allow Bash "rm -rf build" "$NEST" agent-3
+  expect allow Write "$NEST/a.kt" "$NEST" agent-3
+  expect allow Write "src/a.kt" "$NEST" agent-3
+  expect deny Write "$MAIN/a.kt" "$NEST" agent-3
+  expect deny Write "../l2/a.kt" "$NEST" agent-3
+  expect deny Bash "echo x > $SIB/f" "$NEST" agent-3
+  expect deny Bash "git -C $MAIN checkout main" "$NEST" agent-3
+  expect deny Bash "rm -rf $T/main" "$NEST" agent-3
+  expect deny Bash "rm -rf $T/*" "$NEST" agent-3
+  done_
+}
+
+@test "edit tools: Edit, Write, MultiEdit and NotebookEdit; relative paths resolve against cwd" {
+  forbid "$MAIN"
+  for t in Edit Write MultiEdit NotebookEdit; do
+    expect deny "$t" "src/a.kt" "$MAIN" agent-4 "$t src/a.kt"
+    expect allow "$t" "$T/scratch/a.kt" "$MAIN" agent-4
+  done
+  expect allow Edit "src/a.kt" "$MAIN" ""
+  expect allow Read "$MAIN/a.kt" "$MAIN" agent-4
+  done_
+}
+
+@test "sources: the env list, the state file with comments, blank lines and ~; none means no change" {
+  expect allow Bash "echo x > f" "$MAIN" agent-5
+  expect allow Edit "$MAIN/a.kt" "$MAIN" agent-5
+  printf '# orchestrator checkout\n\n~/repo\nrelative/ignored\n/\n' >"$T/state/lane-forbidden"
+  mkdir -p "$HOME/repo"
+  expect deny Bash "echo x > $HOME/repo/f" "$T/scratch" agent-5 "orchestrator's checkout $HOME/repo"
+  expect allow Bash "echo x > $T/scratch/f" "$T/scratch" agent-5
+  expect allow Bash "echo x > $MAIN/f" "$T/scratch" agent-5
+  rm "$T/state/lane-forbidden"
+  export WAAAGH_LANE_FORBID="$T/nowhere:$MAIN"
+  expect deny Bash "git commit -m x" "$MAIN" agent-5
+  expect allow Bash "git commit -m x" "$MAIN" ""
+  done_
+}
+
+@test "the physical path of a forbidden root is forbidden too" {
+  ln -s "$MAIN" "$T/link"
+  forbid "$T/link"
+  expect deny Bash "echo x > $MAIN/f" "$T/scratch" agent-6
+  expect deny Bash "echo x > $T/link/f" "$T/scratch" agent-6
+  done_
+}
+
+@test "every lane brief names the forbidden checkout; the hook watches edit tools" {
+  roles="$ROOT/skills/orchestrate/roles"
+  grep -qF '`{{FORBIDDEN}}`' "$roles/README.md"
+  grep -qF 'lane-forbidden' "$roles/README.md"
+  grep -qF '{{FORBIDDEN}}' "$roles/_common.md"
+  grep -qF '{{FORBIDDEN}}' "$roles/implementation-lane.md"
+  # The reviewer brief: read refs without a checkout; execute only in a worktree of its own (#317).
+  grep -qF 'show <ref>:<path>' "$roles/review.md"
+  grep -qF 'worktree add --detach' "$roles/review.md"
+  grep -qF 'rev-parse --abbrev-ref' "$ROOT/skills/orchestrate/SKILL.md"
+  grep -qF 'lane-forbidden' "$ROOT/skills/orchestrate/lane-safety.md"
+  grep -qF 'status --short' "$ROOT/skills/orchestrate/lane-safety.md"
+  run jq -r '.hooks.PreToolUse[] | select(.hooks[].command | endswith("/lane-safety.sh")) | .matcher' "$ROOT/hooks/hooks.json"
+  [ "$status" -eq 0 ]
+  for t in Bash Edit Write MultiEdit NotebookEdit; do [[ "|$output|" == *"|$t|"* ]] || { echo "matcher lacks $t: $output"; return 1; }; done
+}

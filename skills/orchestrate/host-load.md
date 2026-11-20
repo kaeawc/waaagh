@@ -54,6 +54,112 @@ worktrees (12 GB) took the load from about 120 to 32 within minutes.
   collection: start no new worktree until it is back under, and report the budget row.
 - Over budget is not a reason to remove an unfinished tree. Finish or close its PR first.
 
+## Lane-private build output
+
+Lanes on one host must never share a build output directory. An iOS lane once failed with a
+missing `.pcm` module file: its derived-data path in `/tmp` was shared with other lanes, so it
+read another lane's half-built module cache. A shared default looks like a flaky or broken build
+and costs a whole lane run to diagnose. So this is not left to each lane's judgment:
+
+- **Every gate gets a lane-private directory.** `gate-slot.sh` and `heavy-build-slot.sh` export
+  `ORCHESTRATE_LANE_BUILD_DIR` (`<state dir>/build/<lane id>`; `ORCHESTRATE_BUILD_ROOT` moves the
+  root) and point each tool's output into it. The lane id is the worktree's name plus a checksum of
+  its path, or `ORCHESTRATE_LANE_ID`. Commands that run outside the gate wrappers do not get it.
+- **Defaults ship as data**, in `scripts/build-dirs.tsv`: `TMPDIR` and `XDG_CACHE_HOME` for every
+  gate, `-derivedDataPath` for `xcodebuild` (derived data and its module cache), the fastlane
+  derived-data variables, and `--project-cache-dir` for Gradle. Gradle's `build/` directories are
+  already inside the worktree. An argument the command already passes (an explicit
+  `-derivedDataPath`) is kept, with a note on stderr; make sure it is lane-private.
+- **Per repo**, put a table at `<state dir>/<owner>__<repo>/build-dirs.tsv` (next to
+  `gate-env.sh`). It replaces the defaults, so start from a copy. Rows are
+  `MATCH<TAB>KIND<TAB>NAME<TAB>VALUE`. MATCH is `*` or tool names joined by `|`. KIND is `env`
+  (export) or `arg` (inserted after the tool word). VALUE may use `{dir}`, `{id}` and `{worktree}`.
+  `ORCHESTRATE_BUILD_DIRS=<file>` names another table, and `ORCHESTRATE_BUILD_DIRS=off` turns
+  this off. `gate-env.sh` is sourced afterwards and can override any of it.
+- A tool reached only inside a `bash -c` string gets the env rows but not the argument rows. Run
+  the tool as the gate's own command (`gate-slot.sh -- xcodebuild ...`), or have the build read
+  `$ORCHESTRATE_LANE_BUILD_DIR`.
+- **Cleanup.** `wt-cleanup.sh` lists a lane's build dir as a `build` row once its worktree is
+  gone, whether it removed the worktree or someone else did. With `--apply` it removes the dir,
+  unless a process is working inside it. Only directories under the build root that have a
+  `.worktree` marker naming a missing path are touched.
+
+## No shared Gradle daemon
+
+Android builds on a host with several lanes once began failing in about 3 seconds with `A problem
+occurred starting process 'command .../bin/jlink'` (another lane saw `javap`). The tool ran fine by
+hand, and the same build had passed an hour earlier. A Gradle daemon outlives the command that
+started it and is reused by every later compatible build on the host, from any lane. This one had
+been started inside a lane's sandboxed shell, or on a Homebrew JDK that a `brew upgrade` then
+removed, so every build that reconnected to it inherited a broken process environment.
+
+- **`heavy-build-slot.sh` adds `-Dorg.gradle.daemon=false` to `GRADLE_OPTS`**, so a build through
+  the gate wrappers starts no daemon that outlives it. `HEAVY_BUILD_GRADLE_DAEMON=1`, or a
+  `GRADLE_OPTS` that already sets `org.gradle.daemon`, keeps the caller's choice. One heavy build
+  runs at a time, so a warm daemon would save little.
+- **A Gradle run outside the wrappers passes `--no-daemon`**, and points `JAVA_HOME` or the
+  toolchain at a JDK path that survives upgrades (not a versioned Homebrew Cellar path).
+- **A build that fails in seconds with "problem occurred starting process" for a JDK tool** is a
+  stale daemon, not the change: re-run it once through the gate (or with `--no-daemon`) before
+  reading the code.
+- **Never stop daemons to fix it.** `./gradlew --stop` stops every compatible daemon on the host,
+  other lanes' running builds included; the lane-safety hook refuses it in a lane. An idle daemon
+  times out by itself.
+
+## One build per commit for verification lanes
+
+A manual-test round once started four device lanes on the same main commit. Each built its own
+copy in its own worktree: two or three built the same Android debug APK, plus the iOS runner. Host
+load reached 161 on 16 CPUs, which slowed every lane and the CI runners on the host. Lanes that
+verify the same tree need its artifacts once, not once each:
+
+- **Build through `scripts/shared-build.sh`** in verification and device lanes:
+  `shared-build.sh --class device --name android-debug --artifact app/build/outputs/apk/debug --
+  gate-slot.sh -- ./gradlew assembleDebug`. The last stdout line is
+  `shared-build<TAB>built|reused|private<TAB><dir>`; point the test at `<dir>` (an APK path
+  override, a prebuilt runner path). `--copy DEST` gives a writable copy for a tool that writes
+  next to its inputs.
+- **Keyed by tree fingerprint** (`fingerprint.sh`: commit plus any uncommitted diff) and a build
+  name: `<state dir>/build/shared/<fingerprint>--<name>`. A lane on another commit, or with local
+  changes, builds its own.
+- **The first lane builds, under a lock**, into a staging dir, and renames it into place after
+  writing the `.done` marker. Later lanes wait (bounded, `--wait`; exit 75) for the marker, then
+  reuse the read-only artifacts without running the build. A failed build, a missing `--artifact`
+  or a killed builder leaves no marker, so the next lane rebuilds. A lock whose holder died, or
+  older than `ORCHESTRATE_SHARED_BUILD_MAX_AGE` (2 h), is broken.
+- **Opt-in per class.** `--class` (or `ORCHESTRATE_LANE_CLASS`) names the lane's class; the
+  classes in `ORCHESTRATE_BUILD_SHARE` (default `verify device`) share. Implementation lanes
+  (`impl`, the default) build into their private lane dir as above, since their trees differ
+  anyway. Only artifacts are shared: TMPDIR and tool caches stay lane-private.
+- **Cleanup and a disk cap.** After each build, and in `wt-cleanup.sh` as `build` rows, shared
+  builds past `ORCHESTRATE_SHARED_BUILD_KEEP` (3, by last use) or `ORCHESTRATE_SHARED_BUILD_MAX_MB`
+  (20480) are removed, as are partial builds; the newest and any a process is working inside stay.
+  A lane that runs long on a reused build should take `--copy`.
+- **Stagger device boots.** Start the build first, then boot devices one at a time rather than
+  every emulator at once, through `scripts/boot-slot.sh` (below).
+
+## Device boots are gated on load
+
+Three local lanes once booted simulators within the same minute: a watchOS simulator, an iOS 18
+simulator for a runtime matrix, and a foldable. The 1-minute load on a 16-CPU Mac went from about
+25 to 235. The device-lane cap (4) was not exceeded: one matrix lane may boot several runtimes, and
+each boot starts many CoreSimulator processes, most of them after the boot command has returned.
+With ten lanes and one heavy-build slot the load still reached 130 when a boot, a test run and a
+build overlapped. The lane count is the wrong unit; booted devices and boots per minute drive it.
+
+- **Every boot goes through `"$SCRIPTS/boot-slot.sh" -- <boot command>`**: one boot at a time on
+  the host, started only while the 1-minute load is below 3x the CPU count (48 on 16 CPUs;
+  `--load-factor`, `ORCHESTRATE_BOOT_LOAD_FACTOR`), and the slot is kept 30 seconds afterwards
+  (`--settle`) so the next boot does not land on this one's start-up. Bounded wait (`--wait`,
+  default 900 seconds); exit 75 means it did not start: report it, do not retry in a loop.
+- **One booted device per lane.** A matrix over runtimes or devices runs them one at a time,
+  shutting each down before booting the next.
+- **The gate is in the lane's brief**, not left to the orchestrator noticing a spike
+  (`roles/verification.md`, `roles/verify-batch.md`).
+- **On a spike, pause lanes; do not abort them.** Message the running device lanes to stop
+  starting new boots and builds until `host-load.sh` admits again. An aborted lane loses its booted
+  device and its build, and rebuilding both is the load you were trying to shed.
+
 ## Never remove a worktree someone is in
 
 A cleanup once removed the worktree a live orchestrator session was using as its working

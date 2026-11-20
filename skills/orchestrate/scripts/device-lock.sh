@@ -36,7 +36,8 @@
 # --repo, or the current checkout's repo (<state dir>/<owner>__<repo>/device.lock); outside any repo,
 # <$ORCHESTRATE_STATE_DIR or ~/.claude/orchestrate>/device.lock. Never kills any process.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal
@@ -79,7 +80,7 @@ if [[ -z "$path" ]]; then
   elif r=$(orch_repo "$repo" 2>/dev/null) && [[ -n "$r" ]]; then
     path="$(orch_state_dir "$r")/device.lock"
   else
-    d=${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}
+    d=$(orch_state_root)
     mkdir -p "$d"
     path="$d/device.lock"
   fi

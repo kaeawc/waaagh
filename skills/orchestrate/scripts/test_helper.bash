@@ -41,6 +41,12 @@ CFG
 hermetic_git
 # gh-read.sh in tests: log waits instead of sleeping, no jitter.
 export GH_READ_FAKE_SLEEP=1 GH_READ_JITTER=0
+# No suite reads or writes the user's real state directory (#292): _lib.sh falls back to
+# $HOME/.claude/orchestrate when ORCHESTRATE_STATE_DIR is unset, and its gh-no-graphql memo there
+# (left by an earlier GraphQL refusal) would switch orch_gh_api to REST, so a result would depend on
+# the host. Always a fresh per-test directory (an inherited value is replaced); a test that wants a
+# different one exports its own after loading this file.
+export ORCHESTRATE_STATE_DIR="${BATS_TEST_TMPDIR:-$BATS_FILE_TMPDIR}/orch-state-default"
 # No suite paces its stubbed gh through gh-budget.sh unless it puts the shim on PATH itself.
 unset ORCHESTRATE_GH_BUDGET GH_BUDGET_ACTIVE
 # Stubbing a sibling script (#233): put an executable stub of that one name in a directory and
@@ -179,3 +185,10 @@ snapshot_line_names() {
 
 # `run ! cmd` is how a mid-test negative assertion fails (#134); bats >= 1.5 has it.
 bats_require_minimum_version 1.5.0
+
+# register_lane WORKTREE: an active lanes.tsv row (lane-claim.sh add) for WORKTREE, so lane-safety.sh
+# treats the owner-less calls from it as a known lane (deny) rather than the owner's session (ask).
+register_lane() {
+  mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"
+  printf '%s\twork/1-x\t1\tsrc/\tlane-agent\tactive\n' "$1" >>"$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"
+}

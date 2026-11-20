@@ -20,7 +20,8 @@
 #       be read | 5 a write failed (rerun finishes it) | 9 outcome unknown (no readback).
 # Appends one line per completed resolve to <state dir>/thread-actions.log.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority normal
@@ -74,7 +75,7 @@ view() {
         pullRequest{number} comments(last:100){nodes{body}}}}}' 2>"$err"
     return
   fi
-  "$here/gh-rest-pr.sh" thread-nodes --repo "$repo" --pr "$pr" 2>/dev/null | jq -ce --arg id "$thread" '.number as $n
+  orch_rest_pr thread-nodes --repo "$repo" --pr "$pr" | jq -ce --arg id "$thread" '.number as $n
     | {data: {node: ((.reviewThreads.nodes | map(select(.id == $id)) | first)
         | if . == null then null else {__typename: "PullRequestReviewThread", isResolved, pullRequest: {number: $n}, comments} end)}}'
 }

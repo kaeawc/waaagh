@@ -12,7 +12,7 @@
 #                        that is not a path is looked for in skills/orchestrate/scripts/, so a bare
 #                        name such as gh-read.bats works from any directory
 # Env: BATS (default bats)
-# Exit: 0 every suite passed | 1 a suite failed | 2 usage
+# Exit: 0 every suite passed | 1 a suite failed | 2 usage, or bats not found
 # Suites must not share state: each test works under its own $BATS_TEST_TMPDIR (test_helper.bash).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -42,14 +42,24 @@ for f in "$@"; do
 done
 ((${#files[@]})) || files=("$root"/skills/orchestrate/scripts/*.bats)
 
+if ! command -v "${BATS:-bats}" >/dev/null 2>&1; then
+  echo "dev/test.sh: bats not found (BATS=${BATS:-bats}); install bats-core or set BATS to its path" >&2
+  exit 2
+fi
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Longest first, by test count, so the slowest files do not start last.
+# Longest first, so the slowest files do not start last: by the measured seconds in
+# dev/coverage-weights.tsv (suite<TAB>seconds, also the coverage shards' weights), else by test count.
+# A file with few but slow tests (bench-cases.bats) otherwise starts last and sets the wall time (#112).
+weights=$root/dev/coverage-weights.tsv
 for f in "${files[@]}"; do
   [[ -f "$f" ]] || { echo "dev/test.sh: no such suite: $f" >&2; exit 2; }
-  printf '%s\t%s\n' "$(grep -c '^@test ' "$f" || true)" "$f"
-done | sort -rn | cut -f2 >"$work/order"
+  w=""
+  [[ ! -f "$weights" ]] || w=$(awk -F'\t' -v b="${f##*/}" '$1 == b && $2 ~ /^[0-9]+(\.[0-9]+)?$/ { print $2; exit }' "$weights")
+  printf '%s\t%s\n' "${w:-$(grep -c '^@test ' "$f" || true)}" "$f"
+done | sort -t$'\t' -k1,1gr | cut -f2 >"$work/order"
 
 start=$(date +%s)
 # Each file: its output to <work>/<n>.out, then one result line "<rc> <secs> <file>".

@@ -6,7 +6,10 @@
 # Usage: dev/coverage.sh [-j N] [FILE.bats...]
 #        dev/coverage.sh --changed [BASE] [-j N]
 #        dev/coverage.sh --check FLOOR [--resultset FILE]
-#   -j N         suites to run at once (passed to dev/test.sh; default 1). Keep 1: bashcov reads
+#        dev/coverage.sh --shard K/N [-j N]
+#        dev/coverage.sh --merge DIR...
+#        dev/coverage.sh --weights LOG...
+#   -j N        suites to run at once (passed to dev/test.sh; default 1). Keep 1: bashcov reads
 #                every trace line through one ruby process, and more suites at once are slower, not
 #                faster (#194: the same 18 suites took 2.5 min at -j 1 and 9.7 min at -j 4)
 #   FILE         run only these suites (passed to dev/test.sh; default every suite). The numbers are
@@ -29,6 +32,20 @@
 #                with a changed.txt there too (a --changed run's), only the scripts it lists are
 #                judged, as --changed itself did (#255).
 #   --resultset  the resultset --check reads (default coverage/.resultset.json)
+#   --shard K/N  run only shard K of N (#295): every suite is weighed, in seconds, by its row in
+#                dev/coverage-weights.tsv (suite<TAB>seconds) or, with no row, by its @test count,
+#                and dealt heaviest first to the lightest shard (ties: by name, then the lower
+#                shard), so a new suite lands in some shard with no hand-kept list. Partial numbers
+#                as with FILE (subset.txt); an empty shard runs nothing and exits 0.
+#   --merge DIR  run no suites: add up the resultsets DIR/.resultset.json (one per shard) line by
+#                line into coverage/.resultset.json, with the shards' test.log files joined into
+#                coverage/test.log, and print the table as a run would. When the shards' subset.txt
+#                files together list every suite (or a DIR has none: a full run), the result is
+#                whole and gets no subset.txt; otherwise subset.txt lists the suites that ran. A DIR
+#                with no resultset (its shard failed) is named on stderr and skipped
+#   --weights L  run no suites: print a weights table (suite<TAB>seconds, by name) from the
+#                per-suite lines of test.log files L (the last line for a suite wins), to refresh
+#                dev/coverage-weights.tsv from a CI run's shard logs
 # Env: GITHUB_STEP_SUMMARY  when set, the table (or the check's findings) is appended to it as Markdown.
 # Needs: bashcov (gem install bashcov; not for --check), jq. Off PATH, it is looked for in gem's
 # EXECUTABLE DIRECTORY, then in `gem environment gemdir`/bin, and the one used is named on stderr.
@@ -42,18 +59,25 @@
 # Runtime (#194): a full run takes about 20 minutes at -j 1, in CI (coverage.yml: about 18 on #193)
 # and in a 4-CPU cloud sandbox alike; at -j 4 the sandbox ran over an hour without finishing. For a
 # lane's check use --changed: seconds for a script one suite names, about 2.5 minutes for _lib.sh,
-# gh-read.sh and pr-ready.sh together (18 suites, the selftest-* ones among them).
+# gh-read.sh and pr-ready.sh together (18 suites, the selftest-* ones among them). At about 940
+# tests a full CI run passed 30 minutes (#287), so CI runs 4 --shard jobs and --merges them (#295).
 # Exit: 0 report printed, or every floor held | 1 a suite failed (report still printed) | 2 usage,
 #       a FILE missing, BASE unknown, or bashcov missing | 3 --check or --changed: a script below its
-#       floor or with no floor row | 4 --check: the resultset or floor file is missing or malformed
+#       floor or with no floor row | 4 --check: the resultset or floor file is missing or malformed,
+#       or --merge: no DIR holds a readable resultset
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 jobs=(-j 1)
-floor="" resultset="" suites=() changed="" base=""
+floor="" resultset="" suites=() changed="" base="" shard="" mode="" args=()
 while (($#)); do
   case "$1" in
     -j) jobs=(-j "${2:-}"); shift 2 ;;
+    --shard) [[ "${2:-}" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] && ((BASH_REMATCH[1] <= BASH_REMATCH[2])) ||
+        { echo "dev/coverage.sh: --shard needs K/N with 1 <= K <= N (e.g. 2/4)" >&2; exit 2; }
+      shard=$2; shift 2 ;;
+    --merge | --weights) [[ -z "$mode" ]] || { echo "dev/coverage.sh: --merge and --weights do not go together" >&2; exit 2; }
+      mode=${1#--}; shift ;;
     --check) [[ -n "${2:-}" ]] || { echo "dev/coverage.sh: --check needs a floor file" >&2; exit 2; }
       floor=$2; shift 2 ;;
     --resultset) [[ -n "${2:-}" ]] || { echo "dev/coverage.sh: --resultset needs a file" >&2; exit 2; }
@@ -63,14 +87,24 @@ while (($#)); do
       if [[ -n "${1:-}" && "$1" != -* && "$1" != *.bats ]]; then base=$1; shift; fi ;;
     -h | --help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"; exit 0 ;;
     -*) echo "dev/coverage.sh: unknown argument: $1" >&2; exit 2 ;;
-    *) s=$1; shift
-      # A bare suite name: every suite lives in skills/orchestrate/scripts/.
-      [[ -f "$s" || ! -f "$root/skills/orchestrate/scripts/$s" ]] || s=$root/skills/orchestrate/scripts/$s
-      [[ -f "$s" ]] || { echo "dev/coverage.sh: no such suite: $s" >&2; exit 2; }
-      # Absolute, since the run starts from the repo root.
-      suites+=("$(cd "$(dirname "$s")" && pwd)/$(basename "$s")") ;;
+    *) args+=("$1"); shift ;;
   esac
 done
+if [[ -n "$mode" ]]; then
+  # --merge and --weights run nothing and take no other flag.
+  [[ -z "$floor$resultset$changed$shard" ]] || { echo "dev/coverage.sh: --$mode takes no other flag" >&2; exit 2; }
+  ((${#args[@]})) || { echo "dev/coverage.sh: --$mode needs at least one $([[ $mode == merge ]] && echo DIR || echo LOG)" >&2; exit 2; }
+fi
+for s in ${args[@]+"${args[@]}"}; do
+  [[ -z "$mode" ]] || break
+  # A bare suite name: every suite lives in skills/orchestrate/scripts/.
+  [[ -f "$s" || ! -f "$root/skills/orchestrate/scripts/$s" ]] || s=$root/skills/orchestrate/scripts/$s
+  [[ -f "$s" ]] || { echo "dev/coverage.sh: no such suite: $s" >&2; exit 2; }
+  # Absolute, since the run starts from the repo root.
+  suites+=("$(cd "$(dirname "$s")" && pwd)/$(basename "$s")")
+done
+[[ -z "$shard" || ( -z "$floor$changed" && ${#suites[@]} -eq 0 ) ]] ||
+  { echo "dev/coverage.sh: --shard picks the suites itself; drop --check, --changed and the suite files" >&2; exit 2; }
 [[ -z "$resultset" || -n "$floor" ]] || { echo "dev/coverage.sh: --resultset needs --check" >&2; exit 2; }
 [[ -z "$floor" || ${#suites[@]} -eq 0 ]] || { echo "dev/coverage.sh: --check runs no suites; drop the suite files" >&2; exit 2; }
 [[ -z "$changed" || -z "$floor" ]] || { echo "dev/coverage.sh: --changed and --check do not go together" >&2; exit 2; }
@@ -217,6 +251,97 @@ check_floors() {
 }
 if [[ -n "$floor" ]]; then check_floors && exit 0 || exit $?; fi
 
+# report: the table for coverage/.resultset.json (run from $root), on stdout and in the step
+# summary, with the $subset note when it is set.
+subset=""
+report() {
+  ext=$(mktemp)
+  credit_extents coverage/.resultset.json "$ext"
+  # Columns: credited %, credited lines/relevant lines, raw %, script; the total row last.
+  table=$(jq -r --arg root "$root/" --slurpfile ext "$ext" "$ROWS"'
+    def p: if . == null then "  n/a" else tostring + "%" end;
+    rows($root; $ext[0]) | (map(.rel) | add) as $r | (map(.hit) | add) as $h | (map(.raw) | add) as $w
+    | (sort_by(if .rel == 0 then 1 else .hit / .rel end)[]
+       | "\(pct | p)\t\(.hit)/\(.rel)\traw \(rawpct | p)\t\(.f)"),
+      "total\t\($h)/\($r)\t\(($h * 1000 / $r | floor) / 10)%\traw \(($w * 1000 / $r | floor) / 10)%"' coverage/.resultset.json)
+  printf '%s\n' "$table"
+  [[ -z "$subset" ]] || echo "$subset"
+  {
+    echo "### Line coverage (bashcov)"
+    echo
+    [[ -z "$subset" ]] || { echo "_${subset}_"; echo; }
+    awk -F'\t' '$1 == "total" { sub(/^raw /, "", $4); print "**Total: " $3 " credited, " $4 " raw** (" $2 " lines)\n\n| Credited | Lines | Raw | Script |\n|---:|---:|---:|---|"; exit }' <<<"$table"
+    awk -F'\t' '$1 != "total" { sub(/^raw /, "", $3); print "| " $1 " | " $2 " | " $3 " | `" $4 "` |" }' <<<"$table"
+  } | summary
+}
+
+# The suites of this tree, repo-relative, one per line.
+all_suites() { local s; for s in "$root"/skills/orchestrate/scripts/*.bats; do [[ ! -f "$s" ]] || echo "${s#"$root"/}"; done; }
+
+# --weights: suite<TAB>seconds from dev/test.sh's per-suite lines ("ok   12s   8 tests  path").
+if [[ "$mode" == weights ]]; then
+  for l in "${args[@]}"; do [[ -f "$l" ]] || { echo "dev/coverage.sh: no such log: $l" >&2; exit 2; }; done
+  echo "# suite<TAB>seconds under bashcov at -j 1 (dev/coverage.sh --weights); a suite with no row weighs its @test count"
+  awk '($1 == "ok" || $1 == "FAIL") && $2 ~ /^[0-9]+s$/ && $4 == "tests" && $5 ~ /\.bats$/ {
+      s = $5; sub(".*/", "", s); w[s] = $2 + 0 }
+    END { for (s in w) print s "\t" w[s] }' "${args[@]}" | sort
+  exit 0
+fi
+
+# --merge: one resultset from the shards', line counts added up, keyed under this root.
+if [[ "$mode" == merge ]]; then
+  rsets=() ran="" whole=""
+  for d in "${args[@]}"; do
+    if [[ ! -f "$d/.resultset.json" ]]; then echo "dev/coverage.sh: --merge: no resultset in $d; skipped" >&2; continue; fi
+    rsets+=("$d/.resultset.json")
+    if [[ -f "$d/subset.txt" ]]; then ran+=$(cat "$d/subset.txt")$'\n'; else whole=yes; fi
+  done
+  ((${#rsets[@]})) || { echo "dev/coverage.sh: --merge: no resultset in any DIR" >&2; exit 4; }
+  merged=$(mktemp)
+  jq -n --arg root "$root/" "$ROWS"'
+    reduce (inputs | .[] | .coverage | to_entries[]) as $e ({};
+      ([$e.key | path($root)] | .[0]) as $r | (if $r == null then $e.key else $root + $r end) as $k
+      | ($e.value | if type == "object" then .lines else . end) as $l
+      | (.[$k] // []) as $a
+      | .[$k] = [range(0; [($a | length), ($l | length)] | max) as $i
+          | if $a[$i] == null and $l[$i] == null then null else ($a[$i] // 0) + ($l[$i] // 0) end])
+    | {"dev/coverage.sh --merge": {coverage: map_values({lines: .}), timestamp: (now | floor)}}' "${rsets[@]}" >"$merged" ||
+    { rm -f "$merged"; echo "dev/coverage.sh: --merge: cannot read the resultsets as bashcov resultsets" >&2; exit 4; }
+  logs=()
+  for d in "${args[@]}"; do [[ ! -f "$d/test.log" ]] || logs+=("$(cd "$d" && pwd)/test.log"); done
+  cd "$root"
+  rm -rf coverage
+  mkdir -p coverage
+  mv "$merged" coverage/.resultset.json
+  if ((${#logs[@]})); then cat "${logs[@]}" >coverage/test.log; fi
+  missing=""
+  [[ -n "$whole" ]] || missing=$(all_suites | grep -vxF -f <(printf '%s' "$ran" | grep . | sort -u) || true)
+  if [[ -n "$missing" ]]; then
+    printf '%s' "$ran" | grep . | sort -u >coverage/subset.txt
+    subset="subset: $(grep -c . coverage/subset.txt || true) of $(all_suites | grep -c . || true) suites ran (coverage/subset.txt); a script another suite exercises reads low"
+    printf '%s\n' "$missing" | sed 's/^/dev\/coverage.sh: --merge: no shard ran /' >&2
+  fi
+  echo "dev/coverage.sh: merged ${#rsets[@]} resultset(s) into coverage/.resultset.json" >&2
+  report
+  exit 0
+fi
+
+# --shard K/N: deal the suites, heaviest first, to the lightest shard; run shard K's.
+if [[ -n "$shard" ]]; then
+  k=${shard%/*} n=${shard#*/} wfile=$root/dev/coverage-weights.tsv
+  while IFS= read -r s; do suites+=("$root/$s"); done < <(
+    all_suites | while IFS= read -r s; do
+      w=""
+      [[ ! -f "$wfile" ]] || w=$(awk -F'\t' -v s="${s##*/}" '$1 == s && $2 ~ /^[0-9]+(\.[0-9]+)?$/ { w = $2 } END { print w }' "$wfile")
+      [[ -n "$w" ]] || w=$(grep -c '^@test ' "$root/$s" || true)
+      printf '%s\t%s\n' "$w" "$s"
+    done | sort -t $'\t' -k1,1gr -k2,2 | awk -F'\t' -v k="$k" -v n="$n" '
+      { b = 1; for (i = 2; i <= n; i++) if (load[i] < load[b]) b = i
+        load[b] += $1; if (b == k) print $2 }')
+  echo "dev/coverage.sh: --shard $shard: ${#suites[@]} suite(s)" >&2
+  ((${#suites[@]})) || { echo "dev/coverage.sh: shard $shard has no suite; nothing to run"; exit 0; }
+fi
+
 # --changed: the scripts that differ from the merge base with $base, and the suites that name them.
 if [[ -n "$changed" ]]; then
   mb=$(git -C "$root" merge-base "$base" HEAD 2>/dev/null) ||
@@ -317,24 +442,7 @@ fi
 [[ -z "$changed" ]] || printf '%s\n' "$only" >coverage/changed.txt
 ((rc == 0)) || echo "dev/coverage.sh: a suite failed under coverage (see coverage/test.log)" >&2
 
-ext=$(mktemp)
-credit_extents coverage/.resultset.json "$ext"
-# Columns: credited %, credited lines/relevant lines, raw %, script; the total row last.
-table=$(jq -r --arg root "$root/" --slurpfile ext "$ext" "$ROWS"'
-  def p: if . == null then "  n/a" else tostring + "%" end;
-  rows($root; $ext[0]) | (map(.rel) | add) as $r | (map(.hit) | add) as $h | (map(.raw) | add) as $w
-  | (sort_by(if .rel == 0 then 1 else .hit / .rel end)[]
-     | "\(pct | p)\t\(.hit)/\(.rel)\traw \(rawpct | p)\t\(.f)"),
-    "total\t\($h)/\($r)\t\(($h * 1000 / $r | floor) / 10)%\traw \(($w * 1000 / $r | floor) / 10)%"' coverage/.resultset.json)
-printf '%s\n' "$table"
-[[ -z "$subset" ]] || echo "$subset"
-{
-  echo "### Line coverage (bashcov)"
-  echo
-  [[ -z "$subset" ]] || { echo "_${subset}_"; echo; }
-  awk -F'\t' '$1 == "total" { sub(/^raw /, "", $4); print "**Total: " $3 " credited, " $4 " raw** (" $2 " lines)\n\n| Credited | Lines | Raw | Script |\n|---:|---:|---:|---|"; exit }' <<<"$table"
-  awk -F'\t' '$1 != "total" { sub(/^raw /, "", $3); print "| " $1 " | " $2 " | " $3 " | `" $4 "` |" }' <<<"$table"
-} | summary
+report
 ((rc == 0)) || exit 1
 [[ -n "$changed" ]] || exit 0
 # --changed: judge the changed scripts against the repo's floors.

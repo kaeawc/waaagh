@@ -23,7 +23,8 @@
 # Receipt (JSON, schema 1): key, command, env_signature, fingerprint_before, fingerprint_after,
 #   exit, result, log, excerpt, runner, verification, started_at, finished_at, finished_epoch.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 
@@ -32,7 +33,7 @@ case "${1:-}" in -h | --help) orch_usage; exit 0 ;; -*) echo "validate.sh: unkno
 cmd=${1:-}
 if [[ -n "$cmd" ]]; then shift; fi
 dir="" vcmd="" runner="" independent=no max_age=86400
-store=${ORCHESTRATE_VALIDATE_DIR:-${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}/validate}
+store=${ORCHESTRATE_VALIDATE_DIR:-$(orch_state_root)/validate}
 envargs=()
 while (($#)); do
   case "$1" in
