@@ -366,6 +366,20 @@ orch_worktree_root() {
   [[ -n "$r" && -d "$r" ]] || return 1
   (cd "$r" && pwd -P)
 }
+# proc_cwds DIR...: one "PID<TAB>cwd" line per visible process whose working directory is a DIR or
+# below one (spectra owner --under, #331), resolved; nothing when none is. Returns 1 when spectra
+# is missing, too old for --under, or fails: callers then remove nothing. Spectra's exit 4 (none
+# visible, but other users' processes could not be read) counts as none: only this user's
+# processes work in this user's worktrees, as with the lsof listing this replaced.
+proc_cwds() {
+  local out rc=0 d dirs=()
+  for d in "$@"; do [[ ! -d "$d" ]] || dirs+=("$d"); done   # a missing directory has nobody in it
+  ((${#dirs[@]})) || return 0
+  orch_spectra_require owner 2>/dev/null || return 1
+  out=$(orch_spectra owner --under --json "${dirs[@]}" 2>/dev/null) || rc=$?
+  case "$rc" in 0 | 3 | 4) ;; *) return 1 ;; esac
+  jq -r '(.holders | arrays) | .[] | "\(.pid)\t\(.cwd)"' <<<"$out" 2>/dev/null || return 1
+}
 # orch_spectra ARGS...: run spectra with ARGS (after orch_spectra_require). Every spectra call in
 # the scripts goes through here, so tests stub one place (spectra-lib.bats lints it).
 orch_spectra() { "$(orch_spectra_bin)" "$@"; }

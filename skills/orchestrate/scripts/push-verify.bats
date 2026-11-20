@@ -3,6 +3,7 @@
 
 setup() {
   load test_helper
+  stub_spectra   # wt-cleanup and shared-build ask spectra who works in a tree (#331)
   hermetic_git
   SCRIPTS="$BATS_TEST_DIRNAME"
   export PUSH_VERIFY_SLEEP=0

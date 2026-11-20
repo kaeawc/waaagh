@@ -19,9 +19,9 @@
 #   unless a process is working inside it. Shared per-commit builds (#215, shared-build.sh) that are
 #   partial or past the keep / size cap are build rows too. Skipped when processes cannot be read.
 # Output (TSV): verdict  path  reason      verdict: remove | removed | keep | build | budget
-# Removal is `git worktree remove <path>` (no --force); a refusal is reported as keep. Process
-# working directories are read with lsof, else /proc (proc_cwds in _slots.sh), and read again
-# right before each removal; when neither can be read nothing is removed. A session that must keep
+# Removal is `git worktree remove <path>` (no --force); a refusal is reported as keep. Which
+# processes work inside a tree comes from spectra (`spectra owner --under`, proc_cwds in _lib.sh,
+# #331), asked again right before each removal; when spectra cannot answer nothing is removed. A session that must keep
 # its worktree whatever happens locks it: `git worktree lock --reason "<session>" <path>`.
 # Exit: 0 | 3 over the worktree budget | 2 usage
 set -euo pipefail
@@ -54,16 +54,18 @@ done
 ((${#protect[@]})) || protect=(main master develop 'release/*' 'release-*')
 now=${ORCHESTRATE_NOW:-$(date +%s)}
 
+# shellcheck source=_lib.sh
+source "$here/_lib.sh"
 if [[ "$pr_closed" == yes ]]; then
-  # shellcheck source=_lib.sh
-  source "$here/_lib.sh"
   if declare -F orch_gh_priority >/dev/null; then orch_gh_priority normal; fi
   [[ -n "$repo" ]] || repo=$(cd "$repo_dir" && orch_repo) || { echo "wt-cleanup.sh: cannot tell the repository; pass --repo" >&2; exit 2; }
 fi
 
-# Working directories of every process we can see, resolved.
+# Working directories of the processes inside any worktree or lane build dir, resolved.
+wt_dirs=()
+while IFS= read -r p; do wt_dirs+=("$p"); done < <(git -C "$repo_dir" worktree list --porcelain | awk '/^worktree / { print substr($0, 10) }')
 cwds="" can_check=yes
-cwds=$(proc_cwds | cut -f2-) || can_check=no
+cwds=$(proc_cwds "${wt_dirs[@]}" "$(build_root)" | cut -f2-) || can_check=no
 # inside LIST DIR: some process's cwd is DIR or below it.
 inside() { printf '%s\n' "$1" | awk -v d="$2" '$0 == d || index($0, d "/") == 1 { f = 1 } END { exit !f }'; }
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo "$now"; }
@@ -92,7 +94,7 @@ while IFS=$'\t' read -r path branch locked; do
   [[ -z "$idx" || ! -e "$idx" ]] || { t=$(mtime "$idx"); ((t > touched)) && touched=$t; }
   age=$(((now - touched) / 3600))
   [[ -z "$(GIT_OPTIONAL_LOCKS=0 git -C "$real" status --porcelain --untracked-files=all 2>/dev/null)" ]] || { keep "uncommitted or untracked changes"; continue; }
-  [[ "$can_check" == yes ]] || { keep "cannot check processes (no lsof or /proc)"; continue; }
+  [[ "$can_check" == yes ]] || { keep "cannot check processes: spectra owner --under failed"; continue; }
   if inside "$cwds" "$real"; then keep "a process is working inside it"; continue; fi
   ((age >= hours)) || { keep "touched ${age}h ago (< ${hours}h)"; continue; }
   [[ -n "$(git -C "$real" branch -r --contains HEAD 2>/dev/null)" ]] || { keep "HEAD is not on any remote branch (unpushed work)"; continue; }
@@ -118,7 +120,7 @@ while IFS=$'\t' read -r path branch locked; do
   removable=$((removable + 1))
   if [[ "$apply" == yes ]]; then
     # Read again right before removing: a session may have entered it since the first listing.
-    fresh=$(proc_cwds | cut -f2-) || { keep "cannot check processes (no lsof or /proc)"; continue; }
+    fresh=$(proc_cwds "$real" | cut -f2-) || { keep "cannot check processes: spectra owner --under failed"; continue; }
     if inside "$fresh" "$real"; then keep "a process is working inside it"; continue; fi
     if out=$(git -C "$repo_dir" worktree remove "$real" 2>&1); then
       printf 'removed\t%s\tclean, idle %sh, pushed\n' "$path" "$age"
@@ -141,7 +143,7 @@ done < <(git -C "$repo_dir" worktree list --porcelain | awk '
 if [[ "$can_check" == yes ]]; then
   if [[ "$apply" != yes ]]; then
     build_dirs_sweep no "$cwds"
-  elif fresh=$(proc_cwds | cut -f2-); then
+  elif fresh=$(proc_cwds "$(build_root)" | cut -f2-); then
     build_dirs_sweep yes "$fresh"
   fi
 fi

@@ -82,7 +82,8 @@ export SPECTRA="${BATS_TEST_TMPDIR:-${BATS_FILE_TMPDIR:-/nonexistent}}/bin/spect
 # Nor the real lane worktrees: the checkout running the tests may have a .claude/worktrees of its
 # own, CI's does not. A suite that wants a worktree root sets ORCHESTRATE_WORKTREE_ROOT or unsets it.
 export ORCHESTRATE_WORKTREE_ROOT="${BATS_TEST_TMPDIR:-${BATS_FILE_TMPDIR:-/nonexistent}}/no-worktree-root"
-# stub_spectra: that spectra. `capabilities --json` declares load, orphans, jvm and idle; `jvm --json` prints
+# stub_spectra: that spectra. `capabilities --json` declares load, orphans, jvm, idle and owner
+# (`owner --under` is described at its case below); `jvm --json` prints
 # $BATS_TEST_TMPDIR/spectra-jvm.json, else no JVMs; `idle --json` prints
 # $BATS_TEST_TMPDIR/spectra-idle.json (exit 3), else no idle holders. `load --json` prints
 # an idle host: SPECTRA_STUB_LOAD1 (default 0.5), SPECTRA_STUB_CPUS (8), SPECTRA_STUB_FREE_GB (32;
@@ -97,7 +98,7 @@ stub_spectra() {
 #!/usr/bin/env bash
 echo "$*" >>"$BATS_TEST_TMPDIR/spectra-calls"
 case "${1:-}" in
-  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"test","interfaces":[{"name":"load"},{"name":"orphans"},{"name":"jvm"},{"name":"idle"}]}' ;;
+  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"test","interfaces":[{"name":"load"},{"name":"orphans"},{"name":"jvm"},{"name":"idle"},{"name":"owner"}]}' ;;
   help) printf 'Subcommands:\n  load  x\n  orphans  x\n' ;;
   load)
     [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: load failed" >&2; exit 1; }
@@ -105,6 +106,27 @@ case "${1:-}" in
     jq -n --argjson l "${SPECTRA_STUB_LOAD1:-0.5}" --argjson c "${SPECTRA_STUB_CPUS:-8}" --argjson g "${SPECTRA_STUB_FREE_GB:-32}" \
       --argjson o "$over" '{verdict: "admit", load1: $l, cpus: $c, available_gb: $g,
         cause: {kind: "none", detail: "host is idle"}, top_cpu: [], top_rss: [], families: []} + $o' ;;
+  owner)
+    # owner --under --json DIR...: the processes whose cwd is a DIR or below one. From
+    # $BATS_TEST_TMPDIR/spectra-cwds ("PID<TAB>cwd" lines) when it exists, plus spectra-late-cwds
+    # from call number spectra-late-at on; else this machine's own processes (lsof, else /proc), so
+    # a test that parks a real process in a directory sees it. SPECTRA_STUB_FAIL=1: exit 1.
+    [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: owner failed" >&2; exit 1; }
+    [ "${2:-}" = --under ] && [ "${3:-}" = --json ] || { echo "spectra stub: owner needs --under --json" >&2; exit 2; }
+    shift 3
+    t=$BATS_TEST_TMPDIR n=$(( $(cat "$t/spectra-owner-n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$t/spectra-owner-n"
+    if [ -f "$t/spectra-cwds" ] || [ -f "$t/spectra-late-cwds" ]; then
+      { cat "$t/spectra-cwds" 2>/dev/null || true
+        if [ -f "$t/spectra-late-cwds" ] && [ "$n" -ge "$(cat "$t/spectra-late-at" 2>/dev/null || echo 1)" ]; then cat "$t/spectra-late-cwds"; fi; }
+    elif command -v lsof >/dev/null 2>&1; then
+      lsof -a -d cwd -Fpn 2>/dev/null | awk '/^p/ { p = substr($0, 2) } /^n/ { print p "\t" substr($0, 2) }' || true
+    else
+      for p in /proc/[0-9]*; do d=$(readlink "$p/cwd" 2>/dev/null) && printf '%s\t%s\n' "${p##*/}" "$d"; done
+    fi | DIRS="$(for d in "$@"; do (cd "$d" 2>/dev/null && pwd -P) || printf '%s\n' "$d"; done)" awk -F'\t' 'BEGIN { n = split(ENVIRON["DIRS"], D, "\n") }
+      { for (i = 1; i <= n; i++) if (D[i] != "" && ($2 == D[i] || index($2, D[i] "/") == 1)) { print; break } }' |
+      jq -Rn '[inputs | split("\t") | {pid: (.[0] | tonumber), cwd: .[1]}] | {holders: .}' >"$t/spectra-owner.out"
+    cat "$t/spectra-owner.out"
+    [ "$(jq '.holders | length' "$t/spectra-owner.out")" -gt 0 ] || exit 3 ;;
   idle) if [ -f "$BATS_TEST_TMPDIR/spectra-idle.json" ]; then cat "$BATS_TEST_TMPDIR/spectra-idle.json"; exit 3; fi
     echo '{"result":{"holders":[]}}' ;;
   jvm) if [ -f "$BATS_TEST_TMPDIR/spectra-jvm.json" ]; then cat "$BATS_TEST_TMPDIR/spectra-jvm.json"; else echo '[]'; fi ;;
