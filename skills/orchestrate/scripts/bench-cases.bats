@@ -2,10 +2,21 @@
 # bench.sh CASE... (#188): only the picked cases run, plus the earlier cases each declares it needs,
 # and every picked row matches the full run's row for that case.
 
+# The full run, every case alone and the picked-cases run all start here at once (#112): run one
+# after another they made this the longest suite. The tests compare their saved outputs. Every case
+# named in bench.sh is run alone; the first test checks the full run lists the same ones.
 setup_file() {
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
-  "$SCRIPTS/bench.sh" >"$BATS_FILE_TMPDIR/full.tsv"
+  local d="$BATS_FILE_TMPDIR/alone" c
+  mkdir -p "$d"
+  "$SCRIPTS/bench.sh" >"$BATS_FILE_TMPDIR/full.tsv" &
+  # All at once (each run has its own work dir): a case that reads an earlier case's state without
+  # declaring the need shows up as a different row.
+  for c in $(awk '/^bench_case / { print $2 }' "$SCRIPTS/bench.sh"); do "$SCRIPTS/bench.sh" "$c" >"$d/$c" & done
+  { "$SCRIPTS/bench.sh" triage-tick-50-open pr-ready-rest-100-ready excerpt-1mb-line >"$BATS_FILE_TMPDIR/picked.out" 2>&1
+    echo $? >"$BATS_FILE_TMPDIR/picked.rc"; } &
+  wait
 }
 
 setup() {
@@ -15,13 +26,11 @@ setup() {
 }
 
 @test "each case run alone prints the header and the full run's row for it" {
-  # All at once (each run has its own work dir): a case that reads an earlier case's state without
-  # declaring the need shows up here as a different row.
-  d="$BATS_TEST_TMPDIR/alone"; mkdir -p "$d"
+  # Each case ran alone in setup_file, at the same time as the others and the full run.
+  d="$BATS_FILE_TMPDIR/alone"
   cases=$(awk 'NR > 1 { print $1 }' "$FULL")
   [ "$(printf '%s\n' "$cases" | wc -l | tr -d ' ')" -ge 12 ]
-  for c in $cases; do "$SCRIPTS/bench.sh" "$c" >"$d/$c" & done
-  wait
+  [ "$(printf '%s\n' "$cases" | sort)" = "$(ls "$d" | sort)" ] || { echo "full run cases differ from bench.sh's bench_case list"; false; }
   bad=""
   for c in $cases; do
     [ "$(cat "$d/$c")" = "$(sed -n 1p "$FULL"; awk -F'\t' -v c="$c" '$1 == c' "$FULL")" ] || bad+=" $c"
@@ -30,7 +39,8 @@ setup() {
 }
 
 @test "picked cases print in the full run's order, and a need runs without printing its row" {
-  run "$SCRIPTS/bench.sh" triage-tick-50-open pr-ready-rest-100-ready excerpt-1mb-line
+  # Run in setup_file, beside the full run.
+  status=$(cat "$BATS_FILE_TMPDIR/picked.rc") output=$(cat "$BATS_FILE_TMPDIR/picked.out")
   [ "$status" -eq 0 ]
   [ "$output" = "$(sed -n 1p "$FULL"; awk -F'\t' '$1 ~ /^(excerpt-1mb-line|pr-ready-rest-100-ready|triage-tick-50-open)$/' "$FULL")" ]
   # pr-ready-rest-100-ready reads the refusal pr-ready-rest-20-ready remembered: without that pass
