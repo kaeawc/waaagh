@@ -38,7 +38,9 @@ fully specified work and on Opus for judgment work; the orchestrator chose the m
    project cache) and runs Gradle without a daemon. Never point a build at a shared path such as
    `/tmp/DerivedData`, and never run `./gradlew --stop` (it stops every lane's builds). A Gradle
    build that fails in seconds with "problem occurred starting process" hit a stale daemon: re-run
-   it once through the gate before reading your code.
+   it once through the gate before reading your code. A failed Gradle gate names any daemon whose
+   JDK is gone (`heavy-build-slot: ... daemon <pid> runs on a JDK that is gone`): report that PID;
+   do not stop a daemon you did not start.
 
 Run every gate inline and wait for it; never background one. Record the PIDs of every process you
 start (suites, servers) and kill exactly those before you report. Commit and push nothing: the

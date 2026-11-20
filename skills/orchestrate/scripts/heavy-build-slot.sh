@@ -18,10 +18,17 @@
 # unless GRADLE_OPTS already sets org.gradle.daemon or HEAVY_BUILD_GRADLE_DAEMON=1. A daemon outlives
 # the command that started it and keeps that command's sandbox and JDK path; every later build from
 # any lane reconnects to it.
+# A Gradle command that fails (#335): spectra is asked (`spectra jvm --json`, required) for a
+# Gradle or Kotlin daemon whose JDK is gone (java_home_missing or executable_deleted; the Kotlin
+# daemon is reused even by a Gradle run with no daemon of its own), and each is named on stderr
+# with its PID and missing java.home: such a daemon fails every build that reconnects to it, so the
+# failure is likely the daemon, not the change. Nothing is stopped here.
 # Exit: CMD's exit code | 75 not started within --wait | 2 usage
 set -euo pipefail
 # This script's directory with no subshell or dirname process: every script start pays for it (#112).
 case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
+# shellcheck source=_lib.sh
+source "$here/_lib.sh"
 # shellcheck source=_slots.sh
 source "$here/_slots.sh"
 # shellcheck source=_build_dirs.sh
@@ -78,5 +85,17 @@ if [[ -n "$env_file" && -f "$env_file" ]]; then
   bash -c 'source "$1"; shift; "$@"' gate-env "$env_file" "${BUILD_ARGV[@]}" || rc=$?
 else
   "${BUILD_ARGV[@]}" || rc=$?
+fi
+# stale_daemons: the Gradle and Kotlin daemons whose JDK spectra says is gone, one line each.
+stale_daemons() {
+  orch_spectra_require jvm 2>/dev/null || { echo "heavy-build-slot: spectra unavailable; could not check for a Gradle or Kotlin daemon on a missing JDK" >&2; return 0; }
+  orch_spectra jvm --json 2>/dev/null | jq -r '.[]? | select((.main_class // "") | test("(GradleDaemon|KotlinCompileDaemon)$"))
+    | select(.java_home_missing == true or .executable_deleted == true)
+    | "heavy-build-slot: \(if (.main_class | test("Kotlin")) then "Kotlin" else "Gradle" end) daemon \(.pid) runs on a JDK that is gone (java.home \(.java_home // "?")\(if .executable_deleted then ", executable deleted" else "" end)): builds that reconnect to it fail, so this failure is likely the daemon. Let it idle out or stop PID \(.pid); never gradle --stop" ' >&2 2>/dev/null || true
+}
+if ((rc != 0)); then
+  for w in "$@"; do
+    case "$(basename -- "${w%% *}")" in gradle | gradlew) slot_release "$slot" $$; stale_daemons; break ;; esac
+  done
 fi
 exit "$rc"

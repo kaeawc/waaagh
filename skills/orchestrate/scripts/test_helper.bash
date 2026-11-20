@@ -82,7 +82,8 @@ export SPECTRA="${BATS_TEST_TMPDIR:-${BATS_FILE_TMPDIR:-/nonexistent}}/bin/spect
 # Nor the real lane worktrees: the checkout running the tests may have a .claude/worktrees of its
 # own, CI's does not. A suite that wants a worktree root sets ORCHESTRATE_WORKTREE_ROOT or unsets it.
 export ORCHESTRATE_WORKTREE_ROOT="${BATS_TEST_TMPDIR:-${BATS_FILE_TMPDIR:-/nonexistent}}/no-worktree-root"
-# stub_spectra: that spectra. `capabilities --json` declares load and orphans. `load --json` prints
+# stub_spectra: that spectra. `capabilities --json` declares load, orphans and jvm; `jvm --json` prints
+# $BATS_TEST_TMPDIR/spectra-jvm.json, else no JVMs. `load --json` prints
 # an idle host: SPECTRA_STUB_LOAD1 (default 0.5), SPECTRA_STUB_CPUS (8), SPECTRA_STUB_FREE_GB (32;
 # "null" when memory could not be read), read at each call, with $BATS_TEST_TMPDIR/spectra-load.json
 # (cause, top_cpu, top_rss, families, ...) merged over it when it exists. `orphans --json` prints
@@ -95,7 +96,7 @@ stub_spectra() {
 #!/usr/bin/env bash
 echo "$*" >>"$BATS_TEST_TMPDIR/spectra-calls"
 case "${1:-}" in
-  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"test","interfaces":[{"name":"load"},{"name":"orphans"}]}' ;;
+  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"test","interfaces":[{"name":"load"},{"name":"orphans"},{"name":"jvm"}]}' ;;
   help) printf 'Subcommands:\n  load  x\n  orphans  x\n' ;;
   load)
     [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: load failed" >&2; exit 1; }
@@ -103,6 +104,7 @@ case "${1:-}" in
     jq -n --argjson l "${SPECTRA_STUB_LOAD1:-0.5}" --argjson c "${SPECTRA_STUB_CPUS:-8}" --argjson g "${SPECTRA_STUB_FREE_GB:-32}" \
       --argjson o "$over" '{verdict: "admit", load1: $l, cpus: $c, available_gb: $g,
         cause: {kind: "none", detail: "host is idle"}, top_cpu: [], top_rss: [], families: []} + $o' ;;
+  jvm) if [ -f "$BATS_TEST_TMPDIR/spectra-jvm.json" ]; then cat "$BATS_TEST_TMPDIR/spectra-jvm.json"; else echo '[]'; fi ;;
   orphans)
     [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: orphans failed" >&2; exit 1; }
     if [ -f "$BATS_TEST_TMPDIR/spectra-orphans.json" ]; then cat "$BATS_TEST_TMPDIR/spectra-orphans.json"; exit 3; fi

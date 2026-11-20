@@ -170,6 +170,35 @@ teardown() {
   [ "$output" != 999999 ]
 }
 
+@test "a failed Gradle build names a Gradle or Kotlin daemon whose JDK is gone (#335)" {
+  stub_spectra
+  H="$SCRIPTS/heavy-build-slot.sh"
+  mkdir -p "$BATS_TEST_TMPDIR/proj"
+  printf '#!/bin/sh\necho "A problem occurred starting process command /x/bin/jlink" >&2\nexit 1\n' >"$BATS_TEST_TMPDIR/proj/gradlew"
+  chmod +x "$BATS_TEST_TMPDIR/proj/gradlew"
+  jq -n '[{pid: 4242, main_class: "org.gradle.launcher.daemon.bootstrap.GradleDaemon", java_home: "/opt/homebrew/Cellar/openjdk@21/21.0.5/libexec", java_home_missing: true},
+          {pid: 4343, main_class: "org.jetbrains.kotlin.daemon.KotlinCompileDaemon", java_home: "/x", executable_deleted: true},
+          {pid: 4444, main_class: "org.gradle.launcher.daemon.bootstrap.GradleDaemon", java_home: "/ok"},
+          {pid: 4545, main_class: "com.example.App", java_home: "/gone", java_home_missing: true}]' >"$BATS_TEST_TMPDIR/spectra-jvm.json"
+  run "$H" -- "$BATS_TEST_TMPDIR/proj/gradlew" assembleDebug
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Gradle daemon 4242 runs on a JDK that is gone (java.home /opt/homebrew/Cellar/openjdk@21/21.0.5/libexec)"*"stop PID 4242; never gradle --stop"* ]]
+  [[ "$output" == *"Kotlin daemon 4343 runs on a JDK that is gone (java.home /x, executable deleted)"* ]]
+  [[ "$output" != *4444* && "$output" != *4545* ]]
+  [ "$(holders heavy)" -eq 0 ]
+  # Only after a failed Gradle command: a passing one, or a failing non-Gradle one, asks nothing.
+  : >"$BATS_TEST_TMPDIR/spectra-calls"
+  run "$H" -- bash -c 'exit 1'
+  [ "$status" -eq 1 ]
+  run "$H" -- true ./gradlew
+  [ "$status" -eq 0 ]
+  [ ! -s "$BATS_TEST_TMPDIR/spectra-calls" ]
+  # No spectra: the build's own exit code still wins, with one line saying the check could not run.
+  SPECTRA="$BATS_TEST_TMPDIR/none" run "$H" -- "$BATS_TEST_TMPDIR/proj/gradlew"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"spectra unavailable; could not check for a Gradle or Kotlin daemon on a missing JDK"* ]]
+}
+
 @test "the per-repo gate environment is sourced before the command" {
   printf 'export BUN_JOBS=2 TEST_TIMEOUT=60\n' >"$BATS_TEST_TMPDIR/gate-env.sh"
   run gate --env-file "$BATS_TEST_TMPDIR/gate-env.sh" -- bash -c 'echo "$BUN_JOBS/$TEST_TIMEOUT"'
