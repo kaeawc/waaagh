@@ -14,7 +14,7 @@ setup() {
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export ORCHESTRATE_NOW=1793880000 ORCHESTRATE_AUTHOR=me
   unset ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_HOST_LOAD ORCHESTRATE_GH_API
-  export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
+  stub_spectra   # an idle host: host-load.sh reads it through spectra (#330)
   MEMO="$ORCHESTRATE_STATE_DIR/gh-no-graphql"
   # GraphQL side: $FX/prs.json holds the open PRs as thread-sweep's pull request nodes, $FX/pulls.json
   # their REST rows (`_closing`: the issues GraphQL says they close), $FX/issues.json the REST issues.

@@ -261,7 +261,7 @@ R
 # --- triage-tick.sh snapshot: rounds and review-loop ---------------------------------------------
 tick_fixture() {
   stub_gh_routes
-  export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
+  stub_spectra   # an idle host: host-load.sh reads it through spectra (#330)
   unset ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_HOST_LOAD
   gh_route 'api repos/o/r/actions/runs?*' runs.json
   gh_route 'pr list*' prs.json

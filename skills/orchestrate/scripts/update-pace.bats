@@ -9,7 +9,8 @@ setup() {
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   export FX ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state" ORCHESTRATE_SLOT_DIR="$BATS_TEST_TMPDIR/slots"
   export ORCHESTRATE_NOW=1790510400 PATH="$BATS_TEST_TMPDIR/bin:$PATH"
-  export ORCHESTRATE_HOST_LOAD1=1 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32000
+  stub_spectra   # host-load.sh reads the host through spectra (#330): load 1 on 8 CPUs, 31.2 GB free
+  export SPECTRA_STUB_LOAD1=1 SPECTRA_STUB_FREE_GB=31.2
   unset ORCHESTRATE_UPDATE_CAP ORCHESTRATE_UPDATE_GAP ORCHESTRATE_UPDATE_HOST_GATE ORCHESTRATE_UPDATE_HOST_ARGS
   # PUT .../pulls/N/update-branch: $FX/fail-N fails it, $FX/current-N answers "no new commits".
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
@@ -93,10 +94,10 @@ calls() { if [ -f "$FX/calls" ]; then grep -c update-branch "$FX/calls" || true;
   export ORCHESTRATE_UPDATE_HOST_GATE=1
   run up gate
   [ "$output" = go ]
-  ORCHESTRATE_HOST_LOAD1=40 run up gate
+  SPECTRA_STUB_LOAD1=40 run up gate
   [ "$status" -eq 3 ]
   [ "$output" = "wait host: host-load.sh says HOLD" ]
-  ORCHESTRATE_HOST_FREE_MB=1000 run up run --pr 1
+  SPECTRA_STUB_FREE_GB=0.9 run up run --pr 1
   [ "$status" -eq 3 ]
   [ "$output" = "deferred 1 host: host-load.sh says BACKOFF" ]
   [ "$(calls)" -eq 0 ]

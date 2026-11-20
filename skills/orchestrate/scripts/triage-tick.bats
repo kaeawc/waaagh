@@ -10,8 +10,7 @@ setup() {
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export ORCHESTRATE_NOW=1790510400   # 2026-09-27T12:00:00Z
   unset ORCHESTRATE_DEVICE_SLOTS ORCHESTRATE_CLASSIFIER_CMD ORCHESTRATE_HOST_LOAD
-  # host-load.sh reads these instead of the machine: an idle host that admits lanes
-  export ORCHESTRATE_HOST_LOAD1=0.50 ORCHESTRATE_HOST_CPUS=8 ORCHESTRATE_HOST_FREE_MB=32768
+  stub_spectra   # an idle host: host-load.sh reads it through spectra (#330)
   ST="$ORCHESTRATE_STATE_DIR/o__r"; mkdir -p "$ST"
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -106,7 +105,7 @@ snap() { "$SCRIPTS/triage-tick.sh" snapshot --repo o/r --branch main "$@"; }
   [ "$(snap_line cron)" = "cron none" ]
   required_snapshot_lines
   [ "$(snap_line threads)" = "threads unresolved=0 answered=0 resolve-now=- repair=-" ]
-  [[ "$(snap_line host)" == "host ADMIT cause="*" free_gb=32.0 load=0.50 limit=12.00" ]]
+  [[ "$(snap_line host)" == "host ADMIT cause="*" free_gb=32.0 load=0.5 limit=12.00" ]]
 }
 
 @test "the dispatch queue skips issues in an open PR, in an active lane, or excluded" {
@@ -298,7 +297,7 @@ host_stub() {
 
 @test "the real host-load.sh over a loaded host holds dispatch (#114)" {
   echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
-  ORCHESTRATE_HOST_LOAD1=99 run snap
+  SPECTRA_STUB_LOAD1=99 run snap
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "verdict act host-hold" ]
   [[ "$(snap_line host)" == "host HOLD cause="*" free_gb=32.0 load=99 limit=12.00" ]]
