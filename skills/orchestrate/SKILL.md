@@ -504,9 +504,17 @@ against its PR's own changes.
 Many lanes on one machine stack their gates: load climbs past what the host can run, gates hit
 their wall caps, and lanes re-run them, which makes it worse.
 
+- **Spectra answers every host question** (required, github.com/kaeawc/spectra; #329). It
+  observes the machine: load and its cause, process attribution, leftover processes, booted
+  devices, toolchain faults; waaagh decides and coordinates. Scripts that need it call
+  `orch_spectra_require <capability>...` (`_lib.sh`) and stop with a named error when it is
+  missing; there is no fallback to waaagh's own inspection. The plugin registers `spectra-mcp`, so
+  you and the lanes also have its MCP tools (`process`, `memory`, `system`, `jvm`, `host_health`,
+  `alerts`). Do not add new `ps`, `lsof` or `vm_stat` parsing to waaagh: ask spectra, and file a
+  spectra issue when it cannot answer.
 - **Symptoms.** A load average well above the core count (`uptime`); hundreds of test, bundler,
-  Gradle or Xcode processes; gates timing out that pass alone. To see who is responsible, count
-  processes by working directory (`lsof -a -d cwd -Fn | sed -n 's/^n//p' | sort | uniq -c | sort -rn`).
+  Gradle or Xcode processes; gates timing out that pass alone. To see who is responsible:
+  `spectra load --root <worktree root>` (the cause, by worktree and process family).
 - **Every gate goes through `"$SCRIPTS/gate-slot.sh" -- <command>`**: a host-wide semaphore
   (default 3, `ORCHESTRATE_GATE_SLOTS`), bounded wait (exit 75 = no slot; report it, do not
   retry in a loop). It sources `<state dir>/gate-env.sh` first, so worker, timeout and retry caps

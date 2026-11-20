@@ -101,6 +101,7 @@ session-topology.bats	7
 shipped-blocked.bats	11
 slot-race.bats	7
 snapshot-readers.bats	8
+spectra-lib.bats	3
 stalled-threads.bats	7
 stated-defaults.bats	4
 stub-gh-args.bats	5

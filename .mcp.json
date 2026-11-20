@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "spectra": {
+      "command": "spectra-mcp",
+      "args": []
+    }
+  }
+}
