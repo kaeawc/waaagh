@@ -130,7 +130,11 @@ removed, so every build that reconnected to it inherited a broken process enviro
   toolchain at a JDK path that survives upgrades (not a versioned Homebrew Cellar path).
 - **A build that fails in seconds with "problem occurred starting process" for a JDK tool** is a
   stale daemon, not the change: re-run it once through the gate (or with `--no-daemon`) before
-  reading the code.
+  reading the code. When a Gradle command fails through `heavy-build-slot.sh`, it asks spectra
+  (`spectra jvm --json`) and names any Gradle or Kotlin daemon whose JDK is gone, with its PID and
+  missing `java.home` (#335). The Kotlin compile daemon is reused even by a Gradle run with no
+  daemon of its own, so this can still happen inside the gate. Outside the gate, run
+  `spectra jvm` yourself, or `spectra rules` for the `build-daemon-jdk-gone` finding.
 - **Never stop daemons to fix it.** `./gradlew --stop` stops every compatible daemon on the host,
   other lanes' running builds included; the lane-safety hook refuses it in a lane. An idle daemon
   times out by itself.
