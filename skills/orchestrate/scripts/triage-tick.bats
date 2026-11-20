@@ -324,6 +324,47 @@ host_stub() {
   [ "$(snap_line orphans)" = "orphans unknown" ]
 }
 
+@test "a slot held past the stall age by an idle holder is named; a young or busy one is not (#333)" {
+  echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
+  export ORCHESTRATE_SLOT_DIR="$BATS_TEST_TMPDIR/slots"
+  sleep 60 & idle_pid=$!; sleep 60 & busy_pid=$!
+  hold() { # POOL N PID LABEL MINUTES-AGO
+    local d="$ORCHESTRATE_SLOT_DIR/$1/slot-$2"
+    mkdir -p "$d"
+    printf '%s\n%s\n%s\n' "$3" "$(ps -o lstart= -p "$3" | sed 's/^ *//; s/ *$//; s/  */ /g')" "$4" >"$d/holder"
+    touch -t "$(date -v-"$5"M +%Y%m%d%H%M 2>/dev/null || date -d "-$5 min" +%Y%m%d%H%M)" "$d/holder"
+  }
+  hold heavy 1 "$idle_pid" lane-x 25
+  hold gate 1 "$busy_pid" lane-y 25
+  hold gate 2 "$$" lane-z 2
+  jq -n --argjson p "$idle_pid" '{result: {holders: [{pid: $p, command: "bash"}]}}' >"$BATS_TEST_TMPDIR/spectra-idle.json"
+  run snap
+  kill "$idle_pid" "$busy_pid" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$(snap_line slot-stalled)" =~ ^"slot-stalled heavy pid=$idle_pid held="2[5-9]"m label=lane-x"$ ]]
+  [ "$(printf '%s\n' "$output" | grep -c '^slot-stalled')" -eq 1 ]
+  [[ "${lines[0]}" == "verdict act "*"slot-stalled=1"* ]]
+  # Spectra was asked about the two old holders only, with the stall age as its minimum.
+  grep -qx "idle --pids $(sort -n <<<"$idle_pid"$'\n'"$busy_pid" | paste -sd, -) --min-age 10m --json" "$BATS_TEST_TMPDIR/spectra-calls" ||
+    grep -qx "idle --pids $busy_pid,$idle_pid --min-age 10m --json" "$BATS_TEST_TMPDIR/spectra-calls"
+}
+
+@test "stalled-slot checks with no spectra are unknown, and a dead holder is not checked (#333)" {
+  echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
+  export ORCHESTRATE_SLOT_DIR="$BATS_TEST_TMPDIR/slots"
+  mkdir -p "$ORCHESTRATE_SLOT_DIR/heavy/slot-1"
+  printf '999999\nMon Jan 1 00:00:00 1990\ngone\n' >"$ORCHESTRATE_SLOT_DIR/heavy/slot-1/holder"
+  touch -t 202001010000 "$ORCHESTRATE_SLOT_DIR/heavy/slot-1/holder"
+  run snap
+  [[ "$output" != *slot-stalled* ]]
+  mkdir -p "$ORCHESTRATE_SLOT_DIR/gate/slot-1"
+  printf '%s\n%s\nme\n' "$$" "$(ps -o lstart= -p "$$" | sed 's/^ *//; s/ *$//; s/  */ /g')" >"$ORCHESTRATE_SLOT_DIR/gate/slot-1/holder"
+  touch -t 202001010000 "$ORCHESTRATE_SLOT_DIR/gate/slot-1/holder"
+  SPECTRA="$BATS_TEST_TMPDIR/none" run snap
+  [ "$(snap_line slot-stalled)" = "slot-stalled unknown pids=$$" ]
+  [[ "${lines[0]}" != *slot-stalled=* ]]
+}
+
 @test "the real host-load.sh over a loaded host holds dispatch (#114)" {
   echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
   SPECTRA_STUB_LOAD1=99 run snap

@@ -56,6 +56,12 @@ from memory (advisory workflows, ready label, device slot types).
      Report the `dispatch` queue as waiting on the host, with the cause; for `cause=indexing` the
      owner action from `host-load.sh` (fewer worktrees, Spotlight exclusion). `host unknown` (the
      read failed) holds nothing: dispatch is reported as usual.
+   - `slot-stalled=<n>` (#333): each `slot-stalled <pool> pid=<p> held=<m>m label=<l>` line is a
+     gate, heavy-build or boot slot held past `ORCHESTRATE_SLOT_STALL_MINUTES` (10) by a holder that,
+     with all its children, is idle (`spectra idle`): it holds every other lane's build back while
+     looking alive. Message the lane the label names to stop that PID or say what it waits on, and
+     report it. Release no slot and kill nothing yourself. `slot-stalled unknown` (spectra missing or
+     failed) holds nothing.
    - `orphans=<n>` (#332): the `orphans <n> worktrees=<name>(<n>),...` line counts leftover
      processes under the lane worktrees (`spectra orphans`: parent gone, cwd in a worktree). Report
      them by worktree; if that lane is still running, message it to stop the PIDs it recorded. A
