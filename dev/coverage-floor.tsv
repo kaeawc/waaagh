@@ -62,6 +62,7 @@ skills/orchestrate/scripts/shipped-blocked.sh	99
 skills/orchestrate/scripts/supersede-check.sh	90
 skills/orchestrate/scripts/thread-resolve.sh	97
 skills/orchestrate/scripts/thread-sweep.sh	94
+skills/orchestrate/scripts/travel-cycle.sh	85
 skills/orchestrate/scripts/travel-guard.sh	85
 skills/orchestrate/scripts/travel-store.sh	85
 skills/orchestrate/scripts/triage-tick.sh	94
