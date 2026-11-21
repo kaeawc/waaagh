@@ -14,9 +14,11 @@
 #   merge   dispatch op=merge: the run merges PR N at SHA only if the newest orchestrate/review on
 #           SHA is success and was posted by the App itself
 #   check   print the newest orchestrate/review on SHA: `<state> by <login> at <time>`, or `absent`
-# Dispatching returns before the run does: confirm with `check` (status) or a read of the PR
-# (merge) on the next pass. The workflow is app-broker.yml on the default branch; only the actors
-# in the repository variable APP_BROKER_ACTORS (default: the owner) may dispatch it.
+# The request is a `repository_dispatch` event (type app-broker, the request in client_payload),
+# which needs only Contents write: a Claude Code cloud session has that, but not the Actions write a
+# workflow_dispatch needs. It runs app-broker.yml from the default branch; only the actors in the
+# repository variable APP_BROKER_ACTORS (default: the owner) may start it. Sending returns before
+# the run does: confirm with `check` (status) or a read of the PR (merge) on the next pass.
 # Exit: 0 dispatched, or check printed a status | 3 the dispatch was refused, or check could not
 #   read the statuses | 4 check: no orchestrate/review on SHA | 2 usage
 set -euo pipefail
@@ -61,12 +63,10 @@ if [[ "$op" == check ]]; then
   exit 0
 fi
 
-branch=$(orch_default_branch "$repo") || { echo "app-broker.sh: default branch of $repo unreadable" >&2; exit 3; }
-args=(api -X POST "repos/$repo/actions/workflows/app-broker.yml/dispatches" -f "ref=$branch"
-  -f "inputs[op]=$op" -f "inputs[pr]=$pr" -f "inputs[sha]=$sha")
-if [[ "$op" == status ]]; then args+=(-f "inputs[state]=$state" -f "inputs[description]=$description")
-else args+=(-f "inputs[method]=$method"); fi
-if ! err=$(gh "${args[@]}" 2>&1); then
+body=$(jq -cn --arg op "$op" --arg pr "$pr" --arg sha "$sha" --arg state "$state" --arg d "$description" --arg m "$method" '
+  {event_type: "app-broker", client_payload: ({op: $op, pr: $pr, sha: $sha}
+    + (if $op == "status" then {state: $state, description: $d} else {method: $m} end))}')
+if ! err=$(gh api -X POST "repos/$repo/dispatches" --input - <<<"$body" 2>&1); then
   echo "app-broker.sh: dispatch refused: ${err:0:300}" >&2
   exit 3
 fi
