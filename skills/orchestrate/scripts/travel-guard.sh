@@ -17,6 +17,9 @@ case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esa
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
 orch_gh_priority high
+# Rulesets need admin: run gh as the owner, not through a local gh wrapper that routes writes
+# through an App (the owner's waaagh-bot shim honours this).
+export WAAAGH_GH_SHIM=off
 
 op=${1:-}
 case "$op" in on | off | status) shift ;; -h | --help) orch_usage; exit 0 ;; *) orch_usage >&2; exit 2 ;; esac
