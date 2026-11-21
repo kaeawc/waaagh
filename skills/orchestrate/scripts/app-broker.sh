@@ -9,11 +9,16 @@
 #                             [--description TEXT] [--repo OWNER/REPO]
 #        app-broker.sh merge  --pr N --sha SHA [--method squash|merge|rebase] [--repo OWNER/REPO]
 #        app-broker.sh check  --sha SHA [--repo OWNER/REPO]
+#        app-broker.sh workflow [--ref REF | --sha SHA]
 #   status  dispatch op=status: the App posts orchestrate/review=STATE (default success) on SHA,
 #           which must still be the PR's head when the run starts
 #   merge   dispatch op=merge: the run merges PR N at SHA only if the newest orchestrate/review on
 #           SHA is success and was posted by the App itself
 #   check   print the newest orchestrate/review on SHA: `<state> by <login> at <time>`, or `absent`
+#   workflow print the app-broker.yml a target repository commits as .github/workflows/app-broker.yml:
+#           templates/app-broker.yml with the kaeawc/waaagh actions/app-broker action pinned to the
+#           commit REF (default main) resolves to, or to --sha as given. WAAAGH_REPO overrides
+#           kaeawc/waaagh (a fork).
 # The request is a `repository_dispatch` event (type app-broker, the request in client_payload),
 # which needs only Contents write: a Claude Code cloud session has that, but not the Actions write a
 # workflow_dispatch needs. It runs app-broker.yml from the default branch; only the actors in the
@@ -29,8 +34,8 @@ source "$here/_lib.sh"
 orch_gh_priority high
 
 op=${1:-}
-case "$op" in status | merge | check) shift ;; -h | --help) orch_usage; exit 0 ;; *) orch_usage >&2; exit 2 ;; esac
-repo="" pr="" sha="" state=success description="" method=squash
+case "$op" in status | merge | check | workflow) shift ;; -h | --help) orch_usage; exit 0 ;; *) orch_usage >&2; exit 2 ;; esac
+repo="" pr="" sha="" state=success description="" method=squash ref=""
 while (($#)); do
   case "$1" in
     --repo) repo=${2:-}; shift 2 ;;
@@ -39,11 +44,27 @@ while (($#)); do
     --state) state=${2:-}; shift 2 ;;
     --description) description=${2:-}; shift 2 ;;
     --method) method=${2:-}; shift 2 ;;
+    --ref) ref=${2:-}; shift 2 ;;
     -h | --help) orch_usage; exit 0 ;;
     *) echo "app-broker.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 bad() { echo "app-broker.sh: $1" >&2; exit 2; }
+if [[ "$op" == workflow ]]; then
+  src=${WAAAGH_REPO:-kaeawc/waaagh}
+  [[ "$src" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || bad "WAAAGH_REPO must be OWNER/REPO"
+  [[ -z "$sha" || -z "$ref" ]] || bad "workflow takes --ref or --sha, not both"
+  if [[ -z "$sha" ]]; then
+    ref=${ref:-main}
+    [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || bad "--ref is not a ref name"
+    sha=$("$here/gh-read.sh" -- api "repos/$src/commits/$ref" --jq .sha 2>/dev/null) ||
+      { echo "app-broker.sh: cannot resolve $src@$ref" >&2; exit 3; }
+  fi
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || bad "--sha needs a full 40-character commit SHA"
+  sed -e "s|kaeawc/waaagh/actions/app-broker@__WAAAGH_SHA__ # __WAAAGH_REF__|$src/actions/app-broker@$sha # ${ref:-pinned}|" \
+    "$here/../templates/app-broker.yml"
+  exit 0
+fi
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || bad "--sha needs the full 40-character head SHA"
 if [[ "$op" != check ]]; then
   [[ "$pr" =~ ^[1-9][0-9]*$ ]] || bad "--pr needs a pull request number"

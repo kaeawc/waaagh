@@ -26,6 +26,8 @@ case "$*" in
   "api repos/o/r/rulesets/"*) cat "$FX/ruleset.json" ;;
   "api -X POST repos/o/r/rulesets --input -") echo '{"id": 77}' ;;
   "api -X PUT repos/o/r/rulesets/"*) echo '{}' ;;
+  "api repos/kaeawc/waaagh/commits/main --jq .sha"*) echo fedcba9876543210fedcba9876543210fedcba98 ;;
+  "api repos/kaeawc/waaagh/commits/nope --jq .sha"*) echo "HTTP 404: No commit found" >&2; exit 1 ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 STUB
@@ -111,21 +113,42 @@ tg() { "$SCRIPTS/travel-guard.sh" "$@" --repo o/r; }
   [ "$status" -eq 3 ]
 }
 
-@test "the workflow every repository copies is the one tested here, and it keeps the key in the run" {
-  cmp "$ROOT/skills/orchestrate/templates/app-broker.yml" "$ROOT/.github/workflows/app-broker.yml"
-  w="$ROOT/.github/workflows/app-broker.yml"
-  grep -qF 'private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}' "$w"
-  grep -qF 'repositories: ${{ github.event.repository.name }}' "$w"
+@test "workflow pins the broker action; waaagh's own copy differs only in running it locally" {
+  run "$SCRIPTS/app-broker.sh" workflow
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"uses: kaeawc/waaagh/actions/app-broker@fedcba9876543210fedcba9876543210fedcba98 # main"* ]]
+  [[ "$output" != *__WAAAGH_* ]]
+  run "$SCRIPTS/app-broker.sh" workflow --sha "$SHA"
+  [[ "$output" == *"actions/app-broker@$SHA # pinned"* ]]
+  WAAAGH_REPO=me/fork run "$SCRIPTS/app-broker.sh" workflow --sha "$SHA"
+  [[ "$output" == *"uses: me/fork/actions/app-broker@$SHA"* ]]
+  run "$SCRIPTS/app-broker.sh" workflow --ref nope
+  [ "$status" -eq 3 ]
+  run "$SCRIPTS/app-broker.sh" workflow --sha abc
+  [ "$status" -eq 2 ]
+  # Everything above the steps is the same file: triggers, permissions, concurrency.
+  t="$ROOT/skills/orchestrate/templates/app-broker.yml" w="$ROOT/.github/workflows/app-broker.yml"
+  diff <(sed -n '1,/^    steps:$/p' "$t") <(sed -n '1,/^    steps:$/p' "$w")
+  grep -qF 'uses: ./actions/app-broker' "$w"
+  for f in "$t" "$w"; do
+    grep -qF 'private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}' "$f"
+    grep -qF 'allowed-actors: ${{ vars.APP_BROKER_ACTORS }}' "$f"
+    grep -qF 'types: [app-broker]' "$f"
+  done
+}
+
+@test "the broker action keeps the key in the run and checks the head and the App's status" {
+  a="$ROOT/actions/app-broker/action.yml"
+  grep -qF 'repositories: ${{ github.event.repository.name }}' "$a"
   # Inputs reach the shell through the environment only: no ${{ }} inside any run block.
   spliced=$(awk '/^ +run: \|/ { inrun = 1; ind = match($0, /[^ ]/); next }
     inrun && NF && match($0, /[^ ]/) <= ind { inrun = 0 }
-    inrun && /\$\{\{/ { print NR ": " $0 }' "$w")
+    inrun && /\$\{\{/ { print NR ": " $0 }' "$a")
   [ -z "$spliced" ] || { echo "expression in a run block: $spliced"; false; }
-  grep -c 'run: |' "$w" >/dev/null
-  # The merge checks the head and the App's own status first.
-  grep -qF '[[ "$head" == "$SHA" ]]' "$w"
-  grep -qF '"$BOT"' "$w"
-  # Both triggers, and a repository_dispatch payload is validated as strictly as a dispatch's inputs.
-  grep -qF 'types: [app-broker]' "$w"
-  grep -qF 'case "$OP" in status | merge)' "$w"
+  [ "$(grep -c 'run: |' "$a")" -eq 3 ]
+  grep -qF '[[ "$head" == "$SHA" ]]' "$a"
+  grep -qF '"$BOT"' "$a"
+  grep -qF 'case "$OP" in status | merge)' "$a"
+  # Every third-party step is pinned to a commit.
+  [ -z "$(grep -E '^ +uses: [^.][^@]*@[^0-9a-f]' "$a")" ]
 }
