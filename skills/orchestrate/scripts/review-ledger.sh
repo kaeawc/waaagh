@@ -27,7 +27,12 @@
 #            when it has an `input-meaning: changed|unchanged` line and, for `changed`, a
 #            `## Callers of changed functions` section with at least one entry (#211). An
 #            incomplete ship is recorded as verdict `incomplete`, which holds the PR, and exits 6.
-#   fix      a fix pass on the PR starts: append verdict `fixing` and hold it like a non-ship
+#            With ORCHESTRATE_REVIEW_POST=comment (default off), the findings file is also posted
+#            on the PR as a COMMENT review (`gh pr review --comment`; never approve or request
+#            changes), with a hidden marker so the same PR, --head and verdict posts once. Whose
+#            account posts it is gh's auth: point it at a bot (GH_TOKEN, or a gh shim) to post as
+#            the bot. A failed post warns and leaves the exit code alone.
+#   fix     a fix pass on the PR starts: append verdict `fixing` and hold it like a non-ship
 #            verdict. Run it before the fix lane starts; only a newer `ship` lets the PR merge.
 #   repair   a repair session was dispatched to the PR (cloud-dispatch.sh record --kind repair
 #            runs it): append verdict `repairing` with the session id (the routine's trigger id)
@@ -104,6 +109,8 @@ fi
 [[ "$session" =~ ^[A-Za-z0-9_.:-]*$ ]] || { echo "review-ledger.sh: --session must be one word" >&2; exit 2; }
 case "$cmd" in fix) verdict=fixing ;; repair) verdict=repairing ;; repaired) verdict=repaired ;; esac
 [[ -z "$findings" || "$cmd" == record ]] || usage
+post=${ORCHESTRATE_REVIEW_POST:-off}
+case "$post" in off | comment) ;; *) echo "review-ledger.sh: ORCHESTRATE_REVIEW_POST must be off or comment" >&2; exit 2 ;; esac
 
 # incomplete_ship FILE -> why a ship verdict's findings file is incomplete, or nothing (#211): it
 # must declare `input-meaning: changed|unchanged`; `changed` needs a callers section with an entry.
@@ -167,6 +174,35 @@ hold_after() {
   fi
 }
 
+# post_review: post the findings file on the PR as a COMMENT review (never approve or request
+# changes), marked so the same PR, head and verdict is posted once. A failed post only warns: the
+# ledger row is the gate, the review is for people reading the PR.
+post_review() {
+  local mark body rc=0 revs
+  [[ -f "$findings" && -r "$findings" ]] || { echo "warning: review not posted: could not read $findings" >&2; return 0; }
+  mark="<!-- waaagh-review pr=$pr head=${head:--} verdict=$verdict -->"
+  if [[ -n "$head" ]]; then
+    revs=$(orch_read_retry 3 gh api "repos/$repo/pulls/$pr/reviews?per_page=100" </dev/null) || rc=$?
+    if ((rc == 0)) && jq -e --arg m "$mark" 'type == "array" and any(.[]; (.body // "") | contains($m))' <<<"$revs" >/dev/null 2>&1; then
+      echo "review already posted: PR $pr $verdict at $head"
+      return 0
+    fi
+  fi
+  body=$(mktemp "${TMPDIR:-/tmp}/waaagh-review.XXXXXX") || { echo "warning: review not posted: no temp file" >&2; return 0; }
+  {
+    # shellcheck disable=SC2016 # the backticks are Markdown, not expansions
+    printf '**waaagh review**: `%s`%s\n\n' "$verdict" "${head:+ at \`$head\`}"
+    head -c 60000 "$findings"
+    printf '\n\n%s\n' "$mark"
+  } >"$body"
+  if gh pr review "$pr" --repo "$repo" --comment --body-file "$body" >/dev/null 2>&1; then
+    echo "posted: review comment on PR $pr"
+  else
+    echo "warning: review not posted on PR $pr (gh pr review failed); the verdict is still recorded" >&2
+  fi
+  rm -f "$body"
+}
+
 case "$cmd" in
   latest)
     row=$(rows "$pr" | awk 'END { if (NR) print }')
@@ -195,6 +231,7 @@ case "$cmd" in
     fi
     append "$verdict"
     hold_after "$verdict"
+    [[ "$cmd" != record || -z "$findings" || "$post" != comment ]] || post_review
     if [[ "$verdict" == incomplete ]]; then
       echo "error: $note (roles/review.md); PR $pr stays held" >&2; exit 6
     fi
