@@ -111,6 +111,7 @@ subagent-hygiene.bats	3
 supersede-check.bats	10
 thread-sweep.bats	9
 threads-rest.bats	16
+travel-store.bats	4
 triage-tick-needs.bats	9
 triage-tick.bats	22
 update-pace.bats	7

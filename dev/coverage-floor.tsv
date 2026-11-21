@@ -63,6 +63,7 @@ skills/orchestrate/scripts/supersede-check.sh	90
 skills/orchestrate/scripts/thread-resolve.sh	97
 skills/orchestrate/scripts/thread-sweep.sh	94
 skills/orchestrate/scripts/travel-guard.sh	85
+skills/orchestrate/scripts/travel-store.sh	85
 skills/orchestrate/scripts/triage-tick.sh	94
 skills/orchestrate/scripts/update-pace.sh	97
 skills/orchestrate/scripts/validate.sh	96
