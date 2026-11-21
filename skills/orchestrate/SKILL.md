@@ -771,6 +771,16 @@ a cloud routine, and follow-ups to an idle cloud branch as a second routine. Eve
 goes through `"$SCRIPTS/relay.sh"`, which tracks queued, delivered, acknowledged and done
 separately; tell the owner the state it reports, never "done" for a message that is only queued.
 
+**Traveling mode.** While the owner's host is closed, one hourly cloud orchestrator routine runs
+the tick, review, dispatch and merge cycle from a new private state store repository (one folder
+per target repository), under a lease that allows one writer (`traveling-mode.md`; prompts in `roles/cloud-orchestrator.md`). A cloud session
+cannot start a cloud session. So the orchestrator labels issues and PRs instead, and each label
+starts one worker routine through its event trigger. The independent review verdict is a commit
+status at the exact head SHA, so the merge rule survives without the host. The owner's dedicated
+GitHub App posts that status and performs the merges, through an App broker workflow, so no
+session ever sees the App's key or a token (#268). Device lanes, the
+host's runners, manual tests and releases pause.
+
 ## Final report
 
 Per lane: model as run (and any escalation from Sonnet to Opus), artifact (diff or PR), the
