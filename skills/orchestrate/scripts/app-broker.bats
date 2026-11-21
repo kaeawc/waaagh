@@ -19,7 +19,7 @@ printf '%s\n' "$*" >>"$FX/calls"
 for a in "$@"; do [ "$a" != "--input" ] || cat >>"$FX/bodies"; done
 case "$*" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
-  "api -X POST repos/o/r/actions/workflows/app-broker.yml/dispatches"*)
+  "api -X POST repos/o/r/dispatches --input -")
     [ ! -f "$FX/dispatch-fails" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; } ;;
   "api --paginate repos/o/r/commits/"*"/statuses"*) cat "$FX/statuses.json" ;;
   "api repos/o/r/rulesets?"*) [ ! -f "$FX/rulesets-fail" ] || { echo "HTTP 404" >&2; exit 1; }; cat "$FX/rulesets.json" 2>/dev/null || echo '[]' ;;
@@ -35,14 +35,17 @@ STUB
 ab() { "$SCRIPTS/app-broker.sh" "$@" --repo o/r; }
 tg() { "$SCRIPTS/travel-guard.sh" "$@" --repo o/r; }
 
-@test "status and merge dispatch the workflow on the default branch with the request as inputs" {
+@test "status and merge send a repository_dispatch with the request as its payload" {
   run ab status --pr 5 --sha "$SHA" --description "ship at head"
   [ "$status" -eq 0 ]
   [[ "$output" == "dispatched status pr=5 sha=0123456789ab repo=o/r: confirm with app-broker.sh check --sha $SHA"* ]]
-  grep -qxF "api -X POST repos/o/r/actions/workflows/app-broker.yml/dispatches -f ref=main -f inputs[op]=status -f inputs[pr]=5 -f inputs[sha]=$SHA -f inputs[state]=success -f inputs[description]=ship at head" "$FX/calls"
+  grep -qxF "api -X POST repos/o/r/dispatches --input -" "$FX/calls"
+  [ "$(jq -sc 'last' "$FX/bodies")" = "$(jq -cn --arg s "$SHA" '{event_type: "app-broker", client_payload: {op: "status", pr: "5", sha: $s, state: "success", description: "ship at head"}}')" ]
   run ab merge --pr 5 --sha "$SHA" --method merge
   [ "$status" -eq 0 ]
-  grep -qxF "api -X POST repos/o/r/actions/workflows/app-broker.yml/dispatches -f ref=main -f inputs[op]=merge -f inputs[pr]=5 -f inputs[sha]=$SHA -f inputs[method]=merge" "$FX/calls"
+  [ "$(jq -sc 'last' "$FX/bodies")" = "$(jq -cn --arg s "$SHA" '{event_type: "app-broker", client_payload: {op: "merge", pr: "5", sha: $s, method: "merge"}}')" ]
+  # No workflow_dispatch: a cloud session lacks the Actions write it needs (#268).
+  [ "$(grep -c 'actions/workflows' "$FX/calls" || true)" -eq 0 ]
   touch "$FX/dispatch-fails"
   run ab status --pr 5 --sha "$SHA"
   [ "$status" -eq 3 ]
@@ -122,4 +125,7 @@ tg() { "$SCRIPTS/travel-guard.sh" "$@" --repo o/r; }
   # The merge checks the head and the App's own status first.
   grep -qF '[[ "$head" == "$SHA" ]]' "$w"
   grep -qF '"$BOT"' "$w"
+  # Both triggers, and a repository_dispatch payload is validated as strictly as a dispatch's inputs.
+  grep -qF 'types: [app-broker]' "$w"
+  grep -qF 'case "$OP" in status | merge)' "$w"
 }
