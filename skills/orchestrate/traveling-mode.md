@@ -150,8 +150,11 @@ key, and never asks for it. A cloud session never sees the key or an installatio
 **How a cloud session acts as the App: the App broker** (owner decision, 2026-11-20, #268). The App
 is `waaagh-bot`, installed on each target repository; the store does not need it.
 
-- **Where.** One `app-broker.yml` workflow in each target repository, `on: workflow_dispatch`,
-  copied unchanged from `skills/orchestrate/templates/app-broker.yml`. There is no central broker.
+- **Where.** One `app-broker.yml` workflow in each target repository, copied unchanged from
+  `skills/orchestrate/templates/app-broker.yml`. There is no central broker. It starts on a
+  `repository_dispatch` event of type `app-broker`, which needs only Contents write: a cloud
+  session's Claude GitHub App has that, but only Actions read, so GitHub refuses its
+  `workflow_dispatch` (#268). `workflow_dispatch` stays for a manual run.
 - **The key.** The owner's `GH_APP_ID` and `GH_APP_PRIVATE_KEY` Actions secrets in that repository.
   No other copy exists.
 - **The token.** One step mints an installation token with `actions/create-github-app-token`,
@@ -159,7 +162,8 @@ is `waaagh-bot`, installed on each target repository; the store does not need it
   and `pull-requests`). It lives only inside that job. It is never printed, passed as an output,
   written to the store, or returned to the caller. Reads use the run's read-only `GITHUB_TOKEN`.
 - **Inputs.** `op` (`status` or `merge`), `pr` and `sha`, plus `state` and `description` for
-  `status` and `method` for `merge`. They reach the shell only through `env:`.
+  `status` and `method` for `merge`, in the event's `client_payload`. They reach the shell only
+  through `env:`, and the workflow validates each one, since GitHub does not validate a payload.
 - **Checks before acting:**
   - the caller is in the repository variable `APP_BROKER_ACTORS` (default: the owner);
   - the PR is open, not from a fork, and its head is still `sha`;
@@ -167,20 +171,15 @@ is `waaagh-bot`, installed on each target repository; the store does not need it
 - **The call.** The broker then calls `POST /repos/{repo}/statuses/{sha}` or
   `PUT /repos/{repo}/pulls/{pr}/merge` with `sha`.
 - **The caller.** A cloud session runs `"$SCRIPTS/app-broker.sh" status|merge --repo R --pr N --sha S`,
-  which dispatches the workflow on the default branch. It confirms the result on its next pass
+  which sends that event. It confirms the result on its next pass
   (`app-broker.sh check --sha S`, or a read of the PR) and never assumes success from the dispatch.
 
-**Before the first trip** (owner):
-
-- Give waaagh-bot "Commit statuses: Read and write" and approve it on the installation. Until then
-  the broker cannot post a verdict.
-- Merge the broker into each target repository (one PR each).
-- Check once, from a cloud session, that its identity may dispatch the broker (an
-  `app-broker.sh status` on a low-risk PR, then `check`). If it may not, set `APP_BROKER_ACTORS` to
-  the identity the dispatch reports, or fall back to the store: the session pushes a request file
-  and a scheduled broker run acts on it.
-
-Until all three are done, cloud runs neither merge nor post verdicts. Those PRs wait for the host.
+**Verified 2026-11-21.** waaagh-bot has Commit statuses write. The broker is on the default branch
+of waaagh, spectra and krit, and in an open auto-mobile PR. A cloud session ran
+`app-broker.sh status` and the run posted `orchestrate/review` as `waaagh-bot[bot]` (run
+44891130437, actor `kaeawc`). The owner declined to give the Claude GitHub App Actions write: its
+pending permission request would also add Webhooks write and Repository creation write on every
+repository.
 
 ## Hourly cycle
 
