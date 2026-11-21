@@ -85,8 +85,10 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$T" "## Decisions and rejected options"
   [ "$(grep -cF "in one of two ways" "$T" || true)" -eq 0 ] || { echo "traveling-mode.md still offers two trigger paths"; return 1; }
   has "$ROLES/cloud-orchestrator.md" "Exit at once, with no changes, unless it added the label cloud-dispatch"
-  has "$ROLES/cloud-orchestrator.md" "sha=<head>"
-  has "$ROLES/cloud-orchestrator.md" "Never merge with your own identity. Dispatch the App broker with op=merge"
+  has "$ROLES/cloud-orchestrator.md" "merge  --repo {{REPO}} --pr N --sha <head>"
+  has "$ROLES/cloud-orchestrator.md" '"$SCRIPTS/travel-cycle.sh" run --repo {{REPO}} --store "$STORE"'
+  has "$ROLES/cloud-orchestrator.md" "merges only through the App broker"
+  has "$ROLES/cloud-orchestrator.md" "Never merge or post orchestrate/review with your own identity"
   has "$ROLES/cloud-orchestrator.md" "Never post that status with your own identity."
   has "$ROLES/cloud-orchestrator.md" "No session creates, enables or fires a"
   has "$SKILL" "\`traveling-mode.md\`"
