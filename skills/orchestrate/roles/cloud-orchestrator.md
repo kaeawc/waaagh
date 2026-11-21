@@ -27,17 +27,17 @@ label events (`issues` for worker-implement, `pull_request` for worker-repair an
 filtered to its label where the trigger allows it.
 
 No prompt carries the App's key or a token. A session acts as the App only through the App broker
-(`../traveling-mode.md`, open question #268):
+in the target repository (`../traveling-mode.md`, #268), which waaagh's script asks with a
+`repository_dispatch` event:
 
 ```
-POST repos/{{STORE}}/actions/workflows/app-broker.yml/dispatches
-  ref=main
-  inputs[op]=status|merge, inputs[repo]={{REPO}}, inputs[pr]=N, inputs[sha]=<head>
-  inputs[state]=success|failure and inputs[description]=... (op=status only)
+"$SCRIPTS/app-broker.sh" status --repo {{REPO}} --pr N --sha <head> --state success|failure --description "..."
+"$SCRIPTS/app-broker.sh" merge  --repo {{REPO}} --pr N --sha <head>
+"$SCRIPTS/app-broker.sh" check  --repo {{REPO}} --sha <head>
 ```
 
-A session confirms the outcome by reading the PR or the status later, and never from the dispatch
-response. Until #268 is answered and the broker exists, skip every step that needs the App.
+A session confirms the outcome by reading the PR or the status later (`check`), and never from the
+send.
 
 ## orchestrator (hourly)
 
@@ -61,7 +61,7 @@ Steps:
    - orchestrate/review, posted by {{APP}}, is success at its exact head, or at a SHA followed only by GitHub update-branch merges (in that case, have the broker post the same status on the head with "carried from <sha9>");
    - the latest ledger verdict is ship and no repair is in flight;
    - the PR is not held and main is green.
-   Never merge with your own identity. Dispatch the App broker with op=merge, pr=N, sha=<head>; it merges with REST (PUT repos/{{REPO}}/pulls/N/merge, merge_method=squash, sha=<head>). Journal each request, and journal the merge when a later read shows it merged.
+   Never merge with your own identity. Dispatch the App broker with op=merge: "$SCRIPTS/app-broker.sh" merge --repo {{REPO}} --pr N --sha <head>; it merges with REST (PUT repos/{{REPO}}/pulls/N/merge, sha=<head>). Journal each request, and journal the merge when a later read shows it merged.
 5. Review: add the cloud-review label to READY PRs that have no orchestrate/review status from {{APP}} at their head, at most {{REVIEW_CAP}}.
 6. Repair: add the cloud-repair label to PRs with a failing required check or a merge conflict.
    - Skip a PR repaired in the last hour.
@@ -99,7 +99,7 @@ Independent reviewer for {{REPO}}. First, read the triggering event. Exit at onc
    - Follow the repository's review skill if it has one, otherwise waaagh roles/review.md.
    - Report only findings you verified, each with file:line.
 2. Post one PR comment with the findings.
-3. Have the App post the commit status orchestrate/review on that SHA: dispatch the App broker with op=status, pr=N, sha=<that SHA>,
+3. Have the App post the commit status orchestrate/review on that SHA: dispatch the App broker with op=status ("$SCRIPTS/app-broker.sh" status --repo {{REPO}} --pr N --sha <that SHA>; SCRIPTS is a kaeawc/waaagh checkout's skills/orchestrate/scripts, so add kaeawc/waaagh as a source of this routine),
    - state=success for ship, or failure for fix-first;
    - description "<verdict> <sha9>: <one line>".
    Never post that status with your own identity.
