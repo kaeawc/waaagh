@@ -193,7 +193,10 @@ the wrong base (#317). With your checkout in `lane-forbidden`, the hook refuses 
 Record every verdict the moment it comes back: `"$SCRIPTS/review-ledger.sh" record --pr N --verdict
 ship|fix-first|rethink --head <sha> --findings <file>`: a ship whose findings lack the
 `input-meaning:` line, or the callers section when it says `changed`, is recorded `incomplete`
-(exit 6) and holds the PR. The latest verdict is a merge gate (#206): anything but `ship`
+(exit 6) and holds the PR. With `ORCHESTRATE_REVIEW_POST=comment` the findings are also posted on
+the PR as a COMMENT review, once per head and verdict; it never approves or requests changes, and
+the account that posts is whatever gh is authenticated as (a bot token or gh shim makes it the
+bot). The latest verdict is a merge gate (#206): anything but `ship`
 holds the PR on every merge path (`pr-ready.sh` SKIP `review:<verdict>`, `pr-merge.sh` exit 14,
 `merge-queue.sh` `held`) and adds a `hold.sh` hold until `review-ship`; a newer `ship` row releases
 it. Starting a fix pass on a PR, for any reason, is `"$SCRIPTS/review-ledger.sh" fix --pr N` before
