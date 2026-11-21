@@ -87,3 +87,11 @@ rl() { "$SCRIPTS/review-ledger.sh" record --repo o/r --pr 5 "$@"; }
   [ "$status" -eq 2 ]
   [[ "$output" == *"must be off or comment"* ]]
 }
+
+@test "an unknown ORCHESTRATE_REVIEW_POST value does not break the other subcommands" {
+  ORCHESTRATE_REVIEW_POST=on run "$SCRIPTS/review-ledger.sh" fix --repo o/r --pr 5
+  [ "$status" -eq 0 ]
+  ORCHESTRATE_REVIEW_POST=on run "$SCRIPTS/review-ledger.sh" latest --repo o/r --pr 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *fixing* ]]
+}

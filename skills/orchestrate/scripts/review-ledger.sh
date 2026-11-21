@@ -109,8 +109,9 @@ fi
 [[ "$session" =~ ^[A-Za-z0-9_.:-]*$ ]] || { echo "review-ledger.sh: --session must be one word" >&2; exit 2; }
 case "$cmd" in fix) verdict=fixing ;; repair) verdict=repairing ;; repaired) verdict=repaired ;; esac
 [[ -z "$findings" || "$cmd" == record ]] || usage
+# Validated only for record: a bad global value must not turn `latest` into "ledger unreadable".
 post=${ORCHESTRATE_REVIEW_POST:-off}
-case "$post" in off | comment) ;; *) echo "review-ledger.sh: ORCHESTRATE_REVIEW_POST must be off or comment" >&2; exit 2 ;; esac
+[[ "$cmd" != record ]] || case "$post" in off | comment) ;; *) echo "review-ledger.sh: ORCHESTRATE_REVIEW_POST must be off or comment" >&2; exit 2 ;; esac
 
 # incomplete_ship FILE -> why a ship verdict's findings file is incomplete, or nothing (#211): it
 # must declare `input-meaning: changed|unchanged`; `changed` needs a callers section with an entry.
