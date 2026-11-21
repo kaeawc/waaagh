@@ -773,7 +773,7 @@ separately; tell the owner the state it reports, never "done" for a message that
 
 **Traveling mode.** While the owner's host is closed, one hourly cloud orchestrator routine runs
 the tick, review, dispatch and merge cycle from a new private state store repository (one folder
-per target repository), under a lease that allows one writer (`traveling-mode.md`; prompts in `roles/cloud-orchestrator.md`). A cloud session
+per target repository), under a lease that allows one writer (`traveling-mode.md`; prompts in `templates/routines/`; create, refine and tear down with `routines.md` and the `travel-routines-*` skills). A cloud session
 cannot start a cloud session. So the orchestrator labels issues and PRs instead, and each label
 starts one worker routine through its event trigger. The independent review verdict is a commit
 status at the exact head SHA, so the merge rule survives without the host. The owner's dedicated

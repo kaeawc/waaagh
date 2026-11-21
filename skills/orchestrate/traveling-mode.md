@@ -3,7 +3,8 @@
 The owner travels with the host closed or offline. The triage tick, review, dispatch and merge
 loop keep running, driven by one hourly cloud orchestrator routine. Device lanes and everything
 else that needs the host pause until it returns. This file is the contract. The routine prompts
-are in `roles/cloud-orchestrator.md`.
+are in `templates/routines/`, and `routines.md` covers how to create, refine and tear down the
+routines.
 
 ## A cloud session cannot start cloud sessions; labels can
 
@@ -150,8 +151,11 @@ key, and never asks for it. A cloud session never sees the key or an installatio
 **How a cloud session acts as the App: the App broker** (owner decision, 2026-11-20, #268). The App
 is `waaagh-bot`, installed on each target repository; the store does not need it.
 
-- **Where.** One `app-broker.yml` workflow in each target repository, copied unchanged from
-  `skills/orchestrate/templates/app-broker.yml`. There is no central broker. It starts on a
+- **Where.** One `app-broker.yml` workflow in each target repository, printed by
+  `app-broker.sh workflow` from `skills/orchestrate/templates/app-broker.yml`. Its one step is the
+  `kaeawc/waaagh/actions/app-broker` composite action, pinned to a waaagh commit, which holds all
+  the checks below. waaagh's own copy runs the action from its checkout. There is no central
+  broker. It starts on a
   `repository_dispatch` event of type `app-broker`, which needs only Contents write: a cloud
   session's Claude GitHub App has that, but only Actions read, so GitHub refuses its
   `workflow_dispatch` (#268). `workflow_dispatch` stays for a manual run.

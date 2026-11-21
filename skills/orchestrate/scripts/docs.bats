@@ -84,11 +84,17 @@ has() { grep -qF -- "$2" "$1" || { echo "missing in ${1#"$ROOT"/}: $2"; return 1
   has "$T" "\`actions/create-github-app-token\`"
   has "$T" "## Decisions and rejected options"
   [ "$(grep -cF "in one of two ways" "$T" || true)" -eq 0 ] || { echo "traveling-mode.md still offers two trigger paths"; return 1; }
-  has "$ROLES/cloud-orchestrator.md" "Exit at once, with no changes, unless it added the label cloud-dispatch"
-  has "$ROLES/cloud-orchestrator.md" "sha=<head>"
-  has "$ROLES/cloud-orchestrator.md" "Never merge with your own identity. Dispatch the App broker with op=merge"
-  has "$ROLES/cloud-orchestrator.md" "Never post that status with your own identity."
+  # The routine prompts live only in templates/routines/ (routines.sh renders them).
+  RT="$ROOT/skills/orchestrate/templates/routines"
+  has "$RT/implement.txt" "Exit at once, with no changes, unless it added the label cloud-dispatch"
+  has "$RT/repair.txt" "Exit at once, with no changes, unless it added the label cloud-repair"
+  has "$RT/review.txt" "Exit at once unless it added the label cloud-review"
+  has "$RT/review.txt" "--sha <that SHA>"
+  has "$RT/review.txt" "Never post that status with your own identity."
+  has "$RT/orchestrator.txt" "merges only through the App broker"
+  has "$RT/orchestrator.txt" "Never merge or post orchestrate/review with your own identity"
   has "$ROLES/cloud-orchestrator.md" "No session creates, enables or fires a"
+  has "$ROOT/skills/orchestrate/routines.md" "Routines stay disabled while the owner is home"
   has "$SKILL" "\`traveling-mode.md\`"
   has "$ROLES/README.md" "\`cloud-orchestrator.md\`"
 }
