@@ -155,7 +155,9 @@ is `waaagh-bot`, installed on each target repository; the store does not need it
   `app-broker.sh workflow` from `skills/orchestrate/templates/app-broker.yml`. Its one step is the
   `kaeawc/waaagh/actions/app-broker` composite action, pinned to a waaagh commit, which holds all
   the checks below. waaagh's own copy runs the action from its checkout. There is no central
-  broker. It starts on a
+  broker. The pin reads `@<sha> # vX.Y.Z`, the newest waaagh release tag. The Release tag
+  workflow cuts the next tag when the action changes on main (`dev/release-tag.sh`, #359), and each
+  repository's Dependabot (github-actions) opens the PR that bumps its pin. It starts on a
   `repository_dispatch` event of type `app-broker`, which needs only Contents write: a cloud
   session's Claude GitHub App has that, but only Actions read, so GitHub refuses its
   `workflow_dispatch` (#268). `workflow_dispatch` stays for a manual run.

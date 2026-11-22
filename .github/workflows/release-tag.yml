@@ -1,0 +1,54 @@
+name: Release tag
+
+# Cuts waaagh's next release tag (vX.Y.Z) and its GitHub release when the App broker action changes
+# on main, or by hand (#359). Repositories pin the action as
+# `kaeawc/waaagh/actions/app-broker@<sha> # vX.Y.Z` (skills/orchestrate/scripts/app-broker.sh
+# workflow), so their Dependabot (github-actions) opens a PR bumping the pin to each new tag. The
+# tag logic is dev/release-tag.sh: the first tag is the plugin version, later ones bump the newest
+# tag (patch on push; the bump is chosen on a manual run). A commit already tagged cuts nothing,
+# but still gets its release if an earlier run pushed the tag and failed before creating it. Tags
+# go only on main. The first tag (v0.1.0) is a manual run after this workflow lands: until then,
+# app-broker.sh workflow pins `# main`, which Dependabot cannot bump.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'actions/app-broker/**'
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Which part of the newest vX.Y.Z tag to bump"
+        required: true
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # every tag, to find the newest
+      - name: Cut, push and release the next tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump || 'patch' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          out=$(dev/release-tag.sh --bump "$BUMP")
+          echo "$out"
+          tag=${out#* }
+          [[ "$out" != "tagged "* ]] || git push origin "refs/tags/$tag"
+          gh release view "$tag" >/dev/null 2>&1 ||
+            gh release create "$tag" --verify-tag --generate-notes --title "$tag"

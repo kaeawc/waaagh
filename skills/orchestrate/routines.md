@@ -61,7 +61,9 @@ Prerequisites, per target repository. Check each one, and fix any that is missin
    The repository has the secrets `GH_APP_ID` and `GH_APP_PRIVATE_KEY`.
 2. **The App broker workflow.** Commit the output of `scripts/app-broker.sh workflow` as
    `.github/workflows/app-broker.yml`, through a PR, on the default branch. It pins
-   `kaeawc/waaagh/actions/app-broker` to a commit. If the repository limits which Actions may
+   `kaeawc/waaagh/actions/app-broker` to the commit of waaagh's newest release tag
+   (`@<sha> # vX.Y.Z`). Give the repository a Dependabot `github-actions` entry, so each new
+   waaagh release reaches it as a bump PR (#359). If the repository limits which Actions may
    run, allow `kaeawc/waaagh/actions/app-broker@*`. Optionally, the repository variable
    `APP_BROKER_ACTORS` lists who may start the broker; it defaults to the owner.
 3. **The briefs.** Install them with `scripts/cloud-dispatch.sh briefs install --gates "<the repo's

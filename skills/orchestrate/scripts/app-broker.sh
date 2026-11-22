@@ -17,8 +17,10 @@
 #   check   print the newest orchestrate/review on SHA: `<state> by <login> at <time>`, or `absent`
 #   workflow print the app-broker.yml a target repository commits as .github/workflows/app-broker.yml:
 #           templates/app-broker.yml with the kaeawc/waaagh actions/app-broker action pinned to the
-#           commit REF (default main) resolves to, or to --sha as given. WAAAGH_REPO overrides
-#           kaeawc/waaagh (a fork).
+#           commit REF resolves to, or to --sha as given. REF defaults to the newest release tag
+#           (vX.Y.Z, cut by release-tag.yml when the action changes), so the pin reads
+#           `@<sha> # vX.Y.Z` and the repository's Dependabot (github-actions) bumps it; main until
+#           the first release. WAAAGH_REPO overrides kaeawc/waaagh (a fork).
 # The request is a `repository_dispatch` event (type app-broker, the request in client_payload),
 # which needs only Contents write: a Claude Code cloud session has that, but not the Actions write a
 # workflow_dispatch needs. It runs app-broker.yml from the default branch; only the actors in the
@@ -54,6 +56,14 @@ if [[ "$op" == workflow ]]; then
   src=${WAAAGH_REPO:-kaeawc/waaagh}
   [[ "$src" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || bad "WAAAGH_REPO must be OWNER/REPO"
   [[ -z "$sha" || -z "$ref" ]] || bad "workflow takes --ref or --sha, not both"
+  if [[ -z "$sha" && -z "$ref" ]]; then
+    # The newest release tag (vX.Y.Z), so the pin's comment is a version Dependabot can bump; main
+    # until the first release.
+    tags=$("$here/gh-read.sh" -- api "repos/$src/git/matching-refs/tags/v" --jq '.[].ref' 2>/dev/null) ||
+      { echo "app-broker.sh: cannot list the release tags of $src" >&2; exit 3; }
+    ref=$(sed -n 's|^refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' <<<"$tags" |
+      sort -V | tail -1)
+  fi
   if [[ -z "$sha" ]]; then
     ref=${ref:-main}
     [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || bad "--ref is not a ref name"

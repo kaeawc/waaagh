@@ -33,7 +33,8 @@ The full reference is `../orchestrate/routines.md`. Read it first. Also read
    ones you can:
    - The labels: `routines.sh labels --repo R --apply`.
    - The broker workflow: open a PR with `"$SCRIPTS/app-broker.sh" workflow` as
-     `.github/workflows/app-broker.yml`.
+     `.github/workflows/app-broker.yml`. In the same PR, add a `github-actions` entry to
+     `.github/dependabot.yml` if it has none, so each waaagh release tag reaches the pin as a bump PR.
    - The briefs: `cloud-dispatch.sh briefs install --gates "<gates>"` in a checkout, then a PR. Ask
      the user for the gate commands if `CLAUDE.md` does not name them.
    - The cloud environment: take its ID from an existing routine's
