@@ -26,6 +26,30 @@ jobs:
           test "$(git -C "$RUNNER_TEMP/bats" rev-parse HEAD)" = 3bca150ec86275d6d9d5a4fd7d48ab8b6c6f3d87
           sudo "$RUNNER_TEMP/bats/install.sh" /usr/local >/dev/null
           bats --version
+      # spectra (#329) from its pinned release (checksum checked). It stays off PATH: the suites stub
+      # it and never read the real host. This proves the release meets orch_spectra_require for
+      # every capability the scripts use, minimum version included.
+      - name: Install and check spectra
+        env:
+          SPECTRA_VERSION: v0.1.1
+        run: |
+          d="$RUNNER_TEMP/spectra" && mkdir -p "$d" && cd "$d"
+          base="https://github.com/kaeawc/spectra/releases/download/$SPECTRA_VERSION"
+          tgz="spectra_${SPECTRA_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO "$base/$tgz" -O "$base/checksums.txt"
+          grep -F "  $tgz" checksums.txt | sha256sum -c -
+          tar xzf "$tgz"
+          bin="$d/spectra_${SPECTRA_VERSION}_linux_amd64/bin"
+          "$bin/spectra" version
+          test -x "$bin/spectra-mcp"
+          cd "$GITHUB_WORKSPACE"
+          # The capabilities named by orch_spectra_require calls in code, not in comments.
+          caps=$(grep -hoE '^[^#]*orch_spectra_require( [a-z]+)+' skills/orchestrate/scripts/*.sh |
+            grep -oE 'orch_spectra_require( [a-z]+)+' | sed 's/^orch_spectra_require //' | tr ' ' '\n' | sort -u | tr '\n' ' ')
+          test -n "$caps"
+          echo "capabilities: $caps"
+          # shellcheck disable=SC2086 # one word per capability
+          SPECTRA="$bin/spectra" bash -c 'source skills/orchestrate/scripts/_lib.sh && orch_spectra_require "$@"' _ $caps
       - name: ShellCheck
         run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh dev/*.sh
       - name: Validate manifests

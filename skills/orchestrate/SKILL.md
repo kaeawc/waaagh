@@ -507,7 +507,7 @@ against its PR's own changes.
 Many lanes on one machine stack their gates: load climbs past what the host can run, gates hit
 their wall caps, and lanes re-run them, which makes it worse.
 
-- **Spectra answers every host question** (required, github.com/kaeawc/spectra; #329). It
+- **Spectra answers every host question** (required, v0.1.1 or newer, github.com/kaeawc/spectra; #329). It
   observes the machine: load and its cause, process attribution, leftover processes, booted
   devices, toolchain faults; waaagh decides and coordinates. Scripts that need it call
   `orch_spectra_require <capability>...` (`_lib.sh`) and stop with a named error when it is
