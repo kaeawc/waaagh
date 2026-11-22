@@ -26,7 +26,11 @@ case "$*" in
   "api repos/o/r/rulesets/"*) cat "$FX/ruleset.json" ;;
   "api -X POST repos/o/r/rulesets --input -") echo '{"id": 77}' ;;
   "api -X PUT repos/o/r/rulesets/"*) echo '{}' ;;
+  "api repos/kaeawc/waaagh/git/matching-refs/tags/v --jq .[].ref"*)
+    [ ! -f "$FX/tags-fail" ] || { echo "HTTP 502" >&2; exit 1; }
+    cat "$FX/tags" 2>/dev/null || true ;;
   "api repos/kaeawc/waaagh/commits/main --jq .sha"*) echo fedcba9876543210fedcba9876543210fedcba98 ;;
+  "api repos/kaeawc/waaagh/commits/v0.10.0 --jq .sha"*) echo 1111111111111111111111111111111111111111 ;;
   "api repos/kaeawc/waaagh/commits/nope --jq .sha"*) echo "HTTP 404: No commit found" >&2; exit 1 ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
@@ -114,10 +118,22 @@ tg() { "$SCRIPTS/travel-guard.sh" "$@" --repo o/r; }
 }
 
 @test "workflow pins the broker action; waaagh's own copy differs only in running it locally" {
+  # Before the first release tag: main.
   run "$SCRIPTS/app-broker.sh" workflow
   [ "$status" -eq 0 ]
   [[ "$output" == *"uses: kaeawc/waaagh/actions/app-broker@fedcba9876543210fedcba9876543210fedcba98 # main"* ]]
   [[ "$output" != *__WAAAGH_* ]]
+  # The newest vX.Y.Z tag by version order, so Dependabot can bump the pin (#359).
+  printf 'refs/tags/v0.9.0\nrefs/tags/v0.10.0\nrefs/tags/v0.10.0-rc1\nrefs/tags/vnext\n' >"$FX/tags"
+  run "$SCRIPTS/app-broker.sh" workflow
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"uses: kaeawc/waaagh/actions/app-broker@1111111111111111111111111111111111111111 # v0.10.0"* ]]
+  run "$SCRIPTS/app-broker.sh" workflow --ref main
+  [[ "$output" == *"@fedcba9876543210fedcba9876543210fedcba98 # main"* ]]
+  touch "$FX/tags-fail"; run "$SCRIPTS/app-broker.sh" workflow
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"cannot list the release tags"* ]]
+  rm "$FX/tags-fail" "$FX/tags"
   run "$SCRIPTS/app-broker.sh" workflow --sha "$SHA"
   [[ "$output" == *"actions/app-broker@$SHA # pinned"* ]]
   WAAAGH_REPO=me/fork run "$SCRIPTS/app-broker.sh" workflow --sha "$SHA"

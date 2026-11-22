@@ -39,7 +39,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 | `skills/orchestrate/host-load.md` | Host load: lane admission thresholds, acting on the load's cause (Spotlight/`fseventsd`, lanes, other), the worktree budget, never removing a worktree that is a live process's cwd |
 | `skills/orchestrate/scripts/` | The scripts below, with stubbed-`gh` self-tests |
 | `skills/travel-routines-create/`, `-refine/`, `-teardown/` | Skills to set up, change and remove a repository's four traveling-mode cloud routines (`skills/orchestrate/routines.md`) |
-| `actions/app-broker/` | The App broker as a composite action. A repository's `app-broker.yml` (`app-broker.sh workflow`) pins it to a commit as `kaeawc/waaagh/actions/app-broker@<sha>`, so a cloud session can have the repository's GitHub App post `orchestrate/review` or merge without ever holding the App's key |
+| `actions/app-broker/` | The App broker as a composite action. A repository's `app-broker.yml` (`app-broker.sh workflow`) pins it to the commit of waaagh's newest release tag as `kaeawc/waaagh/actions/app-broker@<sha> # vX.Y.Z`, which the repository's Dependabot bumps (the Release tag workflow cuts a tag when the action changes; `dev/release-tag.sh`), so a cloud session can have the repository's GitHub App post `orchestrate/review` or merge without ever holding the App's key |
 
 ### Scripts
 
