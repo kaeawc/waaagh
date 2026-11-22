@@ -98,7 +98,7 @@ stub_spectra() {
 #!/usr/bin/env bash
 echo "$*" >>"$BATS_TEST_TMPDIR/spectra-calls"
 case "${1:-}" in
-  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"test","interfaces":[{"name":"load"},{"name":"orphans"},{"name":"jvm"},{"name":"idle"},{"name":"owner"}]}' ;;
+  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"dev+test","interfaces":[{"name":"load"},{"name":"orphans"},{"name":"jvm"},{"name":"idle"},{"name":"owner"}]}' ;;
   help) printf 'Subcommands:\n  load  x\n  orphans  x\n' ;;
   load)
     [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: load failed" >&2; exit 1; }

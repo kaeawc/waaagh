@@ -32,6 +32,8 @@ caps() {
   jq -n --args '{schema: {name: "spectra.capabilities", version: 1}, spectra_version: "1.2.3",
     interfaces: [$ARGS.positional[] | {name: ., output: "json"}]}' "$@" >"$B/caps.json"
 }
+# version V: rewrite the stub's spectra_version to V (null removes it).
+version() { jq --argjson v "$1" '.spectra_version = $v | if $v == null then del(.spectra_version) else . end' "$B/caps.json" >"$B/caps.tmp" && mv "$B/caps.tmp" "$B/caps.json"; }
 req() { bash -c 'source "$1/_lib.sh"; shift; orch_spectra_require "$@"' _ "$SCRIPTS" "$@"; }
 
 @test "a capability spectra declares is met, and capabilities are read once per process" {
@@ -56,13 +58,13 @@ req() { bash -c 'source "$1/_lib.sh"; shift; orch_spectra_require "$@"' _ "$SCRI
 @test "a missing capability is one named error with the install line" {
   run req load lineage spawns
   [ "$status" -eq 1 ]
-  [ "$output" = "spectra: $B/spectra lacks: lineage spawns. Update it; install spectra: brew install kaeawc/tap/spectra, or build it from https://github.com/kaeawc/spectra (make build)" ]
+  [ "$output" = "spectra: $B/spectra lacks: lineage spawns. Update it; install spectra 0.1.1 or newer: brew install kaeawc/tap/spectra, or build it from https://github.com/kaeawc/spectra (make build)" ]
 }
 
 @test "no spectra, or one without the capabilities contract, is an error, never a fallback" {
   SPECTRA="$BATS_TEST_TMPDIR/nope" run req load
   [ "$status" -eq 1 ]
-  [[ "$output" == "spectra: not found ($BATS_TEST_TMPDIR/nope). waaagh requires it; install spectra:"* ]]
+  [[ "$output" == "spectra: not found ($BATS_TEST_TMPDIR/nope). waaagh requires it; install spectra 0.1.1 or newer:"* ]]
   echo 'not json' >"$B/caps.json"
   run req load
   [ "$status" -eq 1 ]
@@ -71,6 +73,36 @@ req() { bash -c 'source "$1/_lib.sh"; shift; orch_spectra_require "$@"' _ "$SCRI
   run req load
   [ "$status" -eq 1 ]
   [[ "$output" == *"gave no capability list"* ]]
+}
+
+@test "a release below the minimum version is refused; the minimum, newer releases and dev builds are met" {
+  version '"0.1.0"'
+  run req load
+  [ "$status" -eq 1 ]
+  [[ "$output" == "spectra: $B/spectra is 0.1.0, below the required 0.1.1. install spectra 0.1.1 or newer:"* ]]
+  version '"v0.0.9"'
+  run req load
+  [ "$status" -eq 1 ]
+  version '"v0.1.1-rc1"'   # a prerelease ranks below its release
+  run req load
+  [ "$status" -eq 1 ]
+  # Releases at or above the minimum, git describe past one, and source builds: go build stamps
+  # dev..., make build stamps git describe, a bare hash when no tag is an ancestor.
+  for v in '"0.1.1"' '"v0.1.1"' '"0.2.0"' '"0.10.0"' '"1.0.0"' '"v0.1.1-3-gfa841fb"' '"v0.1.1-dirty"' \
+    '"0.2.0-rc1"' '"dev+fa841fba403f"' '"dev"' '"fa841fb"' '"fa841fb-dirty"'; do
+    version "$v"
+    run req load
+    [ "$status" -eq 0 ] || { echo "refused $v: $output"; false; }
+  done
+}
+
+@test "a missing or unparseable spectra version is refused" {
+  for v in null '""' '"garbage"' '"1.x"' '"fa84"' 7; do
+    version "$v"
+    run req load
+    [ "$status" -eq 1 ] || { echo "accepted $v"; false; }
+    [[ "$output" == *"gave no usable version"* ]]
+  done
 }
 
 @test "every spectra call in the scripts goes through orch_spectra" {

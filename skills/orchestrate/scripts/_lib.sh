@@ -325,8 +325,30 @@ orch_gh_priority() { export GH_BUDGET_PRIORITY="$1"; }
 # SPECTRA: the spectra binary (default `spectra` on PATH; tests point it at a stub).
 # A capability is met when `spectra capabilities --json` lists it. Until spectra declares its
 # diagnostic commands there (kaeawc/spectra#612), a subcommand that `spectra help` lists also meets it.
-ORCH_SPECTRA_INSTALL="install spectra: brew install kaeawc/tap/spectra, or build it from https://github.com/kaeawc/spectra (make build)"
+# The capabilities JSON's spectra_version must be a release at or above ORCH_SPECTRA_MIN_VERSION
+# (a leading v is allowed), or a local source build; anything else is refused.
+ORCH_SPECTRA_MIN_VERSION=0.1.1
+ORCH_SPECTRA_INSTALL="install spectra $ORCH_SPECTRA_MIN_VERSION or newer: brew install kaeawc/tap/spectra, or build it from https://github.com/kaeawc/spectra (make build)"
 _orch_spectra_caps="" _orch_spectra_help=""
+# orch_spectra_version_ok V: 0 when V is a source build or a release >= ORCH_SPECTRA_MIN_VERSION,
+# 1 when it is an older release, 2 when it is not a version at all. Source builds: `go build`
+# stamps dev..., `make build` stamps `git describe`, a bare commit hash when no tag is an ancestor.
+# After X.Y.Z, git describe's -N-g<hash>, -dirty and +build metadata keep the release's rank; any
+# other suffix is a prerelease (-rc1), which ranks below its release.
+orch_spectra_version_ok() {
+  local v=${1#v} i a b pre=0
+  [[ "$v" == dev* || "$v" =~ ^[0-9a-f]{7,40}(-dirty)?$ ]] && return 0
+  [[ "$v" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9]+-g[0-9a-f]+)?(-dirty)?(\+.*)?$ ]] ||
+    { pre=1; [[ "$v" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-[0-9A-Za-z.-]+(\+.*)?$ ]] || return 2; }
+  local -a have=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}") want
+  IFS=. read -r -a want <<<"$ORCH_SPECTRA_MIN_VERSION"
+  for i in 0 1 2; do
+    a=$((10#${have[i]})) b=$((10#${want[i]}))
+    ((a > b)) && return 0
+    ((a < b)) && return 1
+  done
+  return "$pre"
+}
 orch_spectra_bin() { echo "${SPECTRA:-spectra}"; }
 # orch_spectra_require CAP...: 0 when spectra runs and meets every CAP; otherwise one line on
 # stderr naming what is missing and how to install it, and 1. Each spectra read happens once per
@@ -339,10 +361,22 @@ orch_spectra_require() {
     return 1
   fi
   if [[ -z "$_orch_spectra_caps" ]]; then
-    _orch_spectra_caps=$("$bin" capabilities --json 2>/dev/null |
-      jq -r 'select(.schema.name == "spectra.capabilities") | .interfaces[]?.name' 2>/dev/null) || _orch_spectra_caps=""
+    local json ver rc=0
+    json=$("$bin" capabilities --json 2>/dev/null | jq -c 'select(.schema.name == "spectra.capabilities")' 2>/dev/null) || json=""
+    _orch_spectra_caps=$(jq -r '.interfaces[]?.name' <<<"$json" 2>/dev/null) || _orch_spectra_caps=""
     if [[ -z "$_orch_spectra_caps" ]]; then
       echo "spectra: $bin capabilities --json gave no capability list; waaagh needs a spectra with the capabilities contract. $ORCH_SPECTRA_INSTALL" >&2
+      return 1
+    fi
+    ver=$(jq -r '.spectra_version // "" | strings' <<<"$json" 2>/dev/null) || ver=""
+    orch_spectra_version_ok "$ver" || rc=$?
+    if ((rc != 0)); then
+      _orch_spectra_caps=""
+      if ((rc == 1)); then
+        echo "spectra: $bin is ${ver#v}, below the required $ORCH_SPECTRA_MIN_VERSION. $ORCH_SPECTRA_INSTALL" >&2
+      else
+        echo "spectra: $bin capabilities --json gave no usable version (${ver:-none}). $ORCH_SPECTRA_INSTALL" >&2
+      fi
       return 1
     fi
   fi

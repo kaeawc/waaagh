@@ -93,7 +93,7 @@ export ORCHESTRATE_NOW=1790510400
 cat >"$work/bin/spectra" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
-  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"bench","interfaces":[{"name":"load"}]}' ;;
+  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"dev+bench","interfaces":[{"name":"load"}]}' ;;
   load) echo '{"verdict":"admit","load1":0.5,"cpus":8,"available_gb":32,"cause":{"kind":"none","detail":"host is idle"},"top_cpu":[],"top_rss":[],"families":[]}' ;;
   *) echo "bench spectra stub: unexpected call: $*" >&2; exit 9 ;;
 esac
