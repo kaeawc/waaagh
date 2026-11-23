@@ -24,7 +24,7 @@ intake() {
 
 verdict_of() { # checks... -> the verdict and detail of one PR built from them
   printf '%s\n' "$@" | jq -s . >"$FX/checks.json"
-  pr_row 1 me false false MERGEABLE "$(cat "$FX/checks.json")" | jq -s . >"$FX/prs.json"
+  pr_row 1 me false false MERGEABLE "$(<"$FX/checks.json")" | jq -s . >"$FX/prs.json"
   "$SCRIPTS/pr-ready.sh" --repo o/r --no-threads 2>/dev/null | cut -f2,6
 }
 

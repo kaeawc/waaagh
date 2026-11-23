@@ -26,13 +26,13 @@ both() {
   [ "$(norm <<<"$gq")" = "$(norm <<<"$rs")" ] || { echo "rows differ:"; diff <(norm <<<"$gq") <(norm <<<"$rs") || true; cat "$FX/rs.err"; return 1; }
   [ "$(sum "$FX/gq.err")" = "$(sum "$FX/rs.err")" ] || { echo "summary: $(tail -1 "$FX/gq.err") | $(tail -1 "$FX/rs.err")"; return 1; }
   if [ "$gs" = 0 ]; then grep -q 'api=rest' "$FX/rs.err" || { echo "no api=rest"; return 1; }; fi
-  output="$rs"$'\n'"$(cat "$FX/rs.err")"
+  output="$rs"$'\n'"$(<"$FX/rs.err")"
   status=$rss
 }
 
 verdict_both() { # checks... -> both paths agree; prints the REST verdict and detail
   printf '%s\n' "$@" | jq -s . >"$FX/checks.json"
-  pr_row 1 me false false MERGEABLE "$(cat "$FX/checks.json")" | jq -s . >"$FX/prs.json"
+  pr_row 1 me false false MERGEABLE "$(<"$FX/checks.json")" | jq -s . >"$FX/prs.json"
   both --repo o/r --no-threads >/dev/null || return 1
   printf '%s\n' "$output" | awk -F'\t' '$1 == 1 { print $2 "\t" $6 }'
 }

@@ -110,20 +110,21 @@ repo=$(orch_repo "$repo")
 # The hold file (hold.sh) is the merge loop's list of holds: each one is skipped like --hold (#196).
 while IFS= read -r h; do [[ -z "$h" ]] || holds+=("$h"); done < <("$here/hold.sh" prs --repo "$repo" 2>/dev/null || true)
 # The latest internal review verdict gates selection too (#206): {"<pr>": "<verdict>"} for non-ship.
-reviews_json=$("$here/review-ledger.sh" blocked --repo "$repo" 2>/dev/null |
-  jq -Rsc 'split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries') || reviews_json='{}'
-
-json_list() { if (($#)); then jq -nc '$ARGS.positional' --args "$@"; else echo '[]'; fi; }
-authors_json=$(json_list "${authors[@]}")
-ignores_json=$(json_list ${ignores[@]+"${ignores[@]}"})
-holds_json=$(json_list ${holds[@]+"${holds[@]}"})
-excludes_json=$(json_list ${excludes[@]+"${excludes[@]}"})
+reviews_tsv=$("$here/review-ledger.sh" blocked --repo "$repo" 2>/dev/null) || reviews_tsv=""
+# The verdicts and the four argument lists as JSON, one per line, from one jq (#112).
+lists=$(jq -nc --arg rv "$reviews_tsv" --argjson na "${#authors[@]}" --argjson ni "${#ignores[@]}" \
+  --argjson nh "${#holds[@]}" '($rv | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries),
+    ($ARGS.positional | .[:$na], .[$na:$na + $ni], .[$na + $ni:$na + $ni + $nh], .[$na + $ni + $nh:])' \
+  --args "${authors[@]}" ${ignores[@]+"${ignores[@]}"} ${holds[@]+"${holds[@]}"} ${excludes[@]+"${excludes[@]}"})
+{ IFS= read -r reviews_json; IFS= read -r authors_json; IFS= read -r ignores_json; IFS= read -r holds_json
+  IFS= read -r excludes_json; } <<<"$lists"
 if [[ -n "$head_match" ]] && ! jq -en --arg re "$head_match" '"x" | test($re) | . or true' >/dev/null 2>&1; then
   echo "pr-ready.sh: --head-match is not a valid regex: $head_match" >&2; exit 2
 fi
 
 diag_dir="$(orch_state_dir "$repo")/diagnostics"
-diag="$diag_dir/pr-ready-$(orch_iso "$(orch_now)" | tr -d ':')-$$.log"
+diag_at=$(orch_iso "$(orch_now)")
+diag="$diag_dir/pr-ready-${diag_at//:/}-$$.log"
 mkdir -p "$diag_dir"
 note() { # record a read problem in a diagnostics file; the verdicts carry only its category
   mkdir -p "$diag_dir"
@@ -139,22 +140,25 @@ note() { # record a read problem in a diagnostics file; the verdicts carry only 
 # unknown counts as not strict, so BEHIND is then reported as READY and GitHub has the last word.
 policy=known required='[]' strict=no
 ghr() { "$here/gh-read.sh" --json -- "$@"; }   # bounded, typed, read-only
+# One jq per read (#112): the required checks, a tab, then whether the read says strict.
 if out=$(ghr api "repos/$repo/rules/branches/$base" 2>>"$diag") &&
-  r=$(jq -ce 'if type == "array" then [.[] | select(.type == "required_status_checks")
-              | .parameters.required_status_checks[].context] else error("not an array") end' <<<"$out" 2>/dev/null); then
-  required=$r
-  [[ "$(jq -r 'any(.[]; .type == "required_status_checks"
-    and .parameters.strict_required_status_checks_policy == true)' <<<"$out" 2>/dev/null)" != true ]] || strict=yes
+  r=$(jq -re 'if type == "array" then ([.[] | select(.type == "required_status_checks")
+              | .parameters.required_status_checks[].context] | tojson) + "\t"
+              + (try any(.[]; .type == "required_status_checks"
+                  and .parameters.strict_required_status_checks_policy == true) catch false | tostring)
+              else error("not an array") end' <<<"$out" 2>/dev/null); then
+  required=${r%%$'\t'*}
+  [[ "${r#*$'\t'}" != true ]] || strict=yes
 else
   policy=unknown; note "rulesets read failed for $base: ${out:0:500}"
 fi
 if out=$(ghr api "repos/$repo/branches/$base" 2>>"$diag") &&
-  r=$(jq -ce --argjson a "$required" 'if type == "object" and has("protected") then
-                $a + ((.protection.required_status_checks // {}) | [(.contexts // [])[], ((.checks // [])[] | .context)])
-                | unique
+  r=$(jq -re --argjson a "$required" 'if type == "object" and has("protected") then
+                ($a + ((.protection.required_status_checks // {}) | [(.contexts // [])[], ((.checks // [])[] | .context)])
+                 | unique | tojson) + "\t" + (.protected == true | tostring)
               else error("no protected field") end' <<<"$out" 2>/dev/null); then
-  required=$r
-  if [[ "$strict" == no && "$(jq -r '.protected == true' <<<"$out" 2>/dev/null)" == true ]] &&
+  required=${r%%$'\t'*}
+  if [[ "$strict" == no && "${r#*$'\t'}" == true ]] &&
     out=$(ghr api "repos/$repo/branches/$base/protection/required_status_checks" 2>/dev/null) &&
     [[ "$(jq -r 'type == "object" and .strict == true' <<<"$out" 2>/dev/null)" == true ]]; then
     strict=yes
@@ -175,7 +179,7 @@ for ((li = 0; li < ${#limits[@]}; li++)); do
   rc=0
   prs=$("$here/gh-read.sh" --json --tries "$tries" -- pr list --repo "$repo" --state open --limit "$lim" \
     --json "$fields" 2>"$diag_dir/.prlist-$$") || rc=$?
-  err=$(cat "$diag_dir/.prlist-$$" 2>/dev/null || true); rm -f "$diag_dir/.prlist-$$"
+  err=""; [[ ! -r "$diag_dir/.prlist-$$" ]] || err=$(<"$diag_dir/.prlist-$$"); rm -f "$diag_dir/.prlist-$$"
   if ((rc == 0)); then list_limit=$lim; break; fi
   if orch_gh_refused "$rc" "$err"; then api=rest; break; fi
   note "PR list at limit $lim unreadable (exit $rc): ${err:0:500}"

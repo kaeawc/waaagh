@@ -235,18 +235,19 @@ fi
 pr_view state,isDraft,isCrossRepository,headRefOid,baseRefName,author,mergeable ||
   { echo "unverified: PR $pr could not be read; nothing was attempted"; exit 9; }
 info=$got
-ok=$(jq -r --arg head "$head" --args '
-  .state == "OPEN" and (.isDraft | not) and (.isCrossRepository | not)
-  and (.headRefOid | startswith($head)) and (.mergeable != "CONFLICTING")
-  and (.author.login as $a | $ARGS.positional | index($a) != null)' "${authors[@]}" <<<"$info")
+# Eligibility, the full head and the base in one jq (#112), separated by US (\x1f).
+elig=$(jq -r --arg head "$head" --args '[
+  (.state == "OPEN" and (.isDraft | not) and (.isCrossRepository | not)
+   and (.headRefOid | startswith($head)) and (.mergeable != "CONFLICTING")
+   and (.author.login as $a | $ARGS.positional | index($a) != null)),
+  .headRefOid, (.baseRefName // "")] | map(tostring) | join("\u001f")' "${authors[@]}" <<<"$info")
+IFS=$'\x1f' read -r ok full pbase <<<"$elig"
 if [[ "$ok" != true ]]; then
   echo "ineligible: $(jq -c '{state,isDraft,isCrossRepository,head:.headRefOid[0:9],author:.author.login,mergeable}' <<<"$info")"
   log "refused ineligible"
   exit 3
 fi
 
-full=$(jq -r .headRefOid <<<"$info")
-pbase=$(jq -r '.baseRefName // empty' <<<"$info")
 refuse_if_held
 
 if [[ "$admin" == yes || "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
@@ -402,10 +403,12 @@ while :; do
     exit 9
   fi
   after=$got
-  final=$(jq -r '"\(.state) \(.mergeCommit.oid // "-")"' <<<"$after")
+  # State and merge commit, head (or "" / "-" when absent) and queued, in one jq (#112).
+  readback=$(jq -r '["\(.state) \(.mergeCommit.oid // "-")", (.headRefOid // ""), (.headRefOid // "-"),
+    (.autoMergeRequest != null)] | map(tostring) | join("\u001f")' <<<"$after")
+  IFS=$'\x1f' read -r final after_head after_now after_queued <<<"$readback"
   # Only a still-OPEN PR at the judged head, not queued, can be pending.
-  [[ "$final" == OPEN* && "$(jq -r '.headRefOid // ""' <<<"$after")" == "$full" &&
-    "$(jq -r '.autoMergeRequest != null' <<<"$after")" != true ]] || break
+  [[ "$final" == OPEN* && "$after_head" == "$full" && "$after_queued" != true ]] || break
   kind=$(pending_kind)
   [[ -n "$kind" ]] || break
   src=0
@@ -435,13 +438,13 @@ if [[ "$final" == MERGED* ]]; then
       echo "warning: merged PR $pr without a review but the unreviewed-merges ledger write failed" >&2
   fi
   echo "merged $pr ${final#MERGED }"
-elif [[ "$(jq -r '.headRefOid // ""' <<<"$after")" != "$full" ]]; then
-  now=$(jq -r '.headRefOid // "-"' <<<"$after")
+elif [[ "$after_head" != "$full" ]]; then
+  now=$after_now
   jset rejected "head moved to $now"
   log "refused head moved during merge to ${now:0:9}: $out"
   echo "head moved during merge: judged ${full:0:9}, now ${now:0:9}; re-judge it"
   exit 3
-elif [[ "$final" == OPEN* ]] && { [[ "$(jq -r '.autoMergeRequest != null' <<<"$after")" == true ]] ||
+elif [[ "$final" == OPEN* ]] && { [[ "$after_queued" == true ]] ||
   { ((rc == 0)) && grep -qiE 'queue|auto-?merge|will be (automatically )?merged' "$diag"; }; }; then
   jset queued "$out"
   log "queued on GitHub: $out"

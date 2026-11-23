@@ -127,3 +127,12 @@ author() { (source "$SCRIPTS/_lib.sh" && orch_author); }
   [ "$output" = carol ]
   [ "$(gh_calls)" = 4 ]
 }
+
+@test "orch_iso gives jq's answer on both paths, including inputs printf reads differently (#112)" {
+  source "$SCRIPTS/_lib.sh"
+  for t in 0 1 86400 1764000000 -1 -2 -86400 0123 08 09 1.5; do
+    want=$(jq -rn --argjson t "$t" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")')
+    got=$(orch_iso "$t")
+    [ "$got" = "$want" ] || { echo "orch_iso $t: got $got, want $want"; return 1; }
+  done
+}

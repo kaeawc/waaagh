@@ -25,30 +25,29 @@ all="$*"
 echo "$all" >>"$FX/calls"
 head_of() {
   if [ -f "$FX/stale-head" ]; then cat "$FX/stale-head"; return; fi
-  git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify "refs/heads/$(cat "$FX/branch")" || echo none
+  git -C "$BATS_TEST_TMPDIR/origin.git" rev-parse -q --verify "refs/heads/$(<"$FX/branch")" || echo none
 }
 case "$all" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   *rules/branches*) echo '[]' ;;
   "api repos/o/r/branches/"*) echo '{"protected":false}' ;;
-  *graphql*) jq -n --argjson t "$(cat "$FX/threads.json")" '{data: {repository: {p5: {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: $t}}}}}' ;;
+  *graphql*) printf '{"data":{"repository":{"p5":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":%s}}}}}\n' "$(<"$FX/threads.json")" ;;
   "api repos/o/r/actions/runs?"*) jq '{workflow_runs: map({name: .workflowName, status, conclusion, head_sha: .headSha, id: .databaseId, created_at: .createdAt})}' "$FX/runs.json" ;;
   "pr list"*"--state merged"*) cat "$FX/merged-prs.json" 2>/dev/null || echo '[]' ;;
   "pr list"*--head*) [ ! -f "$FX/list-fails-$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/')" ] || { echo "HTTP 502" >&2; exit 1; }
     rm -f "$FX/merged"; b=$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/'); echo "$b" >>"$FX/order"; echo "$b" >"$FX/branch"
-    jq -n --arg h "$(head_of)" '[{number: 5, headRefOid: $h}]' ;;
-  "pr list"*) jq -n --arg h "$(head_of)" --argjson c "$(cat "$FX/checks.json")" --arg m "$(cat "$FX/mergeable")" \
-    '[{number: 5, author: {login: "me"}, isDraft: false, isCrossRepository: false, baseRefName: "main",
-       headRefOid: $h, mergeable: $m, labels: [], statusCheckRollup: $c}]' ;;
+    printf '[{"number":5,"headRefOid":"%s"}]\n' "$(head_of)" ;;
+  "pr list"*) printf '[{"number":5,"author":{"login":"me"},"isDraft":false,"isCrossRepository":false,"baseRefName":"main","headRefOid":"%s","mergeable":"%s","labels":[],"statusCheckRollup":%s}]\n' \
+    "$(head_of)" "$(<"$FX/mergeable")" "$(<"$FX/checks.json")" ;;
   "pr merge"*) want=$(echo "$all" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')
     [ "$want" = "$(head_of)" ] || { echo "Head branch was modified"; exit 1; }
     echo MERGED >"$FX/merged"
     [ "$(cat "$FX/merge-mode" 2>/dev/null)" != no-readback ] || echo 3 >"$FX/view-fails" ;;
-  "pr view"*) if [ -s "$FX/view-fails" ] && [ "$(cat "$FX/view-fails")" -gt 0 ]; then
-      echo $(($(cat "$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
+  "pr view"*) if [ -s "$FX/view-fails" ] && [ "$(<"$FX/view-fails")" -gt 0 ]; then
+      echo $(($(<"$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
     if [ -f "$FX/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}';
-    else jq -n --arg h "$(head_of)" --arg m "$(cat "$FX/mergeable")" '{state: "OPEN", isDraft: false, isCrossRepository: false,
-      headRefOid: $h, author: {login: "me"}, mergeable: $m}'; fi ;;
+    else printf '{"state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":"%s","author":{"login":"me"},"mergeable":"%s"}\n' \
+      "$(head_of)" "$(<"$FX/mergeable")"; fi ;;
   *) echo "unexpected gh call: $all" >&2; exit 9 ;;
 esac
 STUB

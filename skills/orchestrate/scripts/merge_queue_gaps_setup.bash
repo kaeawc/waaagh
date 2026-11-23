@@ -48,13 +48,12 @@ case "$all" in
   "api repos/o/r/compare/"*) cat "$FX/behind" 2>/dev/null || echo 1 ;;
   "pr list"*"--state merged"*) [ ! -f "$FX/merged-list-fails" ] || { echo "HTTP 502" >&2; exit 1; }; echo '[]' ;;
   "pr list"*--head*) b=$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/'); echo "$b" >"$FX/branch"
-    if [ -f "$FX/open-empty" ]; then echo '[]'; else jq -n --arg h "$(head_of)" '[{number: 5, headRefOid: $h}]'; fi ;;
+    if [ -f "$FX/open-empty" ]; then echo '[]'; else printf '[{"number":5,"headRefOid":"%s"}]\n' "$(head_of)"; fi ;;
   "pr list"*"--json number") echo '[{"number":5}]' ;;
   "pr list"*) echo x >>"$FX/ready-calls"; n=$(wc -l <"$FX/ready-calls" | tr -d ' ')
     c="$FX/checks.json"; [ ! -f "$FX/checks-$n.json" ] || c="$FX/checks-$n.json"
-    jq -n --arg h "$(head_of)" --argjson c "$(cat "$c")" --argjson l "$(cat "$FX/labels.json")" \
-      '[{number: 5, author: {login: "me"}, isDraft: false, isCrossRepository: false, baseRefName: "main",
-         headRefOid: $h, mergeable: "MERGEABLE", labels: $l, statusCheckRollup: $c}]' ;;
+    printf '[{"number":5,"author":{"login":"me"},"isDraft":false,"isCrossRepository":false,"baseRefName":"main","headRefOid":"%s","mergeable":"MERGEABLE","labels":%s,"statusCheckRollup":%s}]\n' \
+      "$(head_of)" "$(<"$FX/labels.json")" "$(<"$c")" ;;
   "pr comment"*) [ ! -f "$FX/comment-fails" ] || { echo "HTTP 502" >&2; exit 1; } ;;
   "pr create"*) [ ! -f "$FX/create-fails" ] || { echo "GraphQL: something went wrong" >&2; exit 1; } ;;
   "pr merge"*) case "$(cat "$FX/merge-mode" 2>/dev/null)" in
@@ -63,12 +62,11 @@ case "$all" in
       reject) echo "Pull request is not mergeable: base branch policy prohibits the merge" >&2; exit 1 ;;
       *) echo MERGED >"$FX/merged" ;;
     esac ;;
-  "pr view"*) if [ -s "$FX/view-fails" ] && [ "$(cat "$FX/view-fails")" -gt 0 ]; then
-      echo $(($(cat "$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
+  "pr view"*) if [ -s "$FX/view-fails" ] && [ "$(<"$FX/view-fails")" -gt 0 ]; then
+      echo $(($(<"$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
     if [ -f "$FX/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}'
-    else jq -n --arg h "$(head_of)" --arg auto "$([ -f "$FX/auto" ] && echo yes)" '{state: "OPEN", isDraft: false,
-      isCrossRepository: false, headRefOid: $h, author: {login: "me"}, mergeable: "MERGEABLE",
-      autoMergeRequest: (if $auto == "yes" then {enabledAt: "2026-09-27T12:00:00Z"} else null end)}'; fi ;;
+    else auto=null; [ ! -f "$FX/auto" ] || auto='{"enabledAt":"2026-09-27T12:00:00Z"}'
+      printf '{"state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":"%s","author":{"login":"me"},"mergeable":"MERGEABLE","autoMergeRequest":%s}\n' "$(head_of)" "$auto"; fi ;;
   *) echo "unexpected gh call: $all" >&2; exit 9 ;;
 esac
 STUB

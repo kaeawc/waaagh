@@ -176,8 +176,8 @@ case "$a" in
     esac
     echo '{"sha":"feedface","merged":true,"message":"Pull Request successfully merged"}' ;;
   "api repos/o/r/pulls/"*)
-    if [ -s "$FX/rest-view-fails" ] && [ "$(cat "$FX/rest-view-fails")" -gt 0 ]; then
-      echo $(($(cat "$FX/rest-view-fails") - 1)) >"$FX/rest-view-fails"; echo "gh: HTTP 502: Bad Gateway" >&2; exit 1; fi
+    if [ -s "$FX/rest-view-fails" ] && [ "$(<"$FX/rest-view-fails")" -gt 0 ]; then
+      echo $(($(<"$FX/rest-view-fails") - 1)) >"$FX/rest-view-fails"; echo "gh: HTTP 502: Bad Gateway" >&2; exit 1; fi
     n=${a#api repos/o/r/pulls/}
     if [ -f "$FX/view-$n.json" ]; then jq "$REST"'rest' "$FX/view-$n.json"
     else one=$(jq -c --argjson n "$n" "$REST"'map(select(.number == $n)) | first // empty | rest' "$FX/prs.json"); [ -n "$one" ] || nf; echo "$one"; fi ;;
