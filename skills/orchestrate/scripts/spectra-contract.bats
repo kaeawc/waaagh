@@ -180,28 +180,33 @@ check() { "$CHECK" --spectra "$B/spectra" --root "$W" --contract "$C" "$@"; }
   [ -n "$install" ]
   [ -n "$contract" ]
   [ "$contract" -gt "$install" ]
-  grep -q 'SPECTRA_VERSION: v0.1.1' "$WF"
+  grep -q 'SPECTRA_VERSION: v0.1.2' "$WF"
 }
 
 # --- schema majors in orch_spectra_require ----------------------------------------------------------
 
 # caps_with NAME=SCHEMA@MAJOR...: the stub's capabilities --json, with those interfaces.
 caps_with() {
-  jq -n --args '{schema: {name: "spectra.capabilities", version: 1}, spectra_version: "0.1.1",
+  jq -n --args '{schema: {name: "spectra.capabilities", version: 1}, spectra_version: "0.1.2",
     interfaces: [$ARGS.positional[] | capture("^(?<n>[^=]+)=(?<s>[^@]+)@(?<v>[0-9]+)$")
       | {name: .n, output: "json", result_schema: {name: .s, version: (.v | tonumber)}}]}' "$@" >"$B/capabilities.json"
 }
 req() { SPECTRA="$B/spectra" bash -c 'source "$1/_lib.sh"; shift; orch_spectra_require "$@"' _ "$SCRIPTS" "$@"; }
 
 @test "the schema majors waaagh reads are met; another major of a required capability is refused" {
-  caps_with load=spectra.load@1 orphans=spectra.orphans@1 owner=spectra.owner@1 owner.under=spectra.owner.under@1 idle=spectra.idle@1
-  run req load orphans owner idle
+  caps_with load=spectra.load@1 orphans=spectra.orphans@1 owner=spectra.owner@1 owner.under=spectra.owner.under@1 idle=spectra.idle@1 devices=spectra.devices@1
+  run req load orphans owner idle devices
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+  # device-lock.sh reads spectra.devices v1 (#369).
+  caps_with devices=spectra.devices@2
+  run req devices
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"spectra.devices v2 (waaagh reads v1)"* ]]
   caps_with load=spectra.load@2 orphans=spectra.orphans@1 owner=spectra.owner@1 owner.under=spectra.owner.under@1
   run req load
   [ "$status" -eq 1 ]
-  [[ "$output" == "spectra: $B/spectra speaks a schema waaagh does not know: spectra.load v2 (waaagh reads v1). Update waaagh, or install a spectra it supports; install spectra 0.1.1 or newer:"* ]]
+  [[ "$output" == "spectra: $B/spectra speaks a schema waaagh does not know: spectra.load v2 (waaagh reads v1). Update waaagh, or install a spectra it supports; install spectra 0.1.2 or newer:"* ]]
   # A script that needs only orphans is not stopped by the load schema it does not read.
   run req orphans
   [ "$status" -eq 0 ]
@@ -221,7 +226,7 @@ req() { SPECTRA="$B/spectra" bash -c 'source "$1/_lib.sh"; shift; orch_spectra_r
   run req load
   [ "$status" -eq 1 ]
   [[ "$output" == *"spectra.capabilities v2 (waaagh reads v1)"* ]]
-  jq -n '{schema: {name: "spectra.capabilities", version: 1}, spectra_version: "0.1.1", interfaces: [{name: "load"}, {name: "version", output: "text"}]}' >"$B/capabilities.json"
+  jq -n '{schema: {name: "spectra.capabilities", version: 1}, spectra_version: "0.1.2", interfaces: [{name: "load"}, {name: "version", output: "text"}]}' >"$B/capabilities.json"
   run req load version
   [ "$status" -eq 0 ]
 }

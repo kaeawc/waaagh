@@ -31,7 +31,7 @@ jobs:
       # every capability the scripts use, minimum version included.
       - name: Install and check spectra
         env:
-          SPECTRA_VERSION: v0.1.1
+          SPECTRA_VERSION: v0.1.2
         run: |
           d="$RUNNER_TEMP/spectra" && mkdir -p "$d" && cd "$d"
           base="https://github.com/kaeawc/spectra/releases/download/$SPECTRA_VERSION"

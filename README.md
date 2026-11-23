@@ -21,7 +21,7 @@ Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this re
 ### Requirements
 
 - `gh` (authenticated), `jq`, `git`; `jj` is supported when the checkout is colocated
-- [spectra](https://github.com/kaeawc/spectra) v0.1.1 or newer (`spectra` and `spectra-mcp` on `PATH`; a build from source also counts): every
+- [spectra](https://github.com/kaeawc/spectra) v0.1.2 or newer (`spectra` and `spectra-mcp` on `PATH`; a build from source also counts): every
   host-level check (load and its cause, process attribution, leftover processes, booted devices)
   comes from it, and the plugin registers `spectra-mcp` as an MCP server (`.mcp.json`). It is
   required: a script that needs it stops with a named error when it is missing. Install it with

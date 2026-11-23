@@ -18,8 +18,11 @@
 #            claim); prints "recorded <id,...>"; exit 4 when T does not hold a live lock
 #   check    run before every adb or simctl command: exit 0 ("owned <ID> by <who>") only when a
 #            live lock is held by WHO (or token T) and lists ID as its device; with --avd,
-#            `adb -s ID emu avd name` must also end with SUFFIX; with --simulator, `xcrun simctl
-#            list devices` must list ID. Otherwise prints "not owned: <reason>", exit 4
+#            `spectra devices` must list ID among adb's devices (when its adb status is not ok, adb
+#            is asked instead) and `adb -s ID emu avd name` must also end with SUFFIX; with
+#            --simulator, `spectra devices` must list ID as booted, else `xcrun simctl list devices`
+#            must list it (a simulator not yet booted). --avd and --simulator need spectra (#369).
+#            Otherwise prints "not owned: <reason>", exit 4
 # Exit codes: 0 ok, 2 usage, 3 held by another agent (claim) or guard busy, 4 not the holder or
 # not owned (record, check).
 # Lock file: line 1 "<pid> <ISO-8601 UTC timestamp> <name>" (an epoch timestamp is also read; this
@@ -185,12 +188,29 @@ case "$cmd" in
     if [[ ",$h_devs," != *",$dev,"* ]]; then
       echo "not owned: $dev is not a device of $h_name (recorded: ${h_devs:-none})"; exit 4
     fi
+    if [[ -n "$avd" ]] || ((sim)); then
+      # Which devices the host has comes from spectra (#369); its error names what is missing.
+      orch_spectra_require devices || { echo "not owned: spectra cannot list the host's devices"; exit 4; }
+      # spectra exits non-zero with a verdict; its JSON is the answer.
+      djson=$(orch_spectra devices --json 2>/dev/null || true)
+      # dev_status SECTION: spectra's status for that probe (ok, not_found, server_not_running, ...).
+      dev_status() { jq -r --arg s "$1" '.[$s].status // "" | strings' <<<"$djson" 2>/dev/null || true; }
+    fi
     if [[ -n "$avd" ]]; then
+      # With its adb status not ok (server_not_running: spectra does not start one), adb below decides.
+      if [[ "$(dev_status android)" == ok ]] &&
+        ! jq -e --arg d "$dev" 'any(.android.devices[]?; .serial == $d)' <<<"$djson" >/dev/null 2>&1; then
+        echo "not owned: spectra lists no Android device $dev"; exit 4
+      fi
+      # The AVD name comes from adb until spectra reports it (kaeawc/spectra#704).
       got=$(adb -s "$dev" emu avd name 2>/dev/null | sed -n '1{s/\r$//;p;}' || true)
       [[ -n "$got" ]] || { echo "not owned: adb could not read the AVD name of $dev"; exit 4; }
       [[ "$got" == *"$avd" ]] || { echo "not owned: $dev runs AVD $got, not *$avd"; exit 4; }
     fi
-    if ((sim)); then
+    if ((sim)) && ! { [[ "$(dev_status ios_simulators)" == ok ]] &&
+      jq -e --arg d "$dev" 'any(.ios_simulators.booted[]?; .udid == $d)' <<<"$djson" >/dev/null 2>&1; }; then
+      # spectra lists only booted simulators (kaeawc/spectra#704), and check also runs before
+      # `simctl boot`: a simulator it does not list as booted is looked up with simctl.
       list=$(xcrun simctl list devices 2>/dev/null || true)
       [[ "$list" == *"$dev"* ]] || { echo "not owned: simctl lists no simulator $dev"; exit 4; }
     fi
