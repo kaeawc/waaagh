@@ -56,10 +56,14 @@
 #       host <ADMIT|HOLD|BACKOFF> cause=<indexing|lanes|other|-> free_gb=<g|unknown> load=<l> limit=<x>
 #            | host unknown      lane admission on this host (host-load.sh --top 3; the command is
 #                  ORCHESTRATE_HOST_LOAD, default host-load.sh beside this script)
-#       orphans <n> worktrees=<name>(<n>)[,...]|- | orphans unknown
+#       orphans <n> worktrees=<name>(<n>)[,...]|- [started-by=<name>:<who>[+<who>][,...]] | orphans unknown
 #                  leftover processes under the lane worktrees (spectra orphans --root <worktree
 #                  root>, #332): parent gone, cwd in a worktree; by-design daemons left out. A
 #                  removed worktree is named <name>(removed:<n>). Evidence only: nothing here kills.
+#                  started-by= (v0.1.1+, only when the spectra daemon recorded it) names who started
+#                  the leftovers of each worktree: <who> is <role|command>#<pid>(alive|exited), the
+#                  nearest agent, else session, else parent from each process's origin; groups with
+#                  no known origin are left out. Everything before started-by= keeps its old form.
 #                  Omitted with no worktree root; "unknown" when spectra is missing or fails.
 #       slot-stalled <pool> pid=<p> held=<m>m label=<l> | slot-stalled unknown pids=<p>,...
 #                  one line per held gate, heavy or boot slot older than
@@ -568,9 +572,15 @@ if wtroot=$(orch_worktree_root); then
   if orch_spectra_require orphans 2>/dev/null; then
     oj=$(orch_spectra orphans --json --root "$wtroot" 2>/dev/null) || true   # exit 3: some found
     o=$(jq -r '(.groups | arrays) as $g
-      | [$g[] | {w: .worktree, rm: (.worktree_removed // false), n: ([.processes[]? | select(.daemon_by_design | not)] | length)} | select(.n > 0)] as $l
+      | def who: (.origin // {}) as $o
+          | if $o.known then ($o.agent // $o.session // $o.parent) else null end
+          | select(. != null)
+          | "\(.role // ((.command // "?") | split("/") | last))#\(.pid)(\(if .alive then "alive" else "exited" end))";
+      [$g[] | {w: .worktree, rm: (.worktree_removed // false), n: ([.processes[]? | select(.daemon_by_design | not)] | length),
+               s: ([.processes[]? | select(.daemon_by_design | not) | who] | unique)} | select(.n > 0)] as $l
       | "orphans \($l | map(.n) | add // 0) worktrees=" + (if ($l | length) == 0 then "-"
-          else ($l | map(if .rm then "\(.w)(removed:\(.n))" else "\(.w)(\(.n))" end) | join(",")) end)' <<<"$oj" 2>/dev/null) || o=""
+          else ($l | map(if .rm then "\(.w)(removed:\(.n))" else "\(.w)(\(.n))" end) | join(",")) end)
+        + ([$l[] | select(.s | length > 0) | "\(.w):\(.s | join("+"))"] | if length > 0 then " started-by=" + join(",") else "" end)' <<<"$oj" 2>/dev/null) || o=""
     [[ -z "$o" ]] || orphans=$o
   fi
   case "$orphans" in "orphans 0 "* | "orphans unknown") ;; *) reasons+=("orphans=$(cut -d' ' -f2 <<<"$orphans")") ;; esac
