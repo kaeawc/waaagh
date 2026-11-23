@@ -8,7 +8,8 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/lane-safety.sh",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "block"
           }
         ]
       }

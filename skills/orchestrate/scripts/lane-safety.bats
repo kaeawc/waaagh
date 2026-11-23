@@ -439,6 +439,8 @@ pkill x'"; allowed
 
 @test "the plugin wires the hook and the doctrine names every rule" {
   jq -e '.hooks.PreToolUse[] | select(.matcher | split("|") | any(. == "Bash")) | .hooks[] | select(.command == "${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/lane-safety.sh")' "$ROOT/hooks/hooks.json" >/dev/null
+  # A hook that fails or times out blocks the call instead of letting it through (#388).
+  jq -e '.hooks.PreToolUse[].hooks[] | select(.command | endswith("/lane-safety.sh")) | select(.onFailure == "block")' "$ROOT/hooks/hooks.json" >/dev/null
   [ -x "$SCRIPTS/lane-safety.sh" ]
   doc="$ROOT/skills/orchestrate/lane-safety.md"
   for s in "git worktree remove" "avdmanager delete avd -n" "xcrun simctl delete <udid>" \

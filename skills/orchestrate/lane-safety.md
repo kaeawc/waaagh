@@ -47,6 +47,13 @@ command (quotes, comments and heredoc bodies are data; `bash -c`, `eval`, `$(…
 |---|---|---|
 | `rm -r` / `find -delete` on `/`, `$HOME`, `~/Library`, `~/.gradle`, `~/.android`, the SDK (`$ANDROID_HOME`), system dirs, `$WAAAGH_PROTECTED_PATHS`, or an ancestor of one | deny | deny |
 | `rm -r` outside the worktree and temp dirs, on the worktree itself, or on a path built from a variable | allow | deny |
+| `rm` without `-r`, `unlink` on a protected root itself (`rm ~`, `rm -f ~/.ssh`) | deny | deny |
+| `rm` without `-r`, `unlink` of a file outside the worktree and temp dirs (a file below a protected root counts as a write: `rm -f ~/.ssh/known_hosts`) | allow | deny |
+| `ln` (any form) whose link, or whose target, lies outside the worktree, temp dirs and the state dir; a relative symlink target resolves from the link's directory (`ln -s <checkout> nl` is refused when made, so `ln -s <checkout> nl && echo x > nl/f` cannot pass) | allow | deny |
+| a write through a symlink whose real target lies outside (`echo x > <lane>/hm/.bashrc` with `hm -> $HOME`); a target under `/dev`, a temp dir or an allowed root stays allowed | allow | deny |
+| a glob in any path part (`rm -rf <lane>/*/.ssh`, `echo x > <lane>/s*/../README`): every match is judged; more than 100 matches in one command | as each match; ask | as each match; deny |
+| a brace expansion (`rm -rf {~,zz}`, `touch {../../..,zz}/README`): every word is judged; more than 100 words, braces around a variable the hook cannot spell out, a quoted or escaped brace or comma beside one (`rm -rf {hm/.ssh,'{'}`), or a word over 4096 characters or 64 braces | as each word; ask | as each word; deny |
+| a glob with more than 2 globbed path parts (`echo x > /System/*/*/*/*/x`), or unquoted zsh glob syntax in a write, delete, `ln` or `cd` operand (`h(m\|x)`, `(hm)`, `^`, `**/`, a `#` after a glob character, a `~` past the start; a quoted `'out/a (1).txt'`, a lone `#` as in `out/b#1` and `out/**`, which both shells read as `out/*`, are plain words): refused unexpanded, as is what is left once the hook has spent 3 seconds expanding | ask | deny |
 | `pkill`, `killall`, `xargs kill`, `kill` fed by `pgrep`/`pidof`/`lsof`/`ps`, `kill -1` | deny | deny |
 | quitting, killing or opening Simulator.app; `simctl shutdown/erase/delete all` | deny | deny |
 | `adb kill-server`; `adb emu kill` without `-s` | deny | deny |
@@ -75,7 +82,20 @@ rather than denials. Temp dirs are `/tmp`, `/private/tmp`, `/var/folders` and
 The hook follows `cd` the way the shell does: `..` in a `cd` argument is applied by text against
 the logical working directory, and only `cd -P` resolves symlinks. Paths given to writes and
 deletes are judged by where they really lead, symlinks and `..` included, so a link inside the lane
-cannot reach the orchestrator's checkout (#380). After `popd`, a `pushd` other than `pushd DIR`,
+cannot reach the orchestrator's checkout (#380); writes are judged by their real target through
+a symlink as well, and an `ln` by its target, so a link made and used in one command cannot leave
+the lane either (#384). A glob is expanded the way the shell expands it, against the working
+directory, and every match is judged; a glob that matches nothing is judged as written. The
+literal word is judged first, and a word already refused is never expanded: a hook that runs past
+its 10-second timeout does not block, so a glob that could walk the disk is refused before it runs
+(#387). Behind those bounds, a deadline holds for the whole hook (#388): the checks run in a worker
+process, and if they have not decided after 6 seconds the hook stops the worker and fails closed,
+with "the check took too long; split the command or name the paths" (deny in a known lane or for a
+subagent's call, ask otherwise). And `hooks/hooks.json` sets `"onFailure": "block"` on the hook
+(Claude Code v2.1.295 or later), so a hook that fails or times out blocks the call instead of
+letting it through. Brace expansion is done by the hook itself, by bash's rule, without running anything. A
+glob or brace in a `cd` target counts when it makes exactly one directory; otherwise the working
+directory is unknown for the rest of the command. `ln -tDIR` and `ln -sfTtDIR` read DIR as `-t DIR`. After `popd`, a `pushd` other than `pushd DIR`,
 `cd -`, `cd ±N`, or a `cd` given both `-L` and `-P`, the working directory is unknown for the
 rest of the command: relative write and delete operands are denied, so use absolute paths, or
 `cd` to an absolute path first.
