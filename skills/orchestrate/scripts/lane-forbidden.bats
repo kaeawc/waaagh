@@ -154,6 +154,114 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   done_
 }
 
+@test "a .. after a symlink in the nested lane climbs from the link's target, as the OS does (#380)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/sub/inner" "$MAIN/src"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  for c in "echo x > $NEST/sl/../README" "rm -rf $NEST/sl/../src" "echo x > sl/../README" \
+    "cd sl && echo x > ../README" "echo x > $NEST/sl/inner/../../README"; do
+    expect deny Bash "$c" "$NEST" agent-3 "orchestrator's checkout"
+  done
+  expect deny Write "$NEST/sl/../README" "$NEST" agent-3 "orchestrator's checkout"
+  # A .. through no symlink, or one that climbs back to the same place, stays lexical.
+  mkdir -p "$NEST/src/a"
+  expect allow Bash "echo x > $NEST/src/a/../f" "$NEST" agent-3
+  expect allow Bash "echo x > $NEST/sl/../.claude/worktrees/l1/f" "$NEST" agent-3
+  done_
+}
+
+@test "a cd target's .. is logical, as the shell applies it; cd -P is physical (#380)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/sub" "$MAIN/src" "$T/scratch/a/b/c/d"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$T/scratch/a/b/c/d" "$NEST/esc"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  # esc/.. is the lane, not $T/scratch/a/b/c: four .. from esc land in the checkout.
+  for c in "cd esc/../../../.. && rm -rf src" "cd esc && cd ../../../.. && rm -rf src" \
+    "cd esc && cd ../../../.. && echo x > README" "cd esc/../../../.. && echo x > README" \
+    "pushd esc/../../../.. && rm -rf src" "cd -P sl/.. && echo x > README" "cd -P sl/.. && rm -rf src" \
+    "cd sl && echo x > ../README"; do
+    expect deny Bash "$c" "$NEST" agent-3 "orchestrator's checkout"
+  done
+  # sl/.. is the lane: these act inside it. A file operand still walks as the OS does.
+  for c in "cd sl/.. && rm -rf src" "cd sl && cd .. && echo x > f" "cd sl/.. && echo x > f" \
+    "cd -P esc && cd .. && rm -rf x" "cd esc && echo x > f" "cd esc && rm -rf ../x"; do
+    expect allow Bash "$c" "$NEST" agent-3
+  done
+  done_
+}
+
+@test "after popd, pushd ±N/-n/swap, cd - or cd -L -P the cwd is unknown: relative writes and deletes are denied (#383)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/sub" "$MAIN/src" "$T/scratch/a/b/c/d" "$NEST/d1/d2/d3" "$NEST/src/build"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$T/scratch/a/b/c/d" "$NEST/esc"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  # Each leaves the shell back in the lane, where ../../../ is the checkout.
+  for c in "pushd d1/d2/d3 && popd && rm -rf ../../../src" "pushd d1/d2/d3; popd; echo x > ../../../README" \
+    "pushd d1/d2/d3 && pushd && rm -rf ../../../src" "pushd d1/d2/d3 && pushd +1 && rm -rf ../../../src" \
+    "pushd d1/d2/d3 && pushd -n d1 && rm -rf ../../../src" "cd d1 && cd - && rm -rf ../../../src" \
+    "popd && cd d1 && rm -rf x" "popd && find . -delete" "popd && git -C . commit -m x"; do
+    expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
+  done
+  # A ~N, ~+N or ~- target, or one the hook cannot expand ($OLDPWD, $(dirs …)), is the stack again.
+  for c in "pushd d1/d2/d3 && cd ~1 && rm -rf ../../../src" "pushd d1/d2/d3 && cd ~+1 && rm -rf ../../../src" \
+    "pushd d1/d2/d3 && pushd ~1 && rm -rf ../../../src" "cd d1/d2/d3 && cd ~- && rm -rf ../../../src" \
+    'cd d1/d2/d3 && cd $OLDPWD && rm -rf ../../../src' 'pushd d1/d2/d3 && cd "$(dirs -l +1)" && rm -rf ../../../src'; do
+    expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
+  done
+  # A plain ~ or ~/x target is known: judged as that path (outside the lane), not as lost.
+  for c in "cd ~ && rm -rf x" "cd ~/x && rm -rf y"; do
+    expect deny Bash "$c" "$NEST" agent-3 "outside the lane worktree"
+  done
+  # bash takes the last of -L/-P, zsh takes -P: the hook cannot know which the shell runs.
+  for c in "cd -P -L sl/.. && rm -rf src" "cd -PL esc/../../../.. && rm -rf src" "cd -L -P sl/.. && rm -rf src"; do
+    expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
+  done
+  # A deletion before popd, an absolute path after it, or a cd to an absolute path stays allowed.
+  for c in "pushd src && rm -rf build && popd" "pushd d1 && popd && rm -rf $NEST/src/build" \
+    "pushd d1 && popd && cd $NEST && rm -rf src/build" "popd && echo x > $NEST/f" \
+    "cd d1 && rm -rf d2/x && echo x > f" "pushd d1/d2/d3 && rm -rf x"; do
+    expect allow Bash "$c" "$NEST" agent-3
+  done
+  done_
+}
+
+@test "a .. inside a symlink's target in the nested lane resolves as the OS does (#380)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/sub"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  ln -s sl/../README "$NEST/rel"
+  expect deny Bash "echo x > $NEST/rel" "$NEST" agent-3 "orchestrator's checkout"
+  expect deny Bash "echo x >> rel" "$NEST" agent-3 "orchestrator's checkout"
+  expect deny Write "$NEST/rel" "$NEST" agent-3 "orchestrator's checkout"
+  done_
+}
+
+@test "a symlink in the nested lane to outside every forbidden root follows the lane rules (#380)" {
+  forbid "$MAIN"
+  mkdir -p "$T/scratch/b" "$NEST/scratch/b" "$T/elsewhere"
+  ln -s "$T/scratch" "$NEST/tmpl"
+  ln -s scratch/b "$NEST/build"
+  ln -s "$T/elsewhere" "$NEST/out"
+  for c in "echo x > $NEST/tmpl/f" "rm -rf $NEST/tmpl/x" "rm -rf $NEST/tmpl" "echo x > tmpl/f" \
+    "echo x > $NEST/build/f" "rm -rf $NEST/build/x" "rm -rf build"; do
+    expect allow Bash "$c" "$NEST" agent-3
+  done
+  expect allow Write "$NEST/tmpl/f" "$NEST" agent-3
+  expect allow Write "$NEST/build/f" "$NEST" agent-3
+  # Outside the lane and the temp dirs: refused as outside the lane, never as the checkout.
+  expect deny Bash "rm -rf $NEST/out/x" "$NEST" agent-3 "outside the lane worktree"
+  for c in "rm -rf $NEST/tmpl/x" "echo x > $NEST/build/f" "rm -rf $NEST/out/x"; do
+    run "$SCRIPTS/lane-safety.sh" <<<"$(jq -cn --arg x "$c" --arg d "$NEST" '{tool_name: "Bash", cwd: $d, agent_id: "agent-3", tool_input: {command: $x}}')"
+    [[ "$output" != *"orchestrator's checkout"* ]] || FAILS="$FAILS
+[$c]: names the checkout: $output"
+  done
+  done_
+}
+
 @test "edit tools: Edit, Write, MultiEdit and NotebookEdit; relative paths resolve against cwd" {
   forbid "$MAIN"
   for t in Edit Write MultiEdit NotebookEdit; do
