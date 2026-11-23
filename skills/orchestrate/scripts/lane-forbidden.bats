@@ -347,3 +347,14 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   expect deny Bash "unlink ../../../README" "$NEST" agent-3 "orchestrator's checkout"
   done_
 }
+
+@test "a brace expansion into the checkout is judged word by word (#387)" {
+  forbid "$MAIN"
+  printf 'x\n' >"$MAIN/README"
+  for c in "touch {../../..,zz}/README" "tee {../../..,zz}/README" "rm -f {zz,../../..}/README" \
+    "echo x > {zz,$MAIN}/f" "ln -s {../../..,zz}/README l"; do
+    expect deny Bash "$c" "$NEST" agent-3 "orchestrator's checkout"
+  done
+  expect allow Bash "touch {a,b}/README" "$NEST" agent-3
+  done_
+}

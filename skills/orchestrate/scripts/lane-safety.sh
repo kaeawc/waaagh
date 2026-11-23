@@ -17,7 +17,10 @@
 #   or whose real target through a symlink does (anything under /dev aside); rm without -r and
 #   unlink of an entry out of those bounds; ln whose link or target (a symlink's relative target
 #   from the link's directory) is out of them (#384). A glob in any path part is expanded and every
-#   match judged; over 100 matches in one command is too many to judge (#384).
+#   match judged; over 100 matches in one command is too many to judge (#384). A brace expansion
+#   ({a,b}, {1..3}) is judged word by word, a glob in a cd target by its one match; a glob with
+#   more than 2 globbed path parts, zsh glob syntax (( ), ^, #, **, ~ past the start) and a brace
+#   around an unknown variable are refused unexpanded (#387; asked outside a lane).
 #   Denied only in a known lane (payload agent_id, $WAAAGH_LANE_ROOT, or an active lanes.tsv row
 #   under the state root); in any other linked worktree, the owner's own session, they ask.
 # Forbidden roots (#218): the orchestrator's own checkout, from $WAAAGH_LANE_FORBID (colon list) and
@@ -165,11 +168,172 @@ subst_word() {
 # (`rm -rf <lane>/*/.ssh`, `echo x > <nest>/s*/../README`) reaches whatever it matches through, not
 # the literal text. globbed WORD: WORD holds a glob character. deep_glob WORD: one sits before a
 # later `/` (a final part's glob is judged by the directory it lists, check_delete). At most
-# glob_max matches are judged in the whole command (each costs a few forks; the hook has 10
-# seconds): more is too many.
-glob_max=100 glob_left=100
+# glob_max matches (and brace words) are judged in the whole command (each costs a few forks): more
+# is too many. A timed-out PreToolUse hook does not block (hooks.json gives it 10 seconds), so the
+# expansion is bounded before it runs (#387 review): the literal word is judged first and a word
+# already refused is never expanded; a word with more than glob_parts_max globbed path parts is
+# refused unexpanded (`/System/*/*/*/*/*/*/*/x` walks the disk for minutes); and once the hook has
+# run hook_budget seconds ($SECONDS), what is left to expand or judge is refused.
+glob_max=100 glob_left=100 glob_parts_max=2 hook_budget=3
 globbed() { [[ "$1" == *[*?[]* ]]; }
 deep_glob() { local x=${1#*[*?[]}; [[ "$1" != "$x" && "$x" == */* ]]; }
+over_time() { ((SECONDS >= hook_budget)); }
+# glob_refuse LABEL WHY: a word the hook cannot judge path by path: denied in a lane, asked elsewhere.
+glob_refuse() {
+  if [[ -n "$lane" ]]; then lane_deny "$1: $2"; else ask "$1: $2"; fi
+}
+# glob_parts WORD: sets gp to the number of WORD's path parts holding a glob character.
+gp=0
+glob_parts() {
+  local part IFS=/
+  gp=0
+  set -f
+  # shellcheck disable=SC2086
+  for part in $1; do [[ "$part" != *[*?[]* ]] || gp=$((gp + 1)); done
+  set +f
+}
+# glob_expand WORD BASE LABEL: glob_words WORD BASE within the bounds above; returns 1 after refusing
+# LABEL (too many globbed parts, out of time, too many matches).
+glob_expand() {
+  glob_parts "$1"
+  if ((gp > glob_parts_max)); then
+    glob_refuse "$3" "glob too deep to check ($gp globbed path parts, over $glob_parts_max); name the paths"; return 1
+  fi
+  if over_time; then glob_refuse "$3" "glob left unexpanded: the hook ran out of time; name the paths"; return 1; fi
+  glob_words "$1" "$2"
+  if ((glob_left < 0)); then too_many "$3"; return 1; fi
+  return 0
+}
+# zsh_glob WORD: WORD (a write, delete, ln or cd operand) holds glob syntax bash does not expand the
+# way the user's zsh does (#387 review): a ( ) group (`h(m|x)`, `(hm)`, qualifiers, extglob; the
+# tokenizer keeps a `(` that continues an argument word), `^`, `#`, `**`, or a `~` anywhere but a
+# leading `~` or `~/` (`*~*.c`, `~user`). A trailing `~` (a backup file, `rm -f *~`) is no glob.
+# With braces, the `~` test waits for each brace word (`{~,zz}` is `~` and `zz`).
+zsh_glob() {
+  local w=${1//'$(...)'/} r
+  case "$w" in *'('* | *')'* | *'^'* | *'#'* | *'**'*) return 0 ;; esac
+  [[ "${2:-}" != braces ]] || return 1
+  r=$w
+  case "$r" in "~" | \~/*) r=${r#\~} ;; esac
+  [[ "$r" == *'~'?* ]]
+}
+# Brace expansion (#387 review). The shell expands `{a,b}` and `{x..y[..step]}` before globbing and
+# tilde expansion, so `rm -rf {~,zz}` removes $HOME. brace_words WORD: sets bw to WORD's brace
+# expansion, done here by the same rule as bash (the leftmost `{` whose matching `}` holds a
+# top-level comma or a sequence, repeated until none is left), so nothing is executed; returns 1
+# when WORD has none, 2 when it makes more than glob_max words.
+bw=() bs_pre="" bs_post="" bs_alts=()
+brace_words() {
+  local q=("$1") k=0 w a found=no
+  bw=()
+  while ((k < ${#q[@]})); do
+    w=${q[k]}; k=$((k + 1))
+    if brace_split "$w"; then
+      found=yes
+      for a in "${bs_alts[@]}"; do q+=("$bs_pre$a$bs_post"); done
+      ((${#q[@]} - k + ${#bw[@]} <= glob_max)) || return 2
+    else bw+=("$w"); fi
+  done
+  [[ $found == yes ]] || return 1
+}
+# brace_split WORD: sets bs_pre, bs_alts and bs_post for WORD's leftmost brace expression; returns 1
+# when it has none.
+brace_split() {
+  local w=$1 n=${#1} i j c depth start commas body
+  for ((i = 0; i < n; i++)); do
+    [[ "${w:i:1}" == "{" ]] || continue
+    depth=0 commas=()
+    for ((j = i; j < n; j++)); do
+      c=${w:j:1}
+      if [[ "$c" == "{" ]]; then depth=$((depth + 1))
+      elif [[ "$c" == "}" ]]; then depth=$((depth - 1)); ((depth > 0)) || break
+      elif [[ "$c" == , && $depth == 1 ]]; then commas+=("$j"); fi
+    done
+    ((j < n)) || continue
+    bs_pre=${w:0:i} bs_post=${w:j+1} bs_alts=()
+    if ((${#commas[@]})); then
+      start=$((i + 1))
+      for c in "${commas[@]}"; do bs_alts+=("${w:start:c-start}"); start=$((c + 1)); done
+      bs_alts+=("${w:start:j-start}")
+      return 0
+    fi
+    body=${w:i+1:j-i-1}
+    brace_seq "$body" && return 0
+  done
+  return 1
+}
+# brace_seq BODY: sets bs_alts to the sequence {BODY} makes (integers, zero-padded when either end
+# is, or single letters; an optional step), at most glob_max + 1 of them; returns 1 when BODY is no
+# sequence.
+brace_seq() {
+  local x y s=1 width=0 v cx cy
+  if [[ "$1" =~ ^(-?[0-9]+)\.\.(-?[0-9]+)(\.\.(-?[0-9]+))?$ ]]; then
+    x=${BASH_REMATCH[1]} y=${BASH_REMATCH[2]}
+    [[ -z "${BASH_REMATCH[4]}" ]] || s=${BASH_REMATCH[4]#-}
+    # Ends too long for shell arithmetic make more words than the hook judges.
+    if ((${#x} > 9 || ${#y} > 9 || ${#s} > 9)); then
+      for ((v = 0; v <= glob_max; v++)); do bs_alts+=("$v"); done
+      return 0
+    fi
+    [[ "$x" != 0?* && "$x" != -0?* && "$y" != 0?* && "$y" != -0?* ]] || width=$((${#x} > ${#y} ? ${#x} : ${#y}))
+    x=$(dec "$x") y=$(dec "$y") s=$((10#$s)); ((s > 0)) || s=1
+    v=$x
+    while ((${#bs_alts[@]} <= glob_max)); do
+      if ((width)); then bs_alts+=("$(printf '%0*d' "$width" "$v")"); else bs_alts+=("$v"); fi
+      if ((x <= y)); then v=$((v + s)); ((v <= y)) || break
+      else v=$((v - s)); ((v >= y)) || break; fi
+    done
+    return 0
+  fi
+  if [[ "$1" =~ ^([A-Za-z])\.\.([A-Za-z])(\.\.(-?[0-9]+))?$ ]]; then
+    cx=$(printf '%d' "'${BASH_REMATCH[1]}") cy=$(printf '%d' "'${BASH_REMATCH[2]}")
+    [[ -z "${BASH_REMATCH[4]}" ]] || s=${BASH_REMATCH[4]#-}
+    ((${#s} <= 9)) || s=1
+    s=$((10#$s)); ((s > 0)) || s=1
+    v=$cx
+    while ((${#bs_alts[@]} <= glob_max)); do
+      bs_alts+=("$(printf "\\$(printf '%03o' "$v")")")
+      if ((cx <= cy)); then v=$((v + s)); ((v <= cy)) || break
+      else v=$((v - s)); ((v >= cy)) || break; fi
+    done
+    return 0
+  fi
+  return 1
+}
+# dec N: the signed decimal N, leading zeros read as decimal.
+dec() { local n=$1 sg=""; [[ "$n" != -* ]] || { sg=-; n=${n#-}; }; printf '%s\n' "$sg$((10#$n))"; }
+# pre_words WORD BASE LABEL: the shell's own expansions judged before WORD's path (#387 review): a
+# zsh glob is refused; a brace expansion sets bw to its words, taken from glob_left (returns 0: judge
+# each word instead of WORD); one around a variable the hook cannot spell out, or making too many
+# words, is refused. Returns 1 to go on with WORD itself, 2 after refusing.
+pre_words() {
+  local w=$1 rc=0 zsh="zsh glob syntax the hook cannot expand faithfully; name the paths"
+  if [[ "$w" != *'{'*'}'* ]]; then
+    if zsh_glob "$w"; then glob_refuse "$3" "$zsh"; return 2; fi
+    return 1
+  fi
+  if zsh_glob "$w" braces; then glob_refuse "$3" "$zsh"; return 2; fi
+  case "$w" in
+    *'$'* | *'`'*)
+      if subst_word "$w" "$2"; then w=$sw
+      else
+        brace_words "$w" || rc=$?
+        if ((rc == 1)); then
+          if zsh_glob "$w"; then glob_refuse "$3" "$zsh"; return 2; fi
+          return 1
+        fi
+        glob_refuse "$3" "brace expansion around a variable or command substitution; expand it and name the paths"; return 2
+      fi ;;
+  esac
+  brace_words "$w" || rc=$?
+  if ((rc == 1)); then
+    if zsh_glob "$1"; then glob_refuse "$3" "$zsh"; return 2; fi
+    return 1
+  fi
+  if ((rc == 0)); then glob_left=$((glob_left - ${#bw[@]})); fi
+  if ((rc != 0 || glob_left < 0)); then glob_refuse "$3" "brace expansion makes too many paths (over $glob_max); name them"; return 2; fi
+  return 0
+}
 # glob_words WORD BASE: sets gw to the words the shell's own globbing makes of WORD (variables
 # already spelled out) from the logical cwd BASE (nullglob), at most glob_max + 1 of them, and
 # takes them from glob_left; below zero, the command's globs match too many paths.
@@ -192,10 +356,7 @@ glob_list() {
   )
 }
 # too_many LABEL: a glob matched more paths than the hook judges.
-too_many() {
-  if [[ -n "$lane" ]]; then lane_deny "$1: glob matches too many paths (over $glob_max); name them"
-  else ask "$1: glob matches too many paths (over $glob_max) for the hook to judge; name them"; fi
-}
+too_many() { glob_refuse "$1" "glob matches too many paths (over $glob_max); name them"; }
 # cwd_lost: set (to the command, e.g. `popd`) once the hook cannot know the shell's directory for
 # the rest of the command line (popd, pushd other than `pushd DIR`, cd -, cd given both -L and -P);
 # a later `cd ABS` clears it. While set, a relative write, delete or git work tree is denied: the
@@ -533,11 +694,22 @@ subst_var() {
 }
 
 # check_delete WORD BASE WHAT [REC]: a deletion target; REC (default yes) is recursive (rm -r, find
-# -delete), no a single entry (rm without -r, unlink, #384). A glob before a later `/` is expanded
-# and every match judged too (#384); the literal word is always judged.
+# -delete), no a single entry (rm without -r, unlink, #384). A brace expansion is judged word by
+# word, a zsh glob refused (pre_words). The literal word is judged first; when it passes, a glob
+# before a later `/` is expanded within bounds and every match judged too (#384).
 check_delete() {
-  local w=$1 base=$2 what=$3 rec=${4:-yes} s ww m
+  local w=$1 base=$2 what=$3 rec=${4:-yes} s ww m mk rc=0
   if lost_rel "$w"; then deny "$what $w: $(lost_why)"; return 0; fi
+  pre_words "$w" "$base" "$what $w" || rc=$?
+  if ((rc == 2)); then return 0; fi
+  if ((rc == 0)); then
+    local bl=("${bw[@]}")
+    for m in "${bl[@]}"; do
+      if over_time; then glob_refuse "$what $w" "brace words left unjudged: the hook ran out of time; name the paths"; break; fi
+      [[ -z "$m" ]] || check_delete "$m" "$base" "$what" "$rec"
+    done
+    return 0
+  fi
   if subst_word "$w" "$base"; then ww=$sw
   elif s=$(subst_var "$w"); then ww=$s
   else
@@ -545,14 +717,15 @@ check_delete() {
     [[ $rec == no || -z "$lane" ]] || lane_deny "$what $w: path built from a variable; expand and echo the literal path first"
     return 0
   fi
-  if deep_glob "$ww"; then
-    glob_words "$ww" "$base"
-    if ((glob_left < 0)); then too_many "$what $w"
-    else
-      for m in ${gw[@]+"${gw[@]}"}; do judge_delete "$m" "$base" "$what $w (glob match $m)" "$rec"; done
-    fi
-  fi
+  mk="${#denies}.${#asks}"
   judge_delete "$ww" "$base" "$what $w" "$rec"
+  [[ "${#denies}.${#asks}" == "$mk" ]] || return 0
+  if deep_glob "$ww" && glob_expand "$ww" "$base" "$what $w"; then
+    for m in ${gw[@]+"${gw[@]}"}; do
+      if over_time; then glob_refuse "$what $w" "glob matches left unjudged: the hook ran out of time; name the paths"; break; fi
+      judge_delete "$m" "$base" "$what $w (glob match $m)" "$rec"
+    done
+  fi
 }
 # judge_delete WORD BASE LABEL REC: WORD (no variables left) judged as one deletion target.
 judge_delete() {
@@ -645,23 +818,35 @@ del_ok() {
   done
   return 1
 }
-# check_write WORD BASE WHAT: a file a shell command writes (lane mode only). A glob anywhere in WORD
-# is expanded and every match judged as well (#384).
+# check_write WORD BASE WHAT: a file a shell command writes (lane mode only). A brace expansion is
+# judged word by word, a zsh glob refused (pre_words); the literal word is judged first and, when it
+# passes, a glob anywhere in it is expanded within bounds and every match judged as well (#384).
 check_write() {
   [[ -n "$lane" || ${#forbid[@]} -gt 0 ]] || return 0
-  local w=$1 base=$2 what=$3 m
+  local w=$1 base=$2 what=$3 m mk rc=0
   case "$w" in /dev/null | /dev/stdout | /dev/stderr | /dev/tty | /dev/fd/* | "") return 0 ;; esac
   if lost_rel "$w"; then deny "$what $w: $(lost_why)"; return 0; fi
+  pre_words "$w" "$base" "$what $w" || rc=$?
+  if ((rc == 2)); then return 0; fi
+  if ((rc == 0)); then
+    local bl=("${bw[@]}")
+    for m in "${bl[@]}"; do
+      if over_time; then glob_refuse "$what $w" "brace words left unjudged: the hook ran out of time; name the paths"; break; fi
+      check_write "$m" "$base" "$what"
+    done
+    return 0
+  fi
   subst_word "$w" "$base" || return 0
   local ww=$sw
-  if globbed "$ww"; then
-    glob_words "$ww" "$base"
-    if ((glob_left < 0)); then too_many "$what $w"
-    else
-      for m in ${gw[@]+"${gw[@]}"}; do judge_write "$m" "$base" "$what $w (glob match $m)"; done
-    fi
-  fi
+  mk="${#denies}.${#asks}"
   judge_write "$ww" "$base" "$what $w"
+  [[ "${#denies}.${#asks}" == "$mk" ]] || return 0
+  if globbed "$ww" && glob_expand "$ww" "$base" "$what $w"; then
+    for m in ${gw[@]+"${gw[@]}"}; do
+      if over_time; then glob_refuse "$what $w" "glob matches left unjudged: the hook ran out of time; name the paths"; break; fi
+      judge_write "$m" "$base" "$what $w (glob match $m)"
+    done
+  fi
 }
 # judge_write WORD BASE LABEL [OUTSIDE]: WORD (no variables left) judged as a written path: a
 # forbidden root (by its resolved target, forbidden), then in a lane the path as spelled, then the
@@ -691,7 +876,7 @@ real_ok() {
 # judged as a write too, so a link created and used in one command (`ln -s <checkout> nl && echo x
 # > nl/f`) cannot lead out of bounds.
 check_ln() {
-  local base=$1 sym=no rel=no tdir="" notdir=no ends=no ops=() t srcs=() links=() k L ld tw s
+  local base=$1 sym=no rel=no tdir="" notdir=no ends=no ops=() t srcs=() links=() k L ld tw s o ch v x rc
   shift
   while (($#)); do
     t=$1; shift
@@ -702,13 +887,23 @@ check_ln() {
         --relative) rel=yes; continue ;;
         --no-target-directory) notdir=yes; continue ;;
         --target-directory=*) tdir=${t#*=}; continue ;;
-        --target-directory) tdir=${1:-}; (($# == 0)) || shift; continue ;;
+        --target-directory | --suffix) [[ "$t" == --suffix ]] || tdir=${1:-}; (($# == 0)) || shift; continue ;;
         --*) continue ;;
         -?*)
-          [[ "$t" != *s* ]] || sym=yes
-          [[ "$t" != *r* ]] || rel=yes
-          [[ "$t" != *T* ]] || notdir=yes
-          if [[ "$t" == *t ]]; then tdir=${1:-}; (($# == 0)) || shift; fi
+          # A cluster: -t DIR and -S SUFFIX take the rest of the word, or the next one (-tDIR, -sfTt DIR).
+          o=${t#-}
+          while [[ -n "$o" ]]; do
+            ch=${o:0:1} o=${o:1}
+            case "$ch" in
+              s) sym=yes ;;
+              r) rel=yes ;;
+              T) notdir=yes ;;
+              t | S)
+                if [[ -n "$o" ]]; then v=$o; else v=${1:-}; (($# == 0)) || shift; fi
+                [[ "$ch" == S ]] || tdir=$v
+                o="" ;;
+            esac
+          done
           continue ;;
       esac
     fi
@@ -718,12 +913,20 @@ check_ln() {
   # Operand words as the shell globbed them, from BASE.
   local words=()
   for t in "${ops[@]}"; do
-    if subst_word "$t" "$base" && globbed "$sw"; then
-      glob_words "$sw" "$base"
-      if ((glob_left < 0)); then too_many "ln $t"; return 0; fi
-      if ((${#gw[@]})); then words+=("${gw[@]}"); else words+=("$t"); fi
-    else words+=("$t"); fi
+    rc=0
+    pre_words "$t" "$base" "ln $t" || rc=$?
+    if ((rc == 2)); then return 0; fi
+    local bl=("$t")
+    if ((rc == 0)); then bl=("${bw[@]}"); fi
+    for x in "${bl[@]}"; do
+      [[ -n "$x" ]] || continue
+      if subst_word "$x" "$base" && globbed "$sw"; then
+        glob_expand "$sw" "$base" "ln $x" || return 0
+        if ((${#gw[@]})); then words+=("${gw[@]}"); else words+=("$x"); fi
+      else words+=("$x"); fi
+    done
   done
+  ((${#words[@]})) || return 0
   if [[ -n "$tdir" ]]; then
     srcs=("${words[@]}")
     for t in "${srcs[@]}"; do t=${t%/}; links+=("$tdir/${t##*/}"); done
@@ -806,9 +1009,9 @@ check_git() {
 # stays in its word as \035, so one command is always one line.
 tokenize() {
   awk -v US="$US" -v OP="$OP" -v NL=$'\035' '
-  function flush() { if (have) { toks = toks (ntok ? US : "") word; ntok++; word = ""; have = 0 } }
-  function emit(term) { flush(); if (ntok) print term "\036" toks "\036" cmdsubs; toks = ""; ntok = 0; cmdsubs = "" }
-  function optok(o) { flush(); toks = toks (ntok ? US : "") OP o; ntok++ }
+  function flush() { if (have) { toks = toks (ntok ? US : "") word; ntok++; last = word; word = ""; have = 0 } }
+  function emit(term) { flush(); if (ntok) print term "\036" toks "\036" cmdsubs; toks = ""; ntok = 0; cmdsubs = ""; last = "" }
+  function optok(o) { flush(); toks = toks (ntok ? US : "") OP o; ntok++; last = OP o }
   # read a $( ... ) or ` ... ` body starting at position i (just after the opener); returns end index
   function grab(s, i, closer,   depth, c, body, q) {
     depth = 1; body = ""; q = ""
@@ -859,7 +1062,17 @@ tokenize() {
         emit("&"); continue
       }
       if (c == "|") { if (n == "|") { emit("||"); i++ } else { if (n == "&") i++; emit("|") } continue }
-      if (c == "(" || c == ")") { emit("sub"); print "paren\036\036"; continue }
+      if (c == "(" || c == ")") {
+        # A ( inside or starting an argument word (not the command word, an assignment, a
+        # redirection target or after a keyword) is zsh glob or extglob syntax (`h(m|x)`, `(hm)`):
+        # it stays in the command as a word holding "(" for zsh_glob. The split below is unchanged,
+        # so what follows is still judged as commands.
+        if (c == "(" && ntok > 0) {
+          if (have && word !~ /^[A-Za-z_][A-Za-z0-9_]*\+?=$/) word = word "("
+          else if (!have && substr(last, 1, 1) != OP && last !~ /^(in|time|!|if|then|else|elif|do|while|until|\{|function|coproc)$/) { word = "("; have = 1 }
+        }
+        emit("sub"); print "paren\036\036"; continue
+      }
       if (c == "$" && n == "(") { i = grab(s, i + 2, ")"); word = word "$(...)"; have = 1; continue }
       if (c == "`") { i = grab(s, i + 1, "`"); word = word "$(...)"; have = 1; continue }
       if (c == ">" || c == "<") {
@@ -1081,16 +1294,29 @@ analyze_simple() {
       if [[ $sawp == yes && $sawl == yes ]]; then lost="$c ${a[*]:0:j}"
       elif ((j == n)); then [[ $c == cd ]] || lost=pushd
       elif [[ "${a[j]}" == -* || "${a[j]}" =~ ^\+[0-9]+$ || "${a[j]}" =~ ^~[-+0-9] ]]; then lost="$c ${a[j]}"; fi
+      # The target as the shell makes it (#387 review): a zsh glob is refused and loses the cwd; a
+      # brace expansion or glob that makes one word is that word, any other count loses the cwd.
+      local tw=${a[j]:-} rc=0
+      if [[ -z "$lost" ]] && ((j < n)); then
+        pre_words "$tw" "$base" "$c $tw" || rc=$?
+        if ((rc == 2)); then lost="$c $tw"
+        elif ((rc == 0)); then
+          if ((${#bw[@]} == 1)); then tw=${bw[0]}; else lost="$c $tw"; fi
+        fi
+        if [[ -z "$lost" ]] && subst_word "$tw" "$base" && globbed "$sw"; then
+          if glob_expand "$sw" "$base" "$c $tw" && ((${#gw[@]} == 1)); then tw=${gw[0]}; else lost="$c $tw"; fi
+        fi
+      fi
       if [[ -n "$lost" ]]; then
         cwd_lost=$lost plain=no inert=no
       elif ((j == n)); then cur=$home cwd_lost=""
       else
         # A relative target from a lost cwd stays lost; an absolute one the hook expands is known again.
         local known=yes
-        if [[ $sawp == yes ]] && cur=$(expand "${a[j]}" "$base"); then cur=$(phys "$cur")
+        if [[ $sawp == yes ]] && cur=$(expand "$tw" "$base"); then cur=$(phys "$cur")
         # A target the hook cannot expand ($OLDPWD, $(dirs …), `…`) may lead anywhere: lost.
-        else cur=$(expand "${a[j]}" "$base" lex) || { cur=$base; plain=no; known=no; cwd_lost="$c ${a[j]}"; }; fi
-        [[ $known == no ]] || lost_rel "${a[j]}" || cwd_lost=""
+        else cur=$(expand "$tw" "$base" lex) || { cur=$base; plain=no; known=no; cwd_lost="$c ${a[j]}"; }; fi
+        [[ $known == no ]] || lost_rel "$tw" || cwd_lost=""
       fi
       if [[ -n "$cwd_lost" ]]; then plain=no inert=no
       else

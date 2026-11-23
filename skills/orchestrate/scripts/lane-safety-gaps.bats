@@ -329,3 +329,78 @@ unregister_lane() { rm -f "$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"; }
   expect ask   'rm -rf many/*/x' "$LANE" "glob matches too many paths"
   done_
 }
+
+@test "a deep glob is refused before it is expanded: a timed-out hook does not block (#387)" {
+  printf 'b\n' >"$HOME/.bashrc"
+  # r -> /: without the bound, the glob below walks the whole disk past the hook's 10 s timeout.
+  ln -s / "$LANE/r"
+  # One 7-level glob decides in under 2 s (it is refused unexpanded; expanded, it took minutes).
+  local s=$SECONDS
+  expect deny  'echo x > */*/*/*/*/*/*/x; rm -f ~/.bashrc' "$LANE" "glob too deep to check (7 globbed path parts"
+  ((SECONDS - s < 2)) || FAILS="$FAILS
+[7-level glob] took $((SECONDS - s)) s"
+  expect deny  'echo x > /System/*/*/*/*/*/*/*/x; rm -f ~/.bashrc' "$LANE" "rm ~/.bashrc: outside the lane worktree"
+  expect deny  'rm -rf r/*/*/*/x' "$LANE" "protected path"
+  expect deny  'rm -rf */*/*/x' "$LANE" "glob too deep to check"
+  expect deny  'ln -s */*/*/x l' "$LANE" "glob too deep to check"
+  # Outside a lane: asked, unexpanded.
+  expect ask   "rm -f $LANE/*/*/*/*/*/*/*/x" "$MAIN" "glob too deep to check"
+  expect allow "echo x > $LANE/*/*/*/*/*/*/*/x" "$MAIN"
+  # Two globbed parts are still expanded and judged.
+  mkdir -p "$LANE/build/o"
+  expect allow 'rm -rf build/*/*' "$LANE"
+  expect deny  'rm -f r/*/.bashrc' "$LANE" "outside the lane worktree"
+  done_
+}
+
+@test "brace expansion, a glob in cd, zsh glob syntax and ln -tDIR are judged as the shell runs them (#387)" {
+  mkdir -p "$HOME/.ssh" "$LANE/src" "$LANE/srcx/sub" "$LANE/out"
+  printf 'b\n' >"$HOME/.bashrc"
+  ln -s "$HOME" "$LANE/hm"
+  # Brace expansion: every word judged, the protected root through the link included.
+  expect deny  'rm -f {hm,zz}/.bashrc' "$LANE" "rm hm/.bashrc: outside the lane worktree"
+  expect deny  'rm -rf {hm,zz}/.ssh' "$LANE" "rm -r hm/.ssh: protected path"
+  expect deny  'echo x > {zz,hm}/.bashrc' "$LANE" "(through a symlink: "
+  expect deny  'touch a{1..3} {..,zz}/x' "$LANE" "touch ../x: writes outside"
+  expect deny  'rm -rf {~,zz}' "$MAIN" "rm -r ~: protected path $HOME"
+  expect deny  'rm -rf {/,zz}' "$MAIN" "rm -r /: protected path /"
+  expect deny  'rm -rf x{a,{b,/../..}}' "$MAIN" "protected path"
+  expect deny  'touch {1..1000000}' "$LANE" "brace expansion makes too many paths"
+  expect deny  'rm -f $X/{a,b}' "$LANE" "brace expansion around a variable"
+  expect allow 'rm -rf $HOME/{a,b}/x' "$MAIN"
+  expect allow 'cp src/{a,b}.txt out/' "$LANE"
+  expect allow 'touch out/{a,b}.txt out/f{01..03} out/{x}' "$LANE"
+  expect allow 'rm -f out/{a,b}.txt' "$LANE"
+  # A glob in a cd target: one match is that directory, none or several lose the cwd.
+  expect deny  'cd h* && rm -f .bashrc' "$LANE" "rm .bashrc: outside the lane worktree"
+  expect deny  'cd h? && echo x > .bashrc' "$LANE" "redirect .bashrc: writes outside"
+  expect deny  'cd {hm,zz} && rm -f .bashrc' "$LANE" "working directory is unknown"
+  expect deny  'cd s* && rm -f x' "$LANE" "working directory is unknown after \`cd s*\`"
+  expect deny  'cd nomatch* && rm -f x' "$LANE" "working directory is unknown"
+  expect allow 'cd srcx* && make' "$LANE"
+  expect allow 'cd srcx* && rm -f sub/x' "$LANE"
+  # zsh glob syntax: refused unexpanded.
+  expect deny  'rm -f h(m|x)/.bashrc' "$LANE" "zsh glob syntax"
+  expect deny  'rm -f (hm)/.bashrc' "$LANE" "zsh glob syntax"
+  expect deny  'echo x > h^x/.bashrc' "$LANE" "zsh glob syntax"
+  expect deny  'rm -f h*~x/.bashrc' "$LANE" "zsh glob syntax"
+  expect deny  'rm -f **/.bashrc' "$LANE" "zsh glob syntax"
+  expect deny  'cd (hm) && rm -f .bashrc' "$LANE" "zsh glob syntax"
+  expect ask   'rm -rf (hm)' "$MAIN" "zsh glob syntax"
+  # Ordinary words stay as they were.
+  expect allow 'git log HEAD^' "$LANE"
+  expect allow 'echo x > out.txt' "$LANE"
+  expect allow 'rm -f *.log *~' "$LANE"
+  expect allow 'f() { echo x; }; arr=(a b); (cd src && make)' "$LANE"
+  expect allow 'diff <(ls src) <(ls out)' "$LANE"
+  expect deny  'diff <(rm -rf ~) x' "$LANE" "protected path"
+  # ln with the target directory attached to -t.
+  expect deny  "ln -t$HOME src/x" "$LANE" "ln $HOME/x: writes outside"
+  expect deny  "ln -sfTt$HOME src/x" "$LANE" "writes outside"
+  expect deny  "ln -st $HOME src/x" "$LANE" "writes outside"
+  expect allow 'ln -sfTtout ../src/x' "$LANE"
+  unregister_lane
+  expect ask   'rm -f {hm,zz}/.bashrc' "$LANE" "no registered lane"
+  expect ask   'rm -f (hm)/.bashrc' "$LANE" "no registered lane"
+  done_
+}
