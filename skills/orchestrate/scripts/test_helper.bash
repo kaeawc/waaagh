@@ -102,7 +102,7 @@ case "${1:-}" in
   help) printf 'Subcommands:\n  load  x\n  orphans  x\n' ;;
   load)
     [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: load failed" >&2; exit 1; }
-    over='{}'; [ ! -f "$BATS_TEST_TMPDIR/spectra-load.json" ] || over=$(cat "$BATS_TEST_TMPDIR/spectra-load.json")
+    over='{}'; [ ! -f "$BATS_TEST_TMPDIR/spectra-load.json" ] || over=$(<"$BATS_TEST_TMPDIR/spectra-load.json")
     jq -n --argjson l "${SPECTRA_STUB_LOAD1:-0.5}" --argjson c "${SPECTRA_STUB_CPUS:-8}" --argjson g "${SPECTRA_STUB_FREE_GB:-32}" \
       --argjson o "$over" '{verdict: "admit", load1: $l, cpus: $c, available_gb: $g,
         cause: {kind: "none", detail: "host is idle"}, top_cpu: [], top_rss: [], families: []} + $o' ;;

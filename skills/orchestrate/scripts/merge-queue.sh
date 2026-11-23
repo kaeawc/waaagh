@@ -125,7 +125,15 @@ mkdir -p "$qdir/logs"
 queue="$qdir/queue.tsv"
 touch "$queue"
 
-outcome_of() { [[ -f "$qdir/$1.outcome" ]] && head -1 "$qdir/$1.outcome" || true; }
+# Builtin reads, no head or cat process: every queue row pays for them on every pass (#112).
+outcome_of() {
+  local l=""
+  [[ -f "$qdir/$1.outcome" ]] || return 0
+  IFS= read -r l <"$qdir/$1.outcome" || true
+  [[ -z "$l" ]] || printf '%s\n' "$l"
+}
+# file_of F -> F's contents (trailing newlines dropped), nothing when F is missing or unreadable.
+file_of() { [[ -f "$1" ]] && printf '%s\n' "$(<"$1")" 2>/dev/null || true; }
 set_outcome() { printf '%s\n%s\n' "$2" "${3:-}" >"$qdir/$1.outcome"; echo "$1: $2${3:+ ($3)}"; }
 
 # review_detail ID PR HEAD -> the outcome detail for a PR waiting on a bot review. Asks
@@ -272,13 +280,13 @@ case "$cmd" in
       # The PR this item already has, if any, is inspected first (merged included), so a pass after
       # a lost response or a retry never pushes, opens or merges a second time.
       if [[ -f "$qdir/$qid.pr" ]]; then
-        known=$(cat "$qdir/$qid.pr")
+        known=$(<"$qdir/$qid.pr")
         if ! kstate=$(orch_read_retry 3 gh pr view "$known" --repo "$repo" --json state | jq -re .state); then
           set_outcome "$qid" waiting "PR $known unreadable (transient); will re-check"; continue
         fi
         if [[ "$kstate" == MERGED ]]; then set_outcome "$qid" merged "PR $known (confirmed on re-check)"; continue; fi
         # The head this queue last pushed stands for the PR's head here (#210).
-        if park_if_held "$qid" "$known" "$(cat "$qdir/$qid.pushed" 2>/dev/null || true)"; then continue; fi
+        if park_if_held "$qid" "$known" "$(file_of "$qdir/$qid.pushed" 2>/dev/null)"; then continue; fi
       fi
       git -C "$qwt" fetch -q origin >>"$log" 2>&1 || { set_outcome "$qid" error "fetch failed, see $log"; continue; }
       # Resuming a waiting item: the base merge, check and push are already done when the pushed
@@ -289,7 +297,7 @@ case "$cmd" in
       # merges any drift in.
       local_head=$(git -C "$qwt" rev-parse HEAD)
       resume=""
-      if [[ ( "$prev" == waiting || "$prev" == held ) && "$(cat "$qdir/$qid.pushed" 2>/dev/null)" == "$local_head" ]] &&
+      if [[ ( "$prev" == waiting || "$prev" == held ) && "$(file_of "$qdir/$qid.pushed" 2>/dev/null)" == "$local_head" ]] &&
         [[ "$(git -C "$qwt" rev-parse -q --verify "origin/$qbranch" || true)" == "$local_head" ]]; then
         if git -C "$qwt" merge-base --is-ancestor "origin/$base" HEAD; then
           resume="resuming at ${local_head:0:9}"
@@ -319,7 +327,7 @@ case "$cmd" in
           0) ;;
           3) # Superseded by later merges? Then it needs an evidence session, not a conflict lane.
             sargs=(--repo "$repo" --worktree "$qwt" --base "$base")
-            [[ ! -f "$qdir/$qid.pr" ]] || sargs+=(--pr "$(cat "$qdir/$qid.pr")")
+            [[ ! -f "$qdir/$qid.pr" ]] || sargs+=(--pr "$(<"$qdir/$qid.pr")")
             src=0; orch_run supersede-check.sh "${sargs[@]}" >>"$log" 2>&1 || src=$?
             if ((src == 10)); then set_outcome "$qid" superseded "route to an evidence session, see $log"; continue; fi
             set_outcome "$qid" conflict "see $log"; continue ;;
@@ -336,12 +344,18 @@ case "$cmd" in
         rm -f "$qdir/$qid.refresh"
         pushes=$((pushes + 1))
         rargs=(--repo "$repo" --source merge-queue)
-        [[ ! -f "$qdir/$qid.pr" ]] || rargs+=(--pr "$(cat "$qdir/$qid.pr")")
+        [[ ! -f "$qdir/$qid.pr" ]] || rargs+=(--pr "$(<"$qdir/$qid.pr")")
         orch_run update-pace.sh record "${rargs[@]}" >>"$log" 2>&1 || true
       fi
       list_open() { orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state open --limit 100 --json number,headRefOid; }
+      # first_open: the list's length, then its first PR's number and head, from one jq (#112).
+      first_open() {
+        IFS=$'\x1f' read -r nprs pr head <<<"$(jq -r '(try .[0] catch null) as $f
+          | [length, ($f.number // ""), ($f.headRefOid // "")] | map(tostring) | join("\u001f")' <<<"$prs")"
+      }
       if ! prs=$(list_open); then set_outcome "$qid" waiting "PR lookup failed (transient)"; continue; fi
-      if [[ "$(jq length <<<"$prs")" == 0 ]]; then
+      first_open
+      if [[ "$nprs" == 0 ]]; then
         # Already merged at this exact head (an earlier pass lost the answer)? Then it is done.
         if ! merged=$(orch_read_retry 3 gh pr list --repo "$repo" --head "$qbranch" --state merged --limit 100 --json number,headRefOid); then
           set_outcome "$qid" waiting "PR lookup failed (transient)"; continue
@@ -355,11 +369,10 @@ case "$cmd" in
         gh pr create --repo "$repo" --head "$qbranch" --base "$base" --title "$qtitle" --body-file "$qbody" >>"$log" 2>&1 ||
           echo "pr create failed; checking whether it was created anyway" >>"$log"
         if ! prs=$(list_open); then set_outcome "$qid" waiting "PR lookup after create failed (transient)"; continue; fi
-        [[ "$(jq length <<<"$prs")" != 0 ]] || { set_outcome "$qid" error "pr create failed, see $log"; continue; }
+        first_open
+        [[ "$nprs" != 0 ]] || { set_outcome "$qid" error "pr create failed, see $log"; continue; }
       fi
-      pr=$(jq -r '.[0].number // empty' <<<"$prs")
       [[ -z "$pr" ]] || printf '%s\n' "$pr" >"$qdir/$qid.pr"
-      head=$(jq -r '.[0].headRefOid // empty' <<<"$prs")
       [[ -n "$pr" && -n "$head" ]] || { set_outcome "$qid" error "no open PR for $qbranch"; continue; }
       if park_if_held "$qid" "$pr" "$head"; then continue; fi
       if [[ "$head" != "$local_head" ]]; then

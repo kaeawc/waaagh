@@ -60,11 +60,11 @@ case "$a" in
       n=$(printf '%s\n' "$*" | sed -nE 's/.*-F pr=([0-9]+).*/\1/p')
       c=$(printf '%s\n' "$*" | sed -nE 's/.*-f cursor=c([0-9]+).*/\1/p')
       echo "page $n $c" >>"$FX/pages"
-      jq -n --argjson t "$(cat "$FX/threads.json")" --arg n "$n" --argjson c "$c" '$t[$n].pages as $p
+      jq -n --argjson t "$(<"$FX/threads.json")" --arg n "$n" --argjson c "$c" '$t[$n].pages as $p
         | {data: {repository: {pullRequest: {reviewThreads: {pageInfo: {hasNextPage: (($c + 1) < ($p | length)),
            endCursor: ("c" + (($c + 1) | tostring))}, nodes: $p[$c]}}}}}'
     else
-      jq -n --argjson t "$(cat "$FX/threads.json")" --args '{data: {repository: (reduce $ARGS.positional[] as $n ({};
+      jq -n --argjson t "$(<"$FX/threads.json")" --args '{data: {repository: (reduce $ARGS.positional[] as $n ({};
         .["p" + $n] = ($t[$n] // [] | if . == "null" then null
           elif . == "more" then {reviewThreads: {pageInfo: {hasNextPage: true}, nodes: []}}
           elif type == "object" then {reviewThreads: {pageInfo: {hasNextPage: ((.pages | length) > 1), endCursor: "c1"}, nodes: .pages[0]}}
@@ -83,11 +83,11 @@ case "$a" in
       queued) touch "$FX/queued"; echo "! Pull request will be added to the merge queue"; exit 0 ;;
       *) echo MERGED >"$FX/merged" ;;
     esac ;;
-  "pr view"*) if [ -s "$FX/view-fails" ] && [ "$(cat "$FX/view-fails")" -gt 0 ]; then
-      echo $(($(cat "$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
+  "pr view"*) if [ -s "$FX/view-fails" ] && [ "$(<"$FX/view-fails")" -gt 0 ]; then
+      echo $(($(<"$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
     if [ -f "$FX/merged" ]; then cat "$FX/pr-merged.json"
     elif [ -f "$FX/queued" ]; then jq '.autoMergeRequest = {"enabledAt": "2026-09-27T12:00:00Z"}' "$FX/pr.json"
-    elif [ -f "$FX/remote-head" ]; then jq --arg h "$(cat "$FX/remote-head")" '.headRefOid = $h' "$FX/pr.json"
+    elif [ -f "$FX/remote-head" ]; then jq --arg h "$(<"$FX/remote-head")" '.headRefOid = $h' "$FX/pr.json"
     else cat "$FX/pr.json"; if [ -f "$FX/race" ]; then rm "$FX/race"; cp "$FX/race-head" "$FX/remote-head"; fi; fi ;;
   "pr list"*merged*) cat "$FX/prs-merged.json" ;;
   "pr list"*) cat "$FX/prs.json" ;;
@@ -95,8 +95,8 @@ case "$a" in
   "issue list"*--label*) cat "$FX/pause.json" ;;
   "issue list"*) cat "$FX/issues.json" ;;
   "issue view"*) # issue.json plus what earlier closes changed; $FX/view-fails counts down failures
-    if [ -s "$FX/view-fails" ] && [ "$(cat "$FX/view-fails")" -gt 0 ]; then
-      echo $(($(cat "$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
+    if [ -s "$FX/view-fails" ] && [ "$(<"$FX/view-fails")" -gt 0 ]; then
+      echo $(($(<"$FX/view-fails") - 1)) >"$FX/view-fails"; echo "HTTP 502" >&2; exit 1; fi
     n=$3
     jq --argjson c "$(cat "$FX/comments-$n" 2>/dev/null || echo '[]')" --arg closed "$([ -f "$FX/closed-$n" ] && echo yes)" \
       '. + {comments: $c} + (if $closed == "yes" then {state: "CLOSED"} else {} end)' "$FX/issue.json" ;;
@@ -175,11 +175,11 @@ case "$a" in
   "pr merge"*) n=${a#pr merge }; touch "$FX/merged-${n%% *}" ;;
   "pr view"*) n=${a#pr view }; n=${n%% *}
     if [ -f "$FX/hold-on-view" ]; then
-      echo "$(cat "$FX/hold-on-view") until:owner since:2026-09-27T12:00:00Z fix pass started" >>"$st/holds"
+      echo "$(<"$FX/hold-on-view") until:owner since:2026-09-27T12:00:00Z fix pass started" >>"$st/holds"
       rm "$FX/hold-on-view"
     fi
     if [ -f "$FX/review-on-view" ]; then
-      printf '2026-09-27T12:00:00Z\t%s\tfixing\t-\tfix lane started\n' "$(cat "$FX/review-on-view")" >>"$st/reviews.tsv"
+      printf '2026-09-27T12:00:00Z\t%s\tfixing\t-\tfix lane started\n' "$(<"$FX/review-on-view")" >>"$st/reviews.tsv"
       rm "$FX/review-on-view"
     fi
     if [ -f "$FX/merged-$n" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}'
