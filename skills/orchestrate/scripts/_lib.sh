@@ -250,11 +250,13 @@ orch_hold_hint() {
   if [[ "$1" == *until:freeze-end* ]]; then echo "freeze.sh end lifts it"; else echo "hold.sh release clears it"; fi
 }
 
-# orch_iso EPOCH -> 2026-01-02T03:04:05Z. An integer EPOCH is formatted by bash's printf (4.2+), in
-# UTC, with no process: every log line and journal entry pays for it (#112). Anything else (bash
-# 3.2, a fraction, garbage) goes to jq, which formats or rejects it as before.
+# orch_iso EPOCH -> 2026-01-02T03:04:05Z. A non-negative integer EPOCH with no leading zero is
+# formatted by bash's printf (4.2+), in UTC, with no process: every log line and journal entry pays
+# for it (#112). Anything else goes to jq, which formats or rejects it as before: bash 3.2, a
+# fraction, garbage, a negative (printf reads -1 and -2 as "now" and "shell start") and a leading
+# zero (printf reads 0123 as octal, and rejects 08).
 orch_iso() {
-  if [[ "$1" =~ ^-?[0-9]{1,15}$ ]] && ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 2))); then
+  if [[ "$1" =~ ^(0|[1-9][0-9]{0,14})$ ]] && ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 2))); then
     TZ=UTC0 printf '%(%Y-%m-%dT%H:%M:%SZ)T\n' "$1"
   else
     jq -rn --argjson t "$1" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")'
