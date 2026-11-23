@@ -507,3 +507,45 @@ unregister_lane() { rm -f "$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"; }
 [\${HOME#/}] judged as a zsh glob: $out"
   done_
 }
+
+@test "ln long options, clusters and operand lists are parsed to the real link path (#384, #387 coverage)" {
+  mkdir -p "$LANE/out"
+  expect deny  "ln --symbolic --relative --target-directory=$HOME src/x" "$LANE" "writes outside"
+  expect deny  "ln --symbolic --target-directory $HOME src/x" "$LANE" "writes outside"
+  expect deny  "ln -s --no-target-directory src/x $HOME/y" "$LANE" "writes outside"
+  expect deny  "ln --force -s -- src/x $HOME/y" "$LANE" "writes outside"
+  expect deny  "ln -sr src/x $HOME/y" "$LANE" "writes outside"
+  expect allow 'ln --symbolic --suffix .bak ../src/x out/y' "$LANE"
+  expect allow 'ln -s --target-directory=out ../src/x' "$LANE"
+  expect allow 'ln -s ../src/x ../src/y out' "$LANE"
+  done_
+}
+
+@test "brace sequences: long ends, letter ranges, steps and descending runs are expanded for the checks (#387 coverage)" {
+  mkdir -p "$LANE/out"
+  # Ends too long for shell arithmetic make more words than the hook judges: refused, not guessed.
+  expect deny  'touch out/{1..99999999999}' "$LANE" "too many paths"
+  expect allow 'touch out/{a..e..99999999999}/x' "$LANE"
+  # Letter ranges, ascending, descending, with a step (and a step too long to count).
+  expect deny  'touch out/{a..e}/../../../x' "$LANE" "writes outside"
+  expect deny  'touch out/{e..a..2}/../../../x' "$LANE" "writes outside"
+  expect deny  'touch out/{a..e..-2}/../../../x' "$LANE" "writes outside"
+  # Numeric sequences with steps, padding and a descending run.
+  expect deny  'touch out/{10..1..3}/../../../x' "$LANE" "writes outside"
+  expect allow 'touch out/{01..10..4} out/{-3..3}' "$LANE"
+  done_
+}
+
+@test "wrappers with value options are skipped to the real command (#384, #387 coverage)" {
+  expect_each_denied 'sudo -u root' 'sudo -n' 'env -u FOO' 'env A=1 -i' 'timeout -s KILL 5' 'timeout -k 1 5' 'xargs -I {}' 'xargs -n 1 -P 2'
+  done_
+}
+
+@test "cp and mv with -t or --target-directory judge the directory, not the sources (#387 coverage)" {
+  mkdir -p "$LANE/out"
+  expect deny  "cp --target-directory=$HOME src/x" "$LANE" "writes outside"
+  expect deny  "mv -t $HOME src/x" "$LANE" "writes outside"
+  expect allow 'cp -t out ../src/x' "$LANE"
+  expect allow 'cp --target-directory=out ../src/x' "$LANE"
+  done_
+}
