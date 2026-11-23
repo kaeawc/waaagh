@@ -117,7 +117,8 @@ check() { "$CHECK" --spectra "$B/spectra" --root "$W" --contract "$C" "$@"; }
   grep -qxF "root-ok $fx" "$B/calls"
   [ -n "$pid" ]
   [ ! -e "$fx" ]
-  ! kill -0 "$pid" 2>/dev/null
+  run kill -0 "$pid"
+  [ "$status" -ne 0 ]
   [ -z "$(ls -A "$W")" ]
 }
 
@@ -176,7 +177,8 @@ check() { "$CHECK" --spectra "$B/spectra" --root "$W" --contract "$C" "$@"; }
   WF="$ROOT/.github/workflows/test.yml"
   install=$(grep -n 'name: Install and check spectra' "$WF" | cut -d: -f1)
   contract=$(grep -n 'dev/spectra-contract.sh --spectra' "$WF" | cut -d: -f1)
-  [ -n "$install" ] && [ -n "$contract" ]
+  [ -n "$install" ]
+  [ -n "$contract" ]
   [ "$contract" -gt "$install" ]
   grep -q 'SPECTRA_VERSION: v0.1.1' "$WF"
 }
