@@ -28,7 +28,7 @@ setup() {
 
 @test "every workflow in the repository pins its actions to a commit with a version comment" {
   for f in "$ROOT"/.github/workflows/*.yml; do
-    ! grep -E '^\s*-?\s*uses:' "$f" | grep -vE '(@[0-9a-f]{40} # v[0-9]|uses: \./)' \
-      || { echo "unpinned action in $f"; return 1; }
+    bad=$(grep -E '^\s*-?\s*uses:' "$f" | grep -cvE '(@[0-9a-f]{40} # v[0-9]|uses: \./)' || true)
+    [ "$bad" -eq 0 ] || { echo "unpinned action in $f"; return 1; }
   done
 }
