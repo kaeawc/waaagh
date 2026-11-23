@@ -56,6 +56,11 @@ dir=$(cd "$dir" && pwd -P)
 inside() { case "$1/" in "$dir"/*) echo "validate.sh: store $1 is inside the checkout; it would change the fingerprint" >&2; exit 2 ;; esac; }
 [[ "$store" == /* ]] || store="$PWD/$store"
 inside "$store"
+# Compare by physical path before creating anything: dir is physical, and a store spelled through
+# a symlink (macOS /var is /private/var) must not slip past and be created inside the checkout.
+p=$store rest=""
+while [[ ! -d "$p" && "$p" == /*/* ]]; do rest="/${p##*/}$rest"; p=${p%/*}; done
+p=$(cd "$p" 2>/dev/null && pwd -P) && inside "$p$rest"
 mkdir -p "$store"
 store=$(cd "$store" && pwd -P)
 inside "$store"

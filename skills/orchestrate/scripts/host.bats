@@ -3,6 +3,8 @@
 # Run: bats host.bats
 
 setup() {
+  # git prints worktree paths physically (macOS: /var/... is /private/var/...); spell them alike.
+  BATS_TEST_TMPDIR=$(cd "$BATS_TEST_TMPDIR" && pwd -P)
   load test_helper
   stub_spectra   # wt-cleanup and shared-build ask spectra who works in a tree (#331)
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"

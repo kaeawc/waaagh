@@ -137,6 +137,14 @@ build_dirs_apply() {
 # = yes remove it, unless a process is working inside it (CWDS: one resolved cwd per line).
 # Only direct children of the build root that hold a .worktree marker naming an absolute path that
 # no longer exists are touched.
+# _bd_busy CWDS DIR: some cwd in CWDS (resolved, one per line) is DIR or below it. DIR is compared
+# by its physical path too: the build root may be spelled through a symlink (macOS /var is
+# /private/var) while the cwds are not.
+_bd_busy() {
+  local p
+  p=$(cd "$2" 2>/dev/null && pwd -P) || p=$2
+  printf '%s\n' "$1" | awk -v d="$2" -v p="$p" '$0 == d || index($0, d "/") == 1 || $0 == p || index($0, p "/") == 1 { f = 1 } END { exit !f }'
+}
 build_dirs_sweep() {
   local apply=$1 cwds=$2 root d wt
   root=$(build_root)
@@ -145,7 +153,7 @@ build_dirs_sweep() {
     [[ -d "$d" && -f "$d/.worktree" ]] || continue
     wt=$(sed -n 1p "$d/.worktree" 2>/dev/null || true)
     [[ "$wt" == /* && ! -e "$wt" ]] || continue
-    if printf '%s\n' "$cwds" | awk -v d="$d" '$0 == d || index($0, d "/") == 1 { f = 1 } END { exit !f }'; then
+    if _bd_busy "$cwds" "$d"; then
       printf 'build\t%s\tkeep: a process is working inside it (worktree %s is gone)\n' "$d" "$wt"
     elif [[ "$apply" == yes ]]; then
       if rm -rf "$d" 2>/dev/null; then
@@ -204,7 +212,7 @@ shared_build_remove() {
 
 # _sb_drop APPLY CWDS DIR REASON: one build row for DIR, removed with APPLY = yes unless in use.
 _sb_drop() {
-  if printf '%s\n' "$2" | awk -v d="$3" '$0 == d || index($0, d "/") == 1 { f = 1 } END { exit !f }'; then
+  if _bd_busy "$2" "$3"; then
     printf 'build\t%s\tkeep: a process is working inside it (%s)\n' "$3" "$4"
   elif [[ "$1" == yes ]]; then
     if shared_build_remove "$3"; then
