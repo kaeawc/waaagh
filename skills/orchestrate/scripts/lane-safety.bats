@@ -56,6 +56,55 @@ asked() {
   decide "find ~/Library -name '*.lock' -delete" "$MAIN"; denied "protected path"
 }
 
+@test "a deletion through a symlink in the lane is judged by the path it reaches (#380)" {
+  mkdir -p "$HOME/.ssh" "$LANE/src"
+  ln -s "$HOME" "$LANE/hm"
+  ln -s / "$LANE/root"
+  decide "rm -rf $LANE/hm/.ssh"; denied "protected path"
+  decide "rm -rf hm/.ssh"; denied "protected path"
+  decide "rm -rf $LANE/hm/Library"; denied "protected path"
+  decide "rm -rf $LANE/root/Users/x"; denied "outside the lane worktree"
+  decide "rm -rf $LANE/root/"; denied "protected path /"
+  decide "rm -rf $LANE/hm/*"; denied "protected path"
+  # The link itself, and paths through a link that stays in the lane, delete as before.
+  ln -s src "$LANE/s2"
+  decide "rm -rf $LANE/root"; allowed
+  decide "rm -rf $LANE/hm"; allowed
+  decide "rm -rf $LANE/s2/x"; allowed
+}
+
+@test "an allowed root that is a symlink widens no write or deletion beyond it (#380)" {
+  mkdir -p "$T/target" "$LANE/src"
+  ln -s /Users "$T/toUsers"
+  ln -s "$T" "$T/up"
+  ln -s "$HOME" "$T/homelink"
+  ln -s "$T/target" "$T/allowlink"
+  ln -s "$T/target" "$LANE/al"
+  WAAAGH_LANE_ALLOW="$T/toUsers" decide "rm -rf /Users/Shared/x"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/toUsers" decide "echo x > /Users/Shared/x"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/up" decide "echo x > $HOME/.zshrc"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/up" decide "rm -rf $HOME/x"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/homelink" decide "rm -rf $HOME/x"; denied "outside the lane worktree"
+  # $HOME itself spelled through a link.
+  HOME="$T/homelink" WAAAGH_LANE_ALLOW="$T/up" decide "rm -rf $T/home/x"; denied "outside the lane worktree"
+  HOME="$T/homelink" WAAAGH_LANE_ALLOW="$T/homelink" decide "echo x > $T/home/.zshrc"; denied "outside the lane worktree"
+  # A root's physical path judges only the path a deletion reaches, never a write.
+  WAAAGH_LANE_ALLOW="$T/allowlink" decide "echo x > $T/target/f"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/allowlink" decide "rm -rf $LANE/al/x"; allowed
+  WAAAGH_LANE_ALLOW="$T/allowlink" decide "rm -rf $T/allowlink/x"; allowed
+  WAAAGH_LANE_ALLOW="$T/allowlink" decide "echo x > $T/allowlink/f"; allowed
+}
+
+@test "a relative write or deletion after popd or another unknown cd is denied; an absolute one is judged (#383)" {
+  mkdir -p "$LANE/d1/d2" "$LANE/src/build"
+  decide "pushd d1/d2 && popd && rm -rf ../../x"; denied "the working directory is unknown after \`popd\`"
+  decide "pushd d1/d2 && pushd && echo x > ../../f"; denied "unknown after \`pushd\`"
+  decide "cd -P -L d1 && rm -rf x"; denied "unknown after \`cd -P -L\`"
+  decide "pushd src && rm -rf build && popd"; allowed
+  decide "pushd d1 && popd && rm -rf $LANE/src/build"; allowed
+  decide "popd && cd $LANE && rm -rf src/build && echo x > f"; allowed
+}
+
 @test "ordinary deletions are allowed outside a lane" {
   decide "rm -rf build" "$MAIN"; allowed
   decide 'rm -rf "$X"' "$MAIN"; allowed

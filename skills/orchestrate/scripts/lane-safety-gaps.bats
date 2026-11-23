@@ -173,8 +173,10 @@ done_() { [ -z "$FAILS" ] || { echo "mismatches:$FAILS"; return 1; }; }
   done_
 }
 
-@test "arms that end without a verdict: cd -, non-recursive rm, find without -delete, harmless tools" {
-  expect allow 'cd - && rm -rf build' "$LANE"
+@test "arms that end without a verdict: cd, non-recursive rm, find without -delete, harmless tools" {
+  # cd - leaves the cwd unknown (#383): a relative deletion after it is denied, an absolute one judged.
+  expect deny  'cd - && rm -rf build' "$LANE" 'unknown after `cd -`'
+  expect allow "cd - && rm -rf $LANE/build" "$LANE"
   expect allow 'cd && rm -rf src/x' "$MAIN"
   expect deny  'cd && rm -rf Library' "$MAIN" "protected path $HOME/Library"
   expect allow 'rm -f ~/x' "$MAIN"
