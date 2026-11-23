@@ -187,6 +187,8 @@ of waaagh, spectra and krit, and in an open auto-mobile PR. A cloud session ran
 pending permission request would also add Webhooks write and Repository creation write on every
 repository.
 
+**Verified end to end (#360), in progress.** The composite action on this PR: run IDs below.
+
 ## Hourly cycle
 
 1. **Lease.** Exit unless `MODE=traveling` and the lease can be taken.
