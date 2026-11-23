@@ -4,7 +4,8 @@
 #
 # Usage: lane-safety.sh < payload.json        (payload: {"tool_name","tool_input":{"command"},"cwd"})
 # Denied everywhere: rm -r / find -delete on a protected root (/, $HOME, ~/Library, ~/.gradle,
-#   ~/.android, the Android SDK, system dirs, $WAAAGH_PROTECTED_PATHS) or on an ancestor of one;
+#   ~/.android, the Android SDK, system dirs, $WAAAGH_PROTECTED_PATHS) or on an ancestor of one; rm
+#   without -r and unlink on a protected root itself (a file below one is judged as a write);
 #   pkill, killall, xargs kill, kill fed by pgrep/pidof/lsof/ps; adb kill-server, adb emu kill
 #   without -s; quitting, killing or opening Simulator.app; simctl shutdown/erase/delete all.
 # Also denied in a lane (cwd in a linked git worktree, or $WAAAGH_LANE_ROOT set): gradle --stop
@@ -12,14 +13,18 @@
 #   outside the lane root and temp dirs (or the lane root itself), rm -r targets built from a
 #   variable the hook cannot expand, and shell writes (>, >>, tee, cp, mv, sed -i, dd of=, ...)
 #   that resolve outside the lane root, temp dirs, the state dir and $WAAAGH_LANE_ALLOW (temp dirs:
-#   $WAAAGH_LANE_TEMP, default /tmp:/private/tmp:/var/folders:$TMPDIR; lists are colon-separated).
+#   $WAAAGH_LANE_TEMP, default /tmp:/private/tmp:/var/folders:$TMPDIR; lists are colon-separated),
+#   or whose real target through a symlink does (anything under /dev aside); rm without -r and
+#   unlink of an entry out of those bounds; ln whose link or target (a symlink's relative target
+#   from the link's directory) is out of them (#384). A glob in any path part is expanded and every
+#   match judged; over 100 matches in one command is too many to judge (#384).
 #   Denied only in a known lane (payload agent_id, $WAAAGH_LANE_ROOT, or an active lanes.tsv row
 #   under the state root); in any other linked worktree, the owner's own session, they ask.
 # Forbidden roots (#218): the orchestrator's own checkout, from $WAAAGH_LANE_FORBID (colon list) and
 #   <state root>/lane-forbidden (one absolute path per line; # comments; state root:
 #   $ORCHESTRATE_STATE_DIR, default ~/.claude/orchestrate). They bind a subagent's calls (payload
 #   agent_id) and a lane session whose worktree is not itself forbidden, never the orchestrator's
-#   own calls. Bound: denied are shell writes, rm -r / find -delete, mutating git (checkout, switch,
+#   own calls. Bound: denied are shell writes and ln targets, rm, unlink, find -delete, mutating git (checkout, switch,
 #   reset, pull, merge, rebase, commit, stash, restore, apply, am, cherry-pick, revert, clean, add,
 #   rm, mv, branch -d/-m/-c/-f, worktree remove/move) and Edit/Write/MultiEdit/NotebookEdit under a forbidden root,
 #   except inside the caller's own lane worktree nested below it.
@@ -125,7 +130,17 @@ resolve() {
 # with lex, a `cd` target normalises lexically, as the shell's logical cd applies `..` to its
 # logical cwd (with `<lane>/esc -> /tmp/a/b`, `cd esc/../..` lands above the lane, not in /tmp).
 expand() {
-  local w=$1 base=$2 mode=${3:-}
+  local mode=${3:-} w
+  subst_word "$1" "$2" || return 1
+  w=$sw
+  [[ "$w" == /* ]] || w="$2/$w"
+  if [[ "$mode" == lex ]]; then norm "$w"; else resolve "$w"; fi
+}
+# subst_word WORD BASE: sets sw to WORD with ~, $HOME, $PWD (BASE) and $TMPDIR spelled out, still
+# relative when WORD is; returns 1 when another variable or a command substitution remains.
+sw=""
+subst_word() {
+  local w=$1 base=$2
   case "$w" in
     "~") w=$home ;;
     \~/*) w="$home/${w#\~/}" ;;
@@ -144,8 +159,42 @@ expand() {
     esac
   fi
   case "$w" in *'$'* | *'`'*) return 1 ;; esac
-  [[ "$w" == /* ]] || w="$base/$w"
-  if [[ "$mode" == lex ]]; then norm "$w"; else resolve "$w"; fi
+  sw=$w
+}
+# Globs (#384). The shell expands a glob before the command runs, so a glob in a middle path part
+# (`rm -rf <lane>/*/.ssh`, `echo x > <nest>/s*/../README`) reaches whatever it matches through, not
+# the literal text. globbed WORD: WORD holds a glob character. deep_glob WORD: one sits before a
+# later `/` (a final part's glob is judged by the directory it lists, check_delete). At most
+# glob_max matches are judged in the whole command (each costs a few forks; the hook has 10
+# seconds): more is too many.
+glob_max=100 glob_left=100
+globbed() { [[ "$1" == *[*?[]* ]]; }
+deep_glob() { local x=${1#*[*?[]}; [[ "$1" != "$x" && "$x" == */* ]]; }
+# glob_words WORD BASE: sets gw to the words the shell's own globbing makes of WORD (variables
+# already spelled out) from the logical cwd BASE (nullglob), at most glob_max + 1 of them, and
+# takes them from glob_left; below zero, the command's globs match too many paths.
+gw=()
+glob_words() {
+  local m
+  gw=()
+  while IFS= read -r -d '' m; do gw+=("$m"); done < <(glob_list "$1" "$2")
+  glob_left=$((glob_left - ${#gw[@]}))
+}
+glob_list() {
+  (
+    if [[ "$1" != /* ]]; then cd "$2" 2>/dev/null || exit 0; fi
+    shopt -s nullglob; set +f
+    IFS="" n=0
+    # shellcheck disable=SC2086
+    for m in $1; do
+      printf '%s\0' "$m"; n=$((n + 1)); ((n <= glob_max)) || break
+    done
+  )
+}
+# too_many LABEL: a glob matched more paths than the hook judges.
+too_many() {
+  if [[ -n "$lane" ]]; then lane_deny "$1: glob matches too many paths (over $glob_max); name them"
+  else ask "$1: glob matches too many paths (over $glob_max) for the hook to judge; name them"; fi
 }
 # cwd_lost: set (to the command, e.g. `popd`) once the hook cannot know the shell's directory for
 # the rest of the command line (popd, pushd other than `pushd DIR`, cd -, cd given both -L and -P);
@@ -267,6 +316,11 @@ if ((${#allowed[@]} > 1)); then
     allowed_p+=("$p")
   done
 fi
+# The lane's own physical root ($WAAAGH_LANE_ROOT may spell it through /var or another link).
+if [[ -n "$lane" ]]; then
+  p=$(phys "$lane_phys")
+  [[ "$p" == "$lane" || "$p" == "$lane_phys" || "$p" == / ]] || allowed_p+=("$p")
+fi
 # enter_worktree DIR: a resolved `cd` into another linked worktree of this repository makes that
 # worktree writable too. A lane subagent starts in the orchestrator's working directory (rule 7),
 # itself a linked worktree in the desktop app, and reaches its own worktree by cd: without this its
@@ -381,12 +435,14 @@ lane_deny() {
   if [[ $known_lane == yes ]]; then deny "$1"
   else ask "$1 (this worktree is no registered lane: approve only if you are the owner)"; fi
 }
-# claude_memory PATH: PATH is inside a Claude project's auto-memory dir
-# (~/.claude/projects/<project>/memory), which every session may write.
+# claude_memory PATH [HOME]: PATH is inside a Claude project's auto-memory dir
+# (~/.claude/projects/<project>/memory, below HOME, default $HOME), which every session may write.
 claude_memory() {
-  local rest=${1#"$home/.claude/projects/"}
+  local rest=${1#"${2:-$home}/.claude/projects/"}
   [[ "$rest" != "$1" && "$rest" == ?*/memory* && "${rest#*/}" =~ ^memory(/|$) ]]
 }
+# claude_memory_p PATH: claude_memory, PATH being physical ($HOME spelled either way).
+claude_memory_p() { claude_memory "$1" || claude_memory "$1" "$(phys "$home")"; }
 # sibling_worktree PATH: prints the linked worktree (not the main checkout, not this session's own
 # worktree) of this repository that holds PATH, spelled as PATH spells it when PATH reaches it
 # through a symlink git resolved. Listed once, lazily, from git worktree list.
@@ -476,14 +532,32 @@ subst_var() {
   return 1
 }
 
-# check_delete WORD BASE WHAT: a recursive deletion target.
+# check_delete WORD BASE WHAT [REC]: a deletion target; REC (default yes) is recursive (rm -r, find
+# -delete), no a single entry (rm without -r, unlink, #384). A glob before a later `/` is expanded
+# and every match judged too (#384); the literal word is always judged.
 check_delete() {
-  local w=$1 base=$2 what=$3 t glob=no prefix="" r s
+  local w=$1 base=$2 what=$3 rec=${4:-yes} s ww m
   if lost_rel "$w"; then deny "$what $w: $(lost_why)"; return 0; fi
-  if ! t=$(expand "$w" "$base") && { ! s=$(subst_var "$w") || ! t=$(expand "$s" "$base"); }; then
-    [[ -z "$lane" ]] || lane_deny "$what $w: path built from a variable; expand and echo the literal path first"
+  if subst_word "$w" "$base"; then ww=$sw
+  elif s=$(subst_var "$w"); then ww=$s
+  else
+    # A single entry built from a variable is judged like a write (check_write), which cannot see it.
+    [[ $rec == no || -z "$lane" ]] || lane_deny "$what $w: path built from a variable; expand and echo the literal path first"
     return 0
   fi
+  if deep_glob "$ww"; then
+    glob_words "$ww" "$base"
+    if ((glob_left < 0)); then too_many "$what $w"
+    else
+      for m in ${gw[@]+"${gw[@]}"}; do judge_delete "$m" "$base" "$what $w (glob match $m)" "$rec"; done
+    fi
+  fi
+  judge_delete "$ww" "$base" "$what $w" "$rec"
+}
+# judge_delete WORD BASE LABEL REC: WORD (no variables left) judged as one deletion target.
+judge_delete() {
+  local w=$1 base=$2 what=$3 rec=$4 t glob=no prefix="" r
+  t=$(expand "$w" "$base") || return 0
   # A glob is judged by the directory it lists (t) and the literal start of the globbed name
   # (prefix): "dir/*" empties dir, "dir/x*" reaches only the entries starting with x.
   case "$t" in
@@ -496,25 +570,38 @@ check_delete() {
   if [[ $glob == yes || "$w" == */ || "$w" == */. ]]; then rt=$(real "$t")
   elif [[ "$t" == / ]]; then rt=/
   else d=${t%/*}; rt=$(norm "$(phys "${d:-/}")/${t##*/}"); fi
-  if r=$(protected "$t" "$glob" "$prefix"); then deny "$what $w: protected path $r"; return 0; fi
-  [[ "$rt" == "$t" ]] || phys_roots
-  if [[ "$rt" != "$t" ]] && r=$(protected "$rt" "$glob" "$prefix" phys); then
-    deny "$what $w: protected path $r (through a symlink: $rt)"; return 0
+  # A single entry (REC no) takes nothing below it: only a protected root itself is denied here, and
+  # a file below one is judged like a write (#384).
+  local pg=$glob
+  [[ $rec == yes ]] || pg=self
+  if [[ $rec == yes || $glob == no ]]; then
+    if r=$(protected "$t" "$pg" "$prefix"); then deny "$what: protected path $r"; return 0; fi
+    [[ "$rt" == "$t" ]] || phys_roots
+    if [[ "$rt" != "$t" ]] && r=$(protected "$rt" "$pg" "$prefix" phys); then
+      deny "$what: protected path $r (through a symlink: $rt)"; return 0
+    fi
   fi
-  if r=$(forbidden "$t"); then deny "$what $w: $(forbid_why "$t" "$r")"; return 0; fi
-  if [[ "$rt" != "$t" ]] && r=$(forbidden "$rt"); then deny "$what $w: $(forbid_why "$rt" "$r")"; return 0; fi
-  for r in "${forbid[@]:-}"; do
-    if [[ -n "$r" ]] && reaches "$t" "$r" "$glob" "$prefix"; then deny "$what $w: $(forbid_why "$t" "$r")"; return 0; fi
-  done
+  if r=$(forbidden "$t"); then deny "$what: $(forbid_why "$t" "$r")"; return 0; fi
+  if [[ "$rt" != "$t" ]] && r=$(forbidden "$rt"); then deny "$what: $(forbid_why "$rt" "$r")"; return 0; fi
+  if [[ $rec == yes ]]; then
+    for r in "${forbid[@]:-}"; do
+      if [[ -n "$r" ]] && reaches "$t" "$r" "$glob" "$prefix"; then deny "$what: $(forbid_why "$t" "$r")"; return 0; fi
+    done
+  fi
   [[ -n "$lane" ]] || return 0
-  if [[ $glob == no && "$t" == "$lane" ]]; then lane_deny "$what $w: that is the lane worktree itself; use git worktree remove"; return 0; fi
-  if del_ok "$t" "$glob" && { [[ "$rt" == "$t" ]] || del_ok "$rt" "$glob"; }; then return 0; fi
-  if [[ "$rt" != "$t" ]] && del_ok "$t" "$glob"; then
-    lane_deny "$what $w: outside the lane worktree $lane and temp dirs (through a symlink: $rt)"
-  else lane_deny "$what $w: outside the lane worktree $lane and temp dirs"; fi
+  if [[ $rec == yes && $glob == no && "$t" == "$lane" ]]; then lane_deny "$what: that is the lane worktree itself; use git worktree remove"; return 0; fi
+  # A single entry is in bounds at or below an allowed root, as a write is (and in Claude memory).
+  local g=$glob
+  [[ $rec == yes ]] || g=yes
+  if { del_ok "$t" "$g" || { [[ $rec == no ]] && claude_memory "$t"; }; } &&
+    { [[ "$rt" == "$t" ]] || del_ok "$rt" "$g" || { [[ $rec == no ]] && claude_memory_p "$rt"; }; }; then return 0; fi
+  if [[ "$rt" != "$t" ]] && { del_ok "$t" "$g" || { [[ $rec == no ]] && claude_memory "$t"; }; }; then
+    lane_deny "$what: outside the lane worktree $lane and temp dirs (through a symlink: $rt)"
+  else lane_deny "$what: outside the lane worktree $lane and temp dirs"; fi
 }
 # protected T GLOB PREFIX [phys]: prints the protected root a deletion of T (GLOB, PREFIX: as in
-# check_delete) would take; with phys, T is a physical path and each root counts by its physical
+# check_delete; GLOB self: a single entry, which takes only a root it is itself) would take; with
+# phys, T is a physical path and each root counts by its physical
 # path as well.
 # phys_roots: fills exacts_p and trees_p (each root and its physical path) once, in this shell.
 phys_roots=no exacts_p=() trees_p=()
@@ -529,6 +616,12 @@ protected() {
   local t=$1 glob=$2 prefix=$3 r ex tr
   if [[ "${4:-}" == phys ]]; then ex=("${exacts_p[@]}") tr=("${trees_p[@]}")
   else ex=("${exacts[@]}") tr=("${trees[@]}"); fi
+  if [[ $glob == self ]]; then
+    for r in "${ex[@]}" "${tr[@]}"; do
+      [[ "$(norm "$r")" != "$t" ]] || { printf '%s\n' "$r"; return 0; }
+    done
+    return 1
+  fi
   for r in "${ex[@]}"; do
     if [[ "$r" == "$t" ]]; then
       [[ $glob == yes && -n "$prefix" ]] || { printf '%s\n' "$r"; return 0; }
@@ -552,16 +645,115 @@ del_ok() {
   done
   return 1
 }
-# check_write WORD BASE WHAT: a file a shell command writes (lane mode only).
+# check_write WORD BASE WHAT: a file a shell command writes (lane mode only). A glob anywhere in WORD
+# is expanded and every match judged as well (#384).
 check_write() {
   [[ -n "$lane" || ${#forbid[@]} -gt 0 ]] || return 0
-  local w=$1 base=$2 what=$3 t f
+  local w=$1 base=$2 what=$3 m
   case "$w" in /dev/null | /dev/stdout | /dev/stderr | /dev/tty | /dev/fd/* | "") return 0 ;; esac
   if lost_rel "$w"; then deny "$what $w: $(lost_why)"; return 0; fi
-  t=$(expand "$w" "$base") || return 0
-  if f=$(forbidden "$t"); then deny "$what $w: $(forbid_why "$t" "$f")"; return 0; fi
+  subst_word "$w" "$base" || return 0
+  local ww=$sw
+  if globbed "$ww"; then
+    glob_words "$ww" "$base"
+    if ((glob_left < 0)); then too_many "$what $w"
+    else
+      for m in ${gw[@]+"${gw[@]}"}; do judge_write "$m" "$base" "$what $w (glob match $m)"; done
+    fi
+  fi
+  judge_write "$ww" "$base" "$what $w"
+}
+# judge_write WORD BASE LABEL [OUTSIDE]: WORD (no variables left) judged as a written path: a
+# forbidden root (by its resolved target, forbidden), then in a lane the path as spelled, then the
+# file it really lands on through a symlink (#384), which must also be in bounds: an allowed root or
+# its physical path, Claude memory, an opened sibling worktree, or anything under /dev. OUTSIDE is
+# the reason's text for a path out of bounds.
+judge_write() {
+  local t f rt why=${4:-"writes outside the lane worktree $lane; enter the worktree (EnterWorktree) and use the edit tools"}
+  t=$(expand "$1" "$2") || return 0
+  if f=$(forbidden "$t"); then deny "$3: $(forbid_why "$t" "$f")"; return 0; fi
   [[ -n "$lane" ]] || return 0
-  in_allowed "$t" || claude_memory "$t" || owner_sibling "$t" || lane_deny "$what $w: writes outside the lane worktree $lane; enter the worktree (EnterWorktree) and use the edit tools"
+  if ! { in_allowed "$t" || claude_memory "$t" || owner_sibling "$t"; }; then lane_deny "$3: $why"; return 0; fi
+  rt=$(real "$t")
+  [[ "$rt" != "$t" ]] || return 0
+  case "$rt" in /dev | /dev/*) return 0 ;; esac
+  real_ok "$rt" || lane_deny "$3: $why (through a symlink: $rt)"
+}
+# real_ok PATH: PATH, a physical path a write reaches through a symlink, is in bounds.
+real_ok() {
+  local a
+  ! in_allowed "$1" || return 0
+  for a in ${allowed_p[@]+"${allowed_p[@]}"}; do ! inside "$1" "$a" || return 0; done
+  claude_memory_p "$1" || owner_sibling "$1"
+}
+# check_ln BASE ARG...: ln (#384). Each link is a write at the link path; its target (a relative
+# symlink target resolves against the link's directory, a hard link's or ln -r's against BASE) is
+# judged as a write too, so a link created and used in one command (`ln -s <checkout> nl && echo x
+# > nl/f`) cannot lead out of bounds.
+check_ln() {
+  local base=$1 sym=no rel=no tdir="" notdir=no ends=no ops=() t srcs=() links=() k L ld tw s
+  shift
+  while (($#)); do
+    t=$1; shift
+    if [[ $ends == no ]]; then
+      case "$t" in
+        --) ends=yes; continue ;;
+        --symbolic) sym=yes; continue ;;
+        --relative) rel=yes; continue ;;
+        --no-target-directory) notdir=yes; continue ;;
+        --target-directory=*) tdir=${t#*=}; continue ;;
+        --target-directory) tdir=${1:-}; (($# == 0)) || shift; continue ;;
+        --*) continue ;;
+        -?*)
+          [[ "$t" != *s* ]] || sym=yes
+          [[ "$t" != *r* ]] || rel=yes
+          [[ "$t" != *T* ]] || notdir=yes
+          if [[ "$t" == *t ]]; then tdir=${1:-}; (($# == 0)) || shift; fi
+          continue ;;
+      esac
+    fi
+    [[ -z "$t" ]] || ops+=("$t")
+  done
+  ((${#ops[@]})) || return 0
+  # Operand words as the shell globbed them, from BASE.
+  local words=()
+  for t in "${ops[@]}"; do
+    if subst_word "$t" "$base" && globbed "$sw"; then
+      glob_words "$sw" "$base"
+      if ((glob_left < 0)); then too_many "ln $t"; return 0; fi
+      if ((${#gw[@]})); then words+=("${gw[@]}"); else words+=("$t"); fi
+    else words+=("$t"); fi
+  done
+  if [[ -n "$tdir" ]]; then
+    srcs=("${words[@]}")
+    for t in "${srcs[@]}"; do t=${t%/}; links+=("$tdir/${t##*/}"); done
+  elif ((${#words[@]} == 1)); then
+    t=${words[0]%/}; srcs=("${words[0]}") links=("${t##*/}")
+  else
+    L=${words[${#words[@]} - 1]} srcs=("${words[@]:0:${#words[@]}-1}")
+    if [[ $notdir == no ]] && t=$(expand "$L" "$base") && [[ -d "$t" ]]; then
+      for t in "${srcs[@]}"; do t=${t%/}; links+=("$L/${t##*/}"); done
+    else
+      for t in "${srcs[@]}"; do links+=("$L"); done
+    fi
+  fi
+  for ((k = 0; k < ${#srcs[@]}; k++)); do
+    check_write "${links[k]}" "$base" "ln"
+    s=${srcs[k]}
+    if subst_word "$s" "$base"; then tw=$sw
+    elif tw=$(subst_var "$s"); then :
+    else continue; fi
+    ld=$base
+    if [[ $sym == yes && $rel == no && "$tw" != /* ]]; then
+      # resolve (via expand) walks a `..` in the target from the link directory's physical path.
+      L=$(expand "${links[k]}" "$base") || continue
+      ld=${L%/*}
+      ld=${ld:-/}
+    fi
+    case "$tw" in /dev | /dev/*) continue ;; esac
+    judge_write "$tw" "$ld" "ln $s (target of the link ${links[k]})" \
+      "links outside the lane worktree $lane and temp dirs; a link created and used in one command is not checked when used"
+  done
 }
 # check_git BASE ARG...: a mutating git command whose work tree (BASE, -C, --work-tree) lies under a
 # bound forbidden root. Read-only commands, fetch and worktree add stay allowed there.
@@ -987,7 +1179,14 @@ analyze_simple() {
       if [[ $rec == yes ]]; then
         [[ $via_xargs == no ]] || deny "xargs rm -r deletes paths the hook cannot see; list and delete literal paths"
         for t in "${files[@]:-}"; do [[ -z "$t" ]] || check_delete "$t" "$base" "rm -r"; done
+      else
+        # Without -r: one entry each, judged as a write is but by the entry rm removes (#384).
+        for t in "${files[@]:-}"; do [[ -z "$t" ]] || check_delete "$t" "$base" "rm" no; done
       fi ;;
+    unlink)
+      destructive=yes
+      for t in "${a[@]:-}"; do [[ -z "$t" || "$t" == -* ]] || check_delete "$t" "$base" "unlink" no; done ;;
+    ln) check_ln "$base" "${a[@]:-}" ;;
     find)
       local starts=() del=no
       for t in "${a[@]:-}"; do
@@ -1047,7 +1246,7 @@ analyze_simple() {
       for t in "${a[@]:-}"; do [[ "$t" == -* ]] || check_write "$t" "$base" "tee"; done ;;
     touch | truncate)
       for t in "${a[@]:-}"; do [[ "$t" == -* ]] || check_write "$t" "$base" "$c"; done ;;
-    cp | mv | install | ln | rsync)
+    cp | mv | install | rsync)
       local last="" tdir="" srcs=()
       for ((j = 0; j < n; j++)); do
         case "${a[j]}" in
@@ -1079,7 +1278,7 @@ analyze_simple() {
         done
       fi ;;
   esac
-  if [[ "$c" =~ ^(rm|kill|avdmanager|git|xcrun|simctl|adb|find)$ && $destructive == yes ]]; then
+  if [[ "$c" =~ ^(rm|unlink|kill|avdmanager|git|xcrun|simctl|adb|find)$ && $destructive == yes ]]; then
     if [[ "$term" == "&" ]]; then ask "backgrounded destructive command ($c ...): run it in the foreground and read its output"
     elif [[ $silenced == yes && $kill_literal == yes ]]; then :
     elif [[ $silenced == yes && $kill_quiet == yes ]]; then quiet_kills+=("$base"$'\036'"$cmd_subs")

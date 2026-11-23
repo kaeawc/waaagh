@@ -312,3 +312,38 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   [ "$status" -eq 0 ]
   for t in Bash Edit Write MultiEdit NotebookEdit; do [[ "|$output|" == *"|$t|"* ]] || { echo "matcher lacks $t: $output"; return 1; }; done
 }
+
+@test "ln: a link into the checkout or out of bounds is refused when made, not only when used (#384)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/src" "$MAIN/sub" "$NEST/lib" "$T/elsewhere"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  for c in "ln -s $MAIN nl && echo x > nl/f" "ln -s $MAIN nl; rm -rf nl/src" "ln -sf $MAIN/README rl" \
+    "ln -s ../../../README rel" "ln -s sl/../README rel" "ln $MAIN/README hard" "ln -s $MAIN" \
+    "ln -s $MAIN/README $MAIN/src lib" "ln -sfn -- $MAIN nl" "ln -s -t lib $MAIN/src"; do
+    expect deny Bash "$c" "$NEST" agent-3 "orchestrator's checkout"
+  done
+  expect deny Bash "ln -s $T/elsewhere out" "$NEST" agent-3 "links outside the lane worktree"
+  expect deny Bash "ln -s $HOME hm" "$NEST" agent-3 "links outside the lane worktree"
+  # In-lane and temp targets, and /dev, stay allowed (node_modules/.bin style).
+  for c in "ln -s ../lib/x node_modules/.bin/x" "ln -sf lib lib2" "ln -s $T/scratch/out out" \
+    "ln -s /dev/null devnull" "ln -s $NEST/lib/x $T/scratch/x" "ln lib/a lib/b"; do
+    expect allow Bash "$c" "$NEST" agent-3
+  done
+  # The orchestrator's own calls are unbound.
+  expect allow Bash "ln -s $MAIN/README rl" "$MAIN" ""
+  done_
+}
+
+@test "a glob before .. in the nested lane reaches the checkout through a link (#384)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/src" "$MAIN/sub"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  expect deny Bash "echo x > $NEST/s*/../README" "$NEST" agent-3 "orchestrator's checkout"
+  expect deny Bash "rm -rf $NEST/s?/../src" "$NEST" agent-3 "orchestrator's checkout"
+  expect deny Bash "rm -f s*/../README" "$NEST" agent-3 "orchestrator's checkout"
+  expect deny Bash "rm -f $MAIN/README" "$NEST" agent-3 "orchestrator's checkout"
+  expect deny Bash "unlink ../../../README" "$NEST" agent-3 "orchestrator's checkout"
+  done_
+}

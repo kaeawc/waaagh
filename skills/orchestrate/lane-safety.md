@@ -47,6 +47,11 @@ command (quotes, comments and heredoc bodies are data; `bash -c`, `eval`, `$(…
 |---|---|---|
 | `rm -r` / `find -delete` on `/`, `$HOME`, `~/Library`, `~/.gradle`, `~/.android`, the SDK (`$ANDROID_HOME`), system dirs, `$WAAAGH_PROTECTED_PATHS`, or an ancestor of one | deny | deny |
 | `rm -r` outside the worktree and temp dirs, on the worktree itself, or on a path built from a variable | allow | deny |
+| `rm` without `-r`, `unlink` on a protected root itself (`rm ~`, `rm -f ~/.ssh`) | deny | deny |
+| `rm` without `-r`, `unlink` of a file outside the worktree and temp dirs (a file below a protected root counts as a write: `rm -f ~/.ssh/known_hosts`) | allow | deny |
+| `ln` (any form) whose link, or whose target, lies outside the worktree, temp dirs and the state dir; a relative symlink target resolves from the link's directory (`ln -s <checkout> nl` is refused when made, so `ln -s <checkout> nl && echo x > nl/f` cannot pass) | allow | deny |
+| a write through a symlink whose real target lies outside (`echo x > <lane>/hm/.bashrc` with `hm -> $HOME`); a target under `/dev`, a temp dir or an allowed root stays allowed | allow | deny |
+| a glob in any path part (`rm -rf <lane>/*/.ssh`, `echo x > <lane>/s*/../README`): every match is judged; more than 100 matches in one command | as each match; ask | as each match; deny |
 | `pkill`, `killall`, `xargs kill`, `kill` fed by `pgrep`/`pidof`/`lsof`/`ps`, `kill -1` | deny | deny |
 | quitting, killing or opening Simulator.app; `simctl shutdown/erase/delete all` | deny | deny |
 | `adb kill-server`; `adb emu kill` without `-s` | deny | deny |
@@ -75,7 +80,10 @@ rather than denials. Temp dirs are `/tmp`, `/private/tmp`, `/var/folders` and
 The hook follows `cd` the way the shell does: `..` in a `cd` argument is applied by text against
 the logical working directory, and only `cd -P` resolves symlinks. Paths given to writes and
 deletes are judged by where they really lead, symlinks and `..` included, so a link inside the lane
-cannot reach the orchestrator's checkout (#380). After `popd`, a `pushd` other than `pushd DIR`,
+cannot reach the orchestrator's checkout (#380); writes are judged by their real target through
+a symlink as well, and an `ln` by its target, so a link made and used in one command cannot leave
+the lane either (#384). A glob is expanded the way the shell expands it, against the working
+directory, and every match is judged; a glob that matches nothing is judged as written. After `popd`, a `pushd` other than `pushd DIR`,
 `cd -`, `cd ±N`, or a `cd` given both `-L` and `-P`, the working directory is unknown for the
 rest of the command: relative write and delete operands are denied, so use absolute paths, or
 `cd` to an absolute path first.

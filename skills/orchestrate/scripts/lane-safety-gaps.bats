@@ -51,6 +51,8 @@ expect_each_denied() {
   done
 }
 done_() { [ -z "$FAILS" ] || { echo "mismatches:$FAILS"; return 1; }; }
+# unregister_lane: drop the lanes.tsv row, so the lane is the owner's own session (ask, not deny).
+unregister_lane() { rm -f "$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"; }
 
 @test "\$HOME, \${HOME}, \$PWD and \${PWD} spellings expand before the deletion and write checks" {
   expect deny  'rm -rf $HOME' "$MAIN" "protected path $HOME"
@@ -180,7 +182,8 @@ done_() { [ -z "$FAILS" ] || { echo "mismatches:$FAILS"; return 1; }; }
   expect allow 'cd && rm -rf src/x' "$MAIN"
   expect deny  'cd && rm -rf Library' "$MAIN" "protected path $HOME/Library"
   expect allow 'rm -f ~/x' "$MAIN"
-  expect allow 'rm ~' "$MAIN"
+  # A non-recursive rm is judged too (#384): a protected root itself is refused.
+  expect deny  'rm ~' "$MAIN" "protected path $HOME"
   expect allow 'find ~ -name x -print' "$MAIN"
   expect allow 'find ~ -exec ls {} ;' "$MAIN"
   expect deny  'find ~/Library -exec /bin/rm {} ;' "$MAIN" "protected path"
@@ -242,4 +245,87 @@ done_() { [ -z "$FAILS" ] || { echo "mismatches:$FAILS"; return 1; }; }
   [ "$status" -eq 0 ]; [[ "$output" == *"protected path $HOME/Library"* ]]
   WAAAGH_LANE_SAFETY=off run "$SCRIPTS/lane-safety.sh" <<<"$(payload 'rm -rf ~' "$MAIN")"
   [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "rm without -r and unlink: protected roots, forbidden roots and the lane bounds (#384)" {
+  mkdir -p "$HOME/.ssh" "$LANE/src"
+  printf 'k\n' >"$HOME/.ssh/id"
+  printf 'b\n' >"$HOME/.bashrc"
+  touch "$LANE/a.log" "$LANE/b.log"
+  ln -s "$HOME" "$LANE/hm"
+  # A protected root itself is refused everywhere; a file below one is judged as a write.
+  expect deny  'rm -f ~/.ssh' "$MAIN" "rm ~/.ssh: protected path $HOME/.ssh"
+  expect deny  'rm /' "$MAIN" "protected path /"
+  expect allow 'rm -f ~/.ssh/known_hosts' "$MAIN"
+  expect deny  'rm -f ~/.ssh/known_hosts' "$LANE" "outside the lane worktree"
+  expect deny  "rm -f $HOME/.bashrc" "$LANE" "rm $HOME/.bashrc: outside the lane worktree"
+  expect deny  "unlink $HOME/.bashrc" "$LANE" "unlink $HOME/.bashrc: outside the lane worktree"
+  expect deny  "rm -f ../main/x" "$LANE" "outside the lane worktree"
+  # Through a lane link: judged by the entry rm removes.
+  expect deny  "rm -f $LANE/hm/.ssh/id" "$LANE" "(through a symlink: "
+  expect deny  "rm hm/.bashrc" "$LANE" "(through a symlink: "
+  expect deny  "unlink $LANE/hm/.bashrc" "$LANE" "(through a symlink: "
+  # In the lane, temp dirs, the link itself, a variable: allowed, no prompt.
+  expect allow 'rm -f a.log' "$LANE"
+  expect allow 'rm a.log b.log' "$LANE"
+  expect allow 'rm -f src/x' "$LANE"
+  expect allow "rm -f $T/scratch/x" "$LANE"
+  expect allow 'rm -f hm' "$LANE"
+  expect allow 'unlink hm' "$LANE"
+  expect allow 'rm -f "$X"' "$LANE"
+  expect allow "rm -f $HOME/.bashrc" "$MAIN"
+  # The owner's own worktree session asks instead of denying.
+  unregister_lane
+  expect ask   "rm -f $HOME/.bashrc" "$LANE" "no registered lane"
+  done_
+}
+
+@test "a write through a link in the lane is judged by its real target, /dev and temp dirs aside (#384)" {
+  mkdir -p "$T/scratch/b" "$LANE/build"
+  ln -s "$HOME" "$LANE/hm"
+  ln -s / "$LANE/root"
+  ln -s "$T/scratch" "$LANE/tmpl"
+  ln -s /dev/null "$LANE/devnull"
+  ln -s "$T/scratch/b" "$LANE/build/out"
+  expect deny  "echo x > $LANE/hm/.bashrc" "$LANE" "writes outside the lane worktree"
+  expect deny  'echo x > hm/.bashrc' "$LANE" "(through a symlink: "
+  expect deny  'echo x >> root/etc/hosts' "$LANE" "(through a symlink: "
+  expect deny  'touch hm/f' "$LANE" "touch hm/f"
+  expect deny  'cp x hm/' "$LANE" "cp hm/"
+  expect deny  'printf x | tee hm/.zshrc' "$LANE" "tee hm/.zshrc"
+  expect allow 'echo x > devnull' "$LANE"
+  expect allow 'echo x > /dev/null; echo y > /dev/fd/2; echo z > /dev/stderr' "$LANE"
+  expect allow 'echo x > tmpl/f' "$LANE"
+  expect allow 'echo x > build/out/f' "$LANE"
+  expect allow 'echo x > build/f' "$LANE"
+  unregister_lane
+  expect ask   'echo x > hm/.bashrc' "$LANE" "(through a symlink: "
+  done_
+}
+
+@test "a glob in any path part is expanded and every match judged (#384)" {
+  mkdir -p "$HOME/.ssh" "$LANE/build/o" "$LANE/many"
+  printf 'b\n' >"$HOME/.bashrc"
+  touch "$LANE/a.log" "$LANE/b.log" "$LANE/build/o/x"
+  ln -s "$HOME" "$LANE/hm"
+  expect deny  "rm -rf $LANE/*/.ssh" "$LANE" "(glob match $LANE/hm/.ssh): protected path"
+  expect deny  "rm -rf $LANE/h?/.ssh" "$LANE" "protected path"
+  expect deny  'rm -rf h?/' "$LANE" "protected path"
+  expect deny  "rm -f $LANE/h*/.bashrc" "$LANE" "(through a symlink: "
+  expect deny  'echo x > h[m]/.bashrc' "$LANE" "(glob match hm/.bashrc)"
+  # Globs inside the lane, and a glob that matches nothing.
+  expect allow 'rm -rf build/*' "$LANE"
+  expect allow 'rm -f *.log' "$LANE"
+  expect allow "rm -rf $LANE/build/*/x" "$LANE"
+  expect allow 'rm -rf nomatch*/x' "$LANE"
+  expect allow 'echo x > b*/o/x' "$LANE"
+  # More matches than the hook judges: name them.
+  local i
+  for ((i = 1; i <= 101; i++)); do mkdir -p "$LANE/many/d$i"; touch "$LANE/many/d$i/x"; done
+  expect deny  'rm -rf many/*/x' "$LANE" "glob matches too many paths"
+  expect allow 'rm -rf many/*' "$LANE"
+  expect ask   "rm -rf $LANE/many/*/x" "$MAIN" "glob matches too many paths"
+  unregister_lane
+  expect ask   'rm -rf many/*/x' "$LANE" "glob matches too many paths"
+  done_
 }
