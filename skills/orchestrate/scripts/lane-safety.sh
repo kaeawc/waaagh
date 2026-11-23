@@ -123,6 +123,14 @@ expand() {
 }
 # inside A B: A is B or below it.
 inside() { [[ "$1" == "$2" || "$2" == / || "$1" == "$2"/* ]]; }
+# phys ABS: ABS with its nearest existing directory resolved to its physical path (pwd -P), so a
+# path spelled through a symlink (/var/... vs /private/var/... on macOS) compares with one git or
+# pwd -P printed; ABS itself when nothing along it resolves.
+phys() {
+  local d=$1 rest="" p
+  while [[ ! -d "$d" && "$d" == /*/* ]]; do rest="/${d##*/}$rest"; d=${d%/*}; done
+  if p=$(cd "$d" 2>/dev/null && pwd -P); then norm "$p$rest"; else printf '%s\n' "$1"; fi
+}
 # reaches T R GLOB PREFIX: R lies strictly below T, and deleting T (with GLOB: T's entries whose
 # names start with PREFIX) takes R with it.
 reaches() {
@@ -144,19 +152,39 @@ if [[ -n "${WAAAGH_PROTECTED_PATHS:-}" ]]; then
 fi
 exacts=(/ "$home" "$home/.claude" "$home/.config" /var /private /tmp /private/tmp /Users /home /Volumes)
 
-# Lane mode: the lane root is the linked worktree holding cwd (or $WAAAGH_LANE_ROOT).
-lane=${WAAAGH_LANE_ROOT:-}
+# logical_top TOP DIR: TOP, a physical path git printed, as spelled along DIR, a path at or below
+# it that may run through a symlink (macOS: /var/... is /private/var/..., /tmp is /private/tmp),
+# so it compares with the paths the command and cwd spell; TOP itself when DIR does not reach it.
+logical_top() {
+  local top d=$2 p
+  top=$(norm "$1")
+  while [[ "$d" == /* ]]; do
+    p=$(cd "$d" 2>/dev/null && pwd -P) || break
+    if [[ "$p" == "$top" ]]; then printf '%s\n' "$d"; return 0; fi
+    [[ "$p" == "$top"/* && "$d" == /*/* ]] || break
+    d=${d%/*}
+  done
+  printf '%s\n' "$top"
+}
+# Lane mode: the lane root is the linked worktree holding cwd (or $WAAAGH_LANE_ROOT), spelled as
+# cwd spells it; lane_phys is its physical path (what git prints), allowed as well.
+lane=${WAAAGH_LANE_ROOT:-} lane_phys=""
 if [[ -z "$lane" ]] && command -v git >/dev/null 2>&1; then
   gd=$(git -C "$cwd" rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel 2>/dev/null || true)
   if [[ -n "$gd" ]]; then
     g1=$(sed -n 1p <<<"$gd") g2=$(sed -n 2p <<<"$gd") top=$(sed -n 3p <<<"$gd")
-    [[ "$g1" == "$g2" || -z "$top" ]] || lane=$top
+    if [[ "$g1" != "$g2" && -n "$top" ]]; then
+      lane_phys=$(norm "$top")
+      lane=$(logical_top "$top" "$(norm "$cwd")")
+    fi
   fi
 fi
 [[ -z "$lane" ]] || lane=$(norm "$lane")
+[[ -n "$lane_phys" ]] || lane_phys=$lane
 allowed=()
 if [[ -n "$lane" ]]; then
   allowed=("$lane" "${ORCHESTRATE_STATE_DIR:-$home/.claude/orchestrate}")
+  [[ "$lane_phys" == "$lane" ]] || allowed+=("$lane_phys")
   temps=${WAAAGH_LANE_TEMP-/tmp:/private/tmp:/var/folders${TMPDIR:+:$TMPDIR}}
   if [[ -n "$temps${WAAAGH_LANE_ALLOW:-}" ]]; then
     IFS=: read -r -a extra <<<"$temps:${WAAAGH_LANE_ALLOW:-}"
@@ -179,6 +207,9 @@ enter_worktree() {
   t1=$(sed -n 1p <<<"$o") t2=$(sed -n 2p <<<"$o") top=$(sed -n 3p <<<"$o")
   [[ -n "$top" && "$t1" != "$t2" && "$t2" == "$g2" ]] || return 0
   allowed+=("$(norm "$top")")
+  # git prints the physical path; the command goes on to spell the one it cd'd through.
+  o=$(logical_top "$top" "$d")
+  [[ "$o" == "$(norm "$top")" ]] || allowed+=("$o")
 }
 # A known lane gets lane-mode denials: a subagent's call (payload agent_id), $WAAAGH_LANE_ROOT, or
 # a worktree with a live row in a lanes.tsv under the state root (lane-claim.sh add; live = any
@@ -232,19 +263,21 @@ done
 if ((${#forbid[@]})); then
   own=$lane
   for v in "${forbid[@]}"; do
-    [[ "$lane" != "$v" ]] || lane_forbidden=yes
-    [[ -z "$own" ]] || ! inside "$v" "$own" || own=""
+    [[ "$lane" != "$v" && "$lane_phys" != "$v" ]] || lane_forbidden=yes
+    [[ -z "$own" ]] || ! { inside "$v" "$own" || inside "$v" "$lane_phys"; } || own=""
   done
   # Unbound: the orchestrator's own call (no subagent, and its cwd is no lane or a forbidden root).
   if [[ -z "$agent" && ( -z "$lane" || $lane_forbidden == yes ) ]]; then forbid=(); fi
 fi
-# forbidden PATH: prints the bound forbidden root holding PATH (none inside the caller's own lane).
+# forbidden PATH: prints the bound forbidden root holding PATH, as spelled or by its physical path
+# (none inside the caller's own lane).
 forbidden() {
-  local f
+  local f p
   ((${#forbid[@]})) || return 1
-  [[ -z "$own" ]] || ! inside "$1" "$own" || return 1
+  p=$(phys "$1")
+  [[ -z "$own" ]] || ! { inside "$1" "$own" || inside "$p" "$lane_phys"; } || return 1
   for f in "${forbid[@]}"; do
-    if inside "$1" "$f"; then printf '%s\n' "$f"; return 0; fi
+    if inside "$1" "$f" || inside "$p" "$f"; then printf '%s\n' "$f"; return 0; fi
   done
   return 1
 }
@@ -265,22 +298,32 @@ claude_memory() {
   [[ "$rest" != "$1" && "$rest" == ?*/memory* && "${rest#*/}" =~ ^memory(/|$) ]]
 }
 # sibling_worktree PATH: prints the linked worktree (not the main checkout, not this session's own
-# worktree) of this repository that holds PATH. Listed once, lazily, from git worktree list.
+# worktree) of this repository that holds PATH, spelled as PATH spells it when PATH reaches it
+# through a symlink git resolved. Listed once, lazily, from git worktree list.
 siblings_listed=no siblings=()
 sibling_worktree() {
-  local w p
+  local w p rest
   if [[ $siblings_listed == no ]]; then
     siblings_listed=yes
     while IFS= read -r w; do
       [[ -n "$w" ]] || continue
       w=$(norm "$w")
-      [[ "$w" != "$lane" ]] || continue
+      [[ "$w" != "$lane" && "$w" != "$lane_phys" ]] || continue
       siblings+=("$w")
       if p=$(cd "$w" 2>/dev/null && pwd -P) && [[ "$p" != "$w" ]]; then siblings+=("$p"); fi
     done < <(git -C "$cwd" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | sed 1d)
   fi
   for w in "${siblings[@]:-}"; do
     if [[ -n "$w" ]] && inside "$1" "$w"; then printf '%s\n' "$w"; return 0; fi
+  done
+  p=$(phys "$1")
+  [[ "$p" != "$1" ]] || return 1
+  for w in "${siblings[@]:-}"; do
+    if [[ -n "$w" ]] && inside "$p" "$w"; then
+      rest=${p#"$w"}
+      if [[ "$1" == *"$rest" ]]; then printf '%s\n' "${1%"$rest"}"; else printf '%s\n' "$w"; fi
+      return 0
+    fi
   done
   return 1
 }

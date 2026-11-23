@@ -184,6 +184,7 @@ args() { printf '%s\n' "$output" | sed -n 's/^arg=//p' | tr '\n' ' '; }
 }
 
 @test "removing a finished worktree also removes the build dir its gates used" {
+  T=$(cd "$T" && pwd -P)   # wt-cleanup prints git's worktree path, which is physical (macOS /private/var)
   O="$T/origin.git" M="$T/main"
   git init -q --bare "$O"
   git clone -q "$O" "$M" 2>/dev/null

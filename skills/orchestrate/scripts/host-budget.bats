@@ -3,6 +3,8 @@
 # live-cwd guard (wt-cleanup.sh, against a stubbed spectra and du and gh on PATH). Run: bats host-budget.bats
 
 setup() {
+  # git prints worktree paths physically (macOS: /var/... is /private/var/...); spell them alike.
+  BATS_TEST_TMPDIR=$(cd "$BATS_TEST_TMPDIR" && pwd -P)
   load test_helper
   SCRIPTS="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
   BIN="$BATS_TEST_TMPDIR/bin" FX="$BATS_TEST_TMPDIR/fx"
