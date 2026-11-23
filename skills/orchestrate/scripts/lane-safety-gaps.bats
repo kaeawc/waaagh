@@ -448,6 +448,28 @@ unregister_lane() { rm -f "$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"; }
   [[ "$out" == *"protected path"* ]]
 }
 
+@test "the deadline exits 0 every time, and holds with an unwritable TMPDIR (#387 review)" {
+  local out rc i
+  export WAAAGH_LANE_SAFETY_TEST_STALL=4 WAAAGH_LANE_SAFETY_DEADLINE=1
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    rc=0; out=$("$SCRIPTS/lane-safety.sh" <<<"$(payload 'ls' "$LANE")") || rc=$?
+    [ "$rc" -eq 0 ] || { echo "run $i exited $rc"; return 1; }
+    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$out")" = deny ]
+  done
+  rc=0; out=$(TMPDIR=/nonexistent "$SCRIPTS/lane-safety.sh" <<<"$(payload 'ls' "$LANE")") || rc=$?
+  [ "$rc" -eq 0 ]
+  [[ "$out" == *"the check took too long"* ]]
+}
+
+@test "a command holding the tokenizer's mark bytes is refused, so it cannot forge a quote (#387 review)" {
+  local c
+  for c in $'echo \026; rm -rf ~' $'bash -c \'echo \026; rm -rf ~\'' $'echo x \026 > out/a; rm -rf hm/.ssh' $'ls \021'; do
+    expect deny "$c" "$LANE" "control characters"
+    expect deny "$c" "$MAIN" "control characters"
+  done
+  done_
+}
+
 @test "quoted or escaped braces cannot hide an expansion; quoted glob characters are plain (#387 review)" {
   mkdir -p "$HOME/.ssh" "$LANE/src" "$LANE/out"
   printf 'b\n' >"$HOME/.bashrc"

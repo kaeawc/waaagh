@@ -1571,7 +1571,13 @@ analyze_simple() {
 if [[ "${WAAAGH_LANE_SAFETY_TEST_STALL:-}" =~ ^[0-9]$ ]]; then
   while ((SECONDS < WAAAGH_LANE_SAFETY_TEST_STALL)); do :; done
 fi
-if [[ "$tool" == Bash ]]; then
+# The tokenizer marks quoted characters with the bytes \021-\031, so a command that already holds
+# one could forge a mark (an unquoted `#` read as a comment hides the rest of the line). No real
+# command needs them: refuse it.
+mark_re=$'[\021-\031]'
+if [[ "$tool" == Bash && "$cmd" =~ $mark_re ]]; then
+  deny "the command holds control characters (\\021-\\031) the check cannot judge; remove them"
+elif [[ "$tool" == Bash ]]; then
   analyze "$cmd" "$cwd"
 elif t=$(expand "$cmd" "$cwd") && f=$(forbidden "$t"); then
   deny "$tool $cmd: $(forbid_why "$t" "$f")"
@@ -1599,7 +1605,9 @@ jq -cn --arg d "$decision" --arg r "$um" \
 deadline=${WAAAGH_LANE_SAFETY_DEADLINE:-6}
 [[ "$deadline" =~ ^[1-6]$ ]] || deadline=6
 wd=""
-if ! wd=$(mktemp -d "${TMPDIR:-/tmp}/lane-safety.XXXXXX" 2>/dev/null) || ! mkfifo "$wd/f" 2>/dev/null; then
+# An unwritable TMPDIR falls back to /tmp, so the deadline still holds.
+if ! { wd=$(mktemp -d "${TMPDIR:-/tmp}/lane-safety.XXXXXX" 2>/dev/null) || wd=$(mktemp -d /tmp/lane-safety.XXXXXX 2>/dev/null); } ||
+  ! mkfifo "$wd/f" 2>/dev/null; then
   [[ -z "$wd" || ! -d "$wd" ]] || rm -rf "$wd"
   wd=""
   lane_main
@@ -1615,7 +1623,9 @@ worker=$!
   kill -TERM "$main" 2>/dev/null || true
 ) </dev/null >/dev/null 2>&1 &
 wdog=$!
-trap 'kill "$wdog" 2>/dev/null; rm -rf "$wd"' EXIT
+# `|| true`: the watchdog may already be gone, and a failing kill under set -e would turn the
+# deadline's exit 0 into exit 1.
+trap 'kill "$wdog" 2>/dev/null || true; rm -rf "$wd"' EXIT
 timed_out() {
   trap '' TERM
   kill "$worker" 2>/dev/null || true
