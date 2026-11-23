@@ -514,7 +514,9 @@ their wall caps, and lanes re-run them, which makes it worse.
   missing; there is no fallback to waaagh's own inspection. The plugin registers `spectra-mcp`, so
   you and the lanes also have its MCP tools (`process`, `memory`, `system`, `jvm`, `host_health`,
   `alerts`). Do not add new `ps`, `lsof` or `vm_stat` parsing to waaagh: ask spectra, and file a
-  spectra issue when it cannot answer.
+  spectra issue when it cannot answer. Every spectra JSON field a script reads has a row in
+  `skills/orchestrate/spectra-contract.tsv` (#370), which CI checks against the pinned release
+  (`dev/spectra-contract.sh`); add the row in the change that reads the field.
 - **Symptoms.** A load average well above the core count (`uptime`); hundreds of test, bundler,
   Gradle or Xcode processes; gates timing out that pass alone. To see who is responsible:
   `spectra load --root <worktree root>` (the cause, by worktree and process family). For anything

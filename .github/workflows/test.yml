@@ -50,6 +50,12 @@ jobs:
           echo "capabilities: $caps"
           # shellcheck disable=SC2086 # one word per capability
           SPECTRA="$bin/spectra" bash -c 'source skills/orchestrate/scripts/_lib.sh && orch_spectra_require "$@"' _ $caps
+          echo "SPECTRA_BIN=$bin/spectra" >>"$GITHUB_ENV"
+      # Every spectra JSON field the scripts read (skills/orchestrate/spectra-contract.tsv, #370), run
+      # against the release above: a field spectra renames or drops fails here. Read-only commands
+      # under a scratch directory in the checkout (one idle process and a JVM, stopped on exit).
+      - name: Check the spectra JSON contract
+        run: dev/spectra-contract.sh --spectra "$SPECTRA_BIN" --root "$GITHUB_WORKSPACE"
       - name: ShellCheck
         run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh dev/*.sh
       - name: Validate manifests
