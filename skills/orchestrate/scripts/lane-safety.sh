@@ -875,7 +875,8 @@ analyze_simple() {
       # normalises lexically (expand lex); cd -P walks it as the OS does (#380). The file operands
       # after it resolve from that logical cwd as the OS walks them. Given both -L and -P, bash
       # takes the last and zsh takes -P, so the hook cannot know which; nor where `cd -`, `cd ±N`,
-      # a bare `pushd` (swap), `pushd ±N` or `pushd -n` leave the shell: each sets cwd_lost.
+      # a bare `pushd` (swap), `pushd ±N`, `pushd -n`, a `~-`/`~N`/`~+N` target or one the hook cannot
+      # expand leave the shell: each sets cwd_lost.
       local sawp=no sawl=no lost=""
       j=0
       while ((j < n)) && [[ "${a[j]}" == -[LPe@]* ]]; do
@@ -887,7 +888,7 @@ analyze_simple() {
       [[ $c == cd ]] || plain=no
       if [[ $sawp == yes && $sawl == yes ]]; then lost="$c ${a[*]:0:j}"
       elif ((j == n)); then [[ $c == cd ]] || lost=pushd
-      elif [[ "${a[j]}" == -* || "${a[j]}" =~ ^\+[0-9]+$ ]]; then lost="$c ${a[j]}"; fi
+      elif [[ "${a[j]}" == -* || "${a[j]}" =~ ^\+[0-9]+$ || "${a[j]}" =~ ^~[-+0-9] ]]; then lost="$c ${a[j]}"; fi
       if [[ -n "$lost" ]]; then
         cwd_lost=$lost plain=no inert=no
       elif ((j == n)); then cur=$home cwd_lost=""
@@ -895,7 +896,8 @@ analyze_simple() {
         # A relative target from a lost cwd stays lost; an absolute one the hook expands is known again.
         local known=yes
         if [[ $sawp == yes ]] && cur=$(expand "${a[j]}" "$base"); then cur=$(phys "$cur")
-        else cur=$(expand "${a[j]}" "$base" lex) || { cur=$base; plain=no; known=no; }; fi
+        # A target the hook cannot expand ($OLDPWD, $(dirs …), `…`) may lead anywhere: lost.
+        else cur=$(expand "${a[j]}" "$base" lex) || { cur=$base; plain=no; known=no; cwd_lost="$c ${a[j]}"; }; fi
         [[ $known == no ]] || lost_rel "${a[j]}" || cwd_lost=""
       fi
       if [[ -n "$cwd_lost" ]]; then plain=no inert=no

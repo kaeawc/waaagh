@@ -205,6 +205,16 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
     "popd && cd d1 && rm -rf x" "popd && find . -delete" "popd && git -C . commit -m x"; do
     expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
   done
+  # A ~N, ~+N or ~- target, or one the hook cannot expand ($OLDPWD, $(dirs …)), is the stack again.
+  for c in "pushd d1/d2/d3 && cd ~1 && rm -rf ../../../src" "pushd d1/d2/d3 && cd ~+1 && rm -rf ../../../src" \
+    "pushd d1/d2/d3 && pushd ~1 && rm -rf ../../../src" "cd d1/d2/d3 && cd ~- && rm -rf ../../../src" \
+    'cd d1/d2/d3 && cd $OLDPWD && rm -rf ../../../src' 'pushd d1/d2/d3 && cd "$(dirs -l +1)" && rm -rf ../../../src'; do
+    expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
+  done
+  # A plain ~ or ~/x target is known: judged as that path (outside the lane), not as lost.
+  for c in "cd ~ && rm -rf x" "cd ~/x && rm -rf y"; do
+    expect deny Bash "$c" "$NEST" agent-3 "outside the lane worktree"
+  done
   # bash takes the last of -L/-P, zsh takes -P: the hook cannot know which the shell runs.
   for c in "cd -P -L sl/.. && rm -rf src" "cd -PL esc/../../../.. && rm -rf src" "cd -L -P sl/.. && rm -rf src"; do
     expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
