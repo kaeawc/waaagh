@@ -194,7 +194,8 @@ repository.
   - `merge` with no App status: "is not success: absent" (run 45164358898);
   - a SHA that is not the PR's head (run 45164473447);
   - a caller outside `APP_BROKER_ACTORS`, waaagh-bot[bot] itself (run 45164642636).
-- `merge` at the reviewed head merged #368: it was the broker's own merge.
+- #368 itself was merged by hand. The broker's `merge` merged the next PR at its reviewed head:
+  the PR that corrects this line. The run ID is on #360.
 
 In spectra (the action pinned `@805b65b # v0.1.0`), on throwaway PR spectra#703:
 - `status` posted success as `waaagh-bot[bot]` (run 45164855639).
