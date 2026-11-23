@@ -1,0 +1,61 @@
+# The spectra JSON waaagh reads (#370): one row per command, jq path and script. CI runs each
+# command against the pinned spectra release and fails when a path is missing (dev/spectra-contract.sh).
+# A script that starts reading another spectra field adds its row here in the same change.
+#
+# Columns (tab-separated): command<TAB>path<TAB>script<TAB>null
+#   command  spectra's arguments, as the checker runs them. {root} is a scratch directory under the
+#            checkout with one idle process working in {root}/wt1, whose pid is {pid}; for `jvm`, a JVM
+#            also runs there. Flags may differ from the script's own call (--min-age 0s, so the
+#            just-started process counts) as long as the output has the same schema.
+#   path     the field, in jq path syntax: .a.b, [] for every element of an array. Every key must be
+#            present and every array non-empty, unless marked: key? may be absent (Go omitempty: spectra
+#            leaves it out when empty or false, so a live run cannot prove it), []? may be empty or null.
+#   script   the script (under skills/orchestrate/scripts) that reads it.
+#   null     null-ok when spectra legitimately returns null for the field itself, else -.
+# spectra devices (device-lock.sh, #369) is not in v0.1.1; #369 adds its rows.
+capabilities --json	.schema.name	_lib.sh	-
+capabilities --json	.schema.version	_lib.sh	-
+capabilities --json	.spectra_version	_lib.sh	-
+capabilities --json	.interfaces[].name	_lib.sh	-
+capabilities --json	.interfaces[].result_schema?.name	_lib.sh	-
+capabilities --json	.interfaces[].result_schema?.version	_lib.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.load1	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.cpus	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.available_gb	host-load.sh	null-ok
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.devices.booted	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.devices.booted_recently	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.devices.boot_window_seconds	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.devices.by_root[]?.root	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.devices.by_root[]?.booted	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.devices.by_root[]?.booted_recently	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.cause.kind	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.cause.detail	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.cause.worktree?	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_cpu[].pid	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_cpu[].command	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_cpu[].cpu_pct	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_cpu[].rss_kib	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_cpu[].dir	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_cpu[].cwd?	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_rss[].pid	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_rss[].command	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_rss[].cpu_pct	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_rss[].rss_kib	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_rss[].dir	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.top_rss[].cwd?	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.families[].name	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.families[].kind	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.families[].members	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.families[].cpu_pct	host-load.sh	-
+load --json --top 3 --max-load-per-cpu 1.5 --min-free-gb 8 --backoff-free-gb 4 --root {root}	.families[].rss_kib	host-load.sh	-
+idle --pids {pid} --min-age 0s --window 1s --json	.result.holders[].pid	triage-tick.sh	-
+orphans --json --root {root} --min-age 0s	.groups[].worktree	triage-tick.sh	-
+orphans --json --root {root} --min-age 0s	.groups[].worktree_removed	triage-tick.sh	-
+orphans --json --root {root} --min-age 0s	.groups[].processes[].daemon_by_design	triage-tick.sh	-
+owner --under --json {root}	.holders[].pid	_lib.sh	-
+owner --under --json {root}	.holders[].cwd	_lib.sh	-
+jvm --json	.[].pid	heavy-build-slot.sh	-
+jvm --json	.[].main_class?	heavy-build-slot.sh	-
+jvm --json	.[].java_home?	heavy-build-slot.sh	-
+jvm --json	.[].java_home_missing?	heavy-build-slot.sh	-
+jvm --json	.[].executable_deleted?	heavy-build-slot.sh	-

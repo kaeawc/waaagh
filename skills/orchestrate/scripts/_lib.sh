@@ -327,9 +327,15 @@ orch_gh_priority() { export GH_BUDGET_PRIORITY="$1"; }
 # diagnostic commands there (kaeawc/spectra#612), a subcommand that `spectra help` lists also meets it.
 # The capabilities JSON's spectra_version must be a release at or above ORCH_SPECTRA_MIN_VERSION
 # (a leading v is allowed), or a local source build; anything else is refused.
+# Each JSON interface advertises its result schema and major version (result_schema); a field is
+# only renamed or dropped with a new major (spectra docs/reference/capabilities.md). For the schemas
+# waaagh reads (ORCH_SPECTRA_SCHEMAS, the shapes in spectra-contract.tsv), an interface of a required
+# capability (CAP, or CAP.<variant> such as owner.under) at another major is refused, as is a
+# capabilities manifest at another major.
 ORCH_SPECTRA_MIN_VERSION=0.1.1
+ORCH_SPECTRA_SCHEMAS="spectra.capabilities=1 spectra.load=1 spectra.orphans=1 spectra.owner.under=1 spectra.idle=1"
 ORCH_SPECTRA_INSTALL="install spectra $ORCH_SPECTRA_MIN_VERSION or newer: brew install kaeawc/tap/spectra, or build it from https://github.com/kaeawc/spectra (make build)"
-_orch_spectra_caps="" _orch_spectra_help=""
+_orch_spectra_caps="" _orch_spectra_help="" _orch_spectra_schemas=""
 # orch_spectra_version_ok V: 0 when V is a source build or a release >= ORCH_SPECTRA_MIN_VERSION,
 # 1 when it is an older release, 2 when it is not a version at all. Source builds: `go build`
 # stamps dev..., `make build` stamps `git describe`, a bare commit hash when no tag is an ancestor.
@@ -370,6 +376,10 @@ orch_spectra_require() {
     fi
     ver=$(jq -r '.spectra_version // "" | strings' <<<"$json" 2>/dev/null) || ver=""
     orch_spectra_version_ok "$ver" || rc=$?
+    # "interface<TAB>schema<TAB>major" for each interface with a result schema; the manifest's own first.
+    _orch_spectra_schemas=$(jq -r '["capabilities", .schema.name, .schema.version],
+      (.interfaces[]? | select(.result_schema | type == "object") | [.name, .result_schema.name, .result_schema.version])
+      | map(tostring) | @tsv' <<<"$json" 2>/dev/null) || _orch_spectra_schemas=""
     if ((rc != 0)); then
       _orch_spectra_caps=""
       if ((rc == 1)); then
@@ -379,6 +389,19 @@ orch_spectra_require() {
       fi
       return 1
     fi
+  fi
+  local iface sname smajor want e used bad=""
+  while IFS=$'\t' read -r iface sname smajor; do
+    used=no
+    [[ "$iface" != capabilities ]] || used=yes
+    for cap in "$@"; do [[ "$iface" != "$cap" && "$iface" != "$cap".* ]] || used=yes; done
+    want=""
+    for e in $ORCH_SPECTRA_SCHEMAS; do [[ "${e%=*}" != "$sname" ]] || want=${e#*=}; done
+    [[ "$used" == no || -z "$want" || "${smajor%%.*}" == "$want" ]] || bad="${bad:+$bad, }$sname v$smajor (waaagh reads v$want)"
+  done <<<"$_orch_spectra_schemas"
+  if [[ -n "$bad" ]]; then
+    echo "spectra: $bin speaks a schema waaagh does not know: $bad. Update waaagh, or install a spectra it supports; $ORCH_SPECTRA_INSTALL" >&2
+    return 1
   fi
   for cap in "$@"; do
     grep -qxF -- "$cap" <<<"$_orch_spectra_caps" && continue
