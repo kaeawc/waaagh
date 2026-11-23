@@ -56,6 +56,23 @@ asked() {
   decide "find ~/Library -name '*.lock' -delete" "$MAIN"; denied "protected path"
 }
 
+@test "a deletion through a symlink in the lane is judged by the path it reaches (#380)" {
+  mkdir -p "$HOME/.ssh" "$LANE/src"
+  ln -s "$HOME" "$LANE/hm"
+  ln -s / "$LANE/root"
+  decide "rm -rf $LANE/hm/.ssh"; denied "protected path"
+  decide "rm -rf hm/.ssh"; denied "protected path"
+  decide "rm -rf $LANE/hm/Library"; denied "protected path"
+  decide "rm -rf $LANE/root/Users/x"; denied "outside the lane worktree"
+  decide "rm -rf $LANE/root/"; denied "protected path /"
+  decide "rm -rf $LANE/hm/*"; denied "protected path"
+  # The link itself, and paths through a link that stays in the lane, delete as before.
+  ln -s src "$LANE/s2"
+  decide "rm -rf $LANE/root"; allowed
+  decide "rm -rf $LANE/hm"; allowed
+  decide "rm -rf $LANE/s2/x"; allowed
+}
+
 @test "ordinary deletions are allowed outside a lane" {
   decide "rm -rf build" "$MAIN"; allowed
   decide 'rm -rf "$X"' "$MAIN"; allowed

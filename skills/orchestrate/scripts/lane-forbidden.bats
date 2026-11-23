@@ -154,6 +154,57 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   done_
 }
 
+@test "a .. after a symlink in the nested lane climbs from the link's target, as the OS does (#380)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/sub/inner" "$MAIN/src"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  for c in "echo x > $NEST/sl/../README" "rm -rf $NEST/sl/../src" "echo x > sl/../README" \
+    "cd sl && echo x > ../README" "echo x > $NEST/sl/inner/../../README"; do
+    expect deny Bash "$c" "$NEST" agent-3 "orchestrator's checkout"
+  done
+  expect deny Write "$NEST/sl/../README" "$NEST" agent-3 "orchestrator's checkout"
+  # A .. through no symlink, or one that climbs back to the same place, stays lexical.
+  mkdir -p "$NEST/src/a"
+  expect allow Bash "echo x > $NEST/src/a/../f" "$NEST" agent-3
+  expect allow Bash "echo x > $NEST/sl/../.claude/worktrees/l1/f" "$NEST" agent-3
+  done_
+}
+
+@test "a .. inside a symlink's target in the nested lane resolves as the OS does (#380)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/sub"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  ln -s sl/../README "$NEST/rel"
+  expect deny Bash "echo x > $NEST/rel" "$NEST" agent-3 "orchestrator's checkout"
+  expect deny Bash "echo x >> rel" "$NEST" agent-3 "orchestrator's checkout"
+  expect deny Write "$NEST/rel" "$NEST" agent-3 "orchestrator's checkout"
+  done_
+}
+
+@test "a symlink in the nested lane to outside every forbidden root follows the lane rules (#380)" {
+  forbid "$MAIN"
+  mkdir -p "$T/scratch/b" "$NEST/scratch/b" "$T/elsewhere"
+  ln -s "$T/scratch" "$NEST/tmpl"
+  ln -s scratch/b "$NEST/build"
+  ln -s "$T/elsewhere" "$NEST/out"
+  for c in "echo x > $NEST/tmpl/f" "rm -rf $NEST/tmpl/x" "rm -rf $NEST/tmpl" "echo x > tmpl/f" \
+    "echo x > $NEST/build/f" "rm -rf $NEST/build/x" "rm -rf build"; do
+    expect allow Bash "$c" "$NEST" agent-3
+  done
+  expect allow Write "$NEST/tmpl/f" "$NEST" agent-3
+  expect allow Write "$NEST/build/f" "$NEST" agent-3
+  # Outside the lane and the temp dirs: refused as outside the lane, never as the checkout.
+  expect deny Bash "rm -rf $NEST/out/x" "$NEST" agent-3 "outside the lane worktree"
+  for c in "rm -rf $NEST/tmpl/x" "echo x > $NEST/build/f" "rm -rf $NEST/out/x"; do
+    run "$SCRIPTS/lane-safety.sh" <<<"$(jq -cn --arg x "$c" --arg d "$NEST" '{tool_name: "Bash", cwd: $d, agent_id: "agent-3", tool_input: {command: $x}}')"
+    [[ "$output" != *"orchestrator's checkout"* ]] || FAILS="$FAILS
+[$c]: names the checkout: $output"
+  done
+  done_
+}
+
 @test "edit tools: Edit, Write, MultiEdit and NotebookEdit; relative paths resolve against cwd" {
   forbid "$MAIN"
   for t in Edit Write MultiEdit NotebookEdit; do

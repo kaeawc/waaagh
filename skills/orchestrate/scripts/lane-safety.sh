@@ -96,6 +96,29 @@ norm() {
   done
   printf '%s\n' "${out:-/}"
 }
+# resolve ABS: ABS normalised the way the OS walks it, left to right (#380): a `..` after a
+# directory that is or runs through a symlink climbs from that directory's physical path (with
+# `<lane>/sl -> <checkout>/sub`, `<lane>/sl/../f` is `<checkout>/f`, not `<lane>/f`). The spelling
+# stays lexical wherever both walks reach the same directory (/var vs /private/var on macOS).
+resolve() {
+  case "$1" in *..*) ;; *) norm "$1"; return 0 ;; esac
+  local p=$1 out="" part lex q
+  local IFS=/
+  # shellcheck disable=SC2086
+  set -f; set -- $p; set +f
+  for part in "$@"; do
+    case "$part" in
+      "" | .) ;;
+      ..)
+        lex=${out%/*}
+        if [[ -n "$out" && -d "$out" ]] && q=$(cd -P "$out/.." 2>/dev/null && pwd -P) &&
+          [[ "$q" != "$(phys "${lex:-/}")" ]]; then out=${q%/}
+        else out=$lex; fi ;;
+      *) out="$out/$part" ;;
+    esac
+  done
+  printf '%s\n' "${out:-/}"
+}
 # expand WORD BASE: prints an absolute path, or returns 1 when the word holds a variable or a
 # command substitution the hook cannot expand.
 expand() {
@@ -119,7 +142,7 @@ expand() {
   fi
   case "$w" in *'$'* | *'`'*) return 1 ;; esac
   [[ "$w" == /* ]] || w="$base/$w"
-  norm "$w"
+  resolve "$w"
 }
 # inside A B: A is B or below it.
 inside() { [[ "$1" == "$2" || "$2" == / || "$1" == "$2"/* ]]; }
@@ -132,13 +155,14 @@ phys() {
   if p=$(cd "$d" 2>/dev/null && pwd -P); then norm "$p$rest"; else printf '%s\n' "$1"; fi
 }
 # real ABS: phys ABS with a symlink at ABS itself followed too, dangling or not (a write through
-# `<lane>/f -> <checkout>/f` lands at its target), up to 40 links deep.
+# `<lane>/f -> <checkout>/f` lands at its target), up to 40 links deep; a `..` in a link's target
+# resolves as the OS walks it (resolve).
 real() {
   local t=$1 l n=0
   while [[ -L "$t" ]] && ((n++ < 40)); do
     l=$(readlink "$t") || break
     [[ "$l" == /* ]] || l="$(phys "${t%/*}")/$l"
-    t=$(norm "$l")
+    t=$(resolve "$l")
   done
   phys "$t"
 }
@@ -201,6 +225,11 @@ if [[ -n "$lane" ]]; then
     IFS=: read -r -a extra <<<"$temps:${WAAAGH_LANE_ALLOW:-}"
     for v in "${extra[@]}"; do [[ -z "$v" ]] || allowed+=("$(norm "$v")"); done
   fi
+  # Each allowed root by its physical path too: a deletion is judged by the path it reaches (#380).
+  for v in "${allowed[@]:1}"; do
+    p=$(phys "$v")
+    [[ "$p" == "$v" || "$p" == / || "$p" == "$home" ]] || allowed+=("$p")
+  done
 fi
 in_allowed() { local a; for a in "${allowed[@]}"; do inside "$1" "$a" && return 0; done; return 1; }
 # enter_worktree DIR: a resolved `cd` into another linked worktree of this repository makes that
@@ -282,16 +311,28 @@ if ((${#forbid[@]})); then
   # Unbound: the orchestrator's own call (no subagent, and its cwd is no lane or a forbidden root).
   if [[ -z "$agent" && ( -z "$lane" || $lane_forbidden == yes ) ]]; then forbid=(); fi
 fi
-# forbidden PATH: prints the bound forbidden root holding PATH, as spelled or by its physical path
-# (none physically inside the caller's own lane: a symlink in the lane into the checkout is no
-# exemption, #380).
+# forbidden PATH: prints the bound forbidden root holding PATH's resolved target (real), or, when
+# PATH is not spelled inside the caller's own lane, holding PATH as spelled. A target physically
+# inside the own lane is never forbidden; a symlink in the lane into the checkout is no exemption,
+# and one in the lane to anywhere else is judged by the lane rules, not here (#380).
 forbidden() {
-  local f p
+  local f p hit=""
   ((${#forbid[@]})) || return 1
   p=$(real "$1")
   [[ -z "$own" ]] || ! inside "$p" "$own_phys" || return 1
   for f in "${forbid[@]}"; do
-    if inside "$1" "$f" || inside "$p" "$f"; then printf '%s\n' "$f"; return 0; fi
+    if inside "$p" "$f"; then hit=$f; break; fi
+  done
+  if [[ -n "$hit" ]]; then
+    # Named as PATH spells it when it can be, so the message matches the command.
+    for f in "${forbid[@]}"; do
+      if inside "$1" "$f"; then hit=$f; break; fi
+    done
+    printf '%s\n' "$hit"; return 0
+  fi
+  [[ -z "$own" ]] || ! { inside "$1" "$own" || inside "$1" "$lane_phys" || inside "$1" "$own_phys"; } || return 1
+  for f in "${forbid[@]}"; do
+    if inside "$1" "$f"; then printf '%s\n' "$f"; return 0; fi
   done
   return 1
 }
@@ -411,29 +452,65 @@ check_delete() {
   case "$t" in
     *[*?[]*) glob=yes; t=${t%%[*?[]*}; prefix=${t##*/}; t=${t%/*}; t=${t:-/} ;;
   esac
-  for r in "${exacts[@]}"; do
-    if [[ "$r" == "$t" ]]; then
-      [[ $glob == yes && -n "$prefix" ]] || { deny "$what $w: protected path $r"; return 0; }
-    elif reaches "$t" "$r" "$glob" "$prefix"; then deny "$what $w: protected path $r"; return 0; fi
-  done
-  for r in "${trees[@]}"; do
-    r=$(norm "$r")
-    if inside "$t" "$r" || reaches "$t" "$r" "$glob" "$prefix"; then deny "$what $w: protected path $r"; return 0; fi
-  done
+  # rt: the entry the deletion acts on, physically (#380): T's directory resolved and T's own name
+  # kept (rm -r removes a link, not its target), or all of T followed when it is a glob's directory
+  # or the word ends in / (rm -r link/ walks into the target).
+  local rt d
+  if [[ $glob == yes || "$w" == */ || "$w" == */. ]]; then rt=$(real "$t")
+  elif [[ "$t" == / ]]; then rt=/
+  else d=${t%/*}; rt=$(norm "$(phys "${d:-/}")/${t##*/}"); fi
+  if r=$(protected "$t" "$glob" "$prefix"); then deny "$what $w: protected path $r"; return 0; fi
+  [[ "$rt" == "$t" ]] || phys_roots
+  if [[ "$rt" != "$t" ]] && r=$(protected "$rt" "$glob" "$prefix" phys); then
+    deny "$what $w: protected path $r (through a symlink: $rt)"; return 0
+  fi
   if r=$(forbidden "$t"); then deny "$what $w: $(forbid_why "$t" "$r")"; return 0; fi
+  if [[ "$rt" != "$t" ]] && r=$(forbidden "$rt"); then deny "$what $w: $(forbid_why "$rt" "$r")"; return 0; fi
   for r in "${forbid[@]:-}"; do
     if [[ -n "$r" ]] && reaches "$t" "$r" "$glob" "$prefix"; then deny "$what $w: $(forbid_why "$t" "$r")"; return 0; fi
   done
   [[ -n "$lane" ]] || return 0
   if [[ $glob == no && "$t" == "$lane" ]]; then lane_deny "$what $w: that is the lane worktree itself; use git worktree remove"; return 0; fi
-  if owner_sibling "$t"; then return 0; fi
-  if [[ $glob == no ]]; then
-    local a ok=no
-    for a in "${allowed[@]}"; do [[ "$t" == "$a"/* ]] && ok=yes; done
-    [[ $ok == yes ]] || lane_deny "$what $w: outside the lane worktree $lane and temp dirs"
-  else
-    in_allowed "$t" || lane_deny "$what $w: outside the lane worktree $lane and temp dirs"
-  fi
+  if del_ok "$t" "$glob" && { [[ "$rt" == "$t" ]] || del_ok "$rt" "$glob"; }; then return 0; fi
+  if [[ "$rt" != "$t" ]] && del_ok "$t" "$glob"; then
+    lane_deny "$what $w: outside the lane worktree $lane and temp dirs (through a symlink: $rt)"
+  else lane_deny "$what $w: outside the lane worktree $lane and temp dirs"; fi
+}
+# protected T GLOB PREFIX [phys]: prints the protected root a deletion of T (GLOB, PREFIX: as in
+# check_delete) would take; with phys, T is a physical path and each root counts by its physical
+# path as well.
+# phys_roots: fills exacts_p and trees_p (each root and its physical path) once, in this shell.
+phys_roots=no exacts_p=() trees_p=()
+phys_roots() {
+  local r
+  [[ $phys_roots == no ]] || return 0
+  phys_roots=yes
+  for r in "${exacts[@]}"; do exacts_p+=("$r"); r=$(phys "$r"); exacts_p+=("$r"); done
+  for r in "${trees[@]}"; do r=$(norm "$r"); trees_p+=("$r"); r=$(phys "$r"); trees_p+=("$r"); done
+}
+protected() {
+  local t=$1 glob=$2 prefix=$3 r ex tr
+  if [[ "${4:-}" == phys ]]; then ex=("${exacts_p[@]}") tr=("${trees_p[@]}")
+  else ex=("${exacts[@]}") tr=("${trees[@]}"); fi
+  for r in "${ex[@]}"; do
+    if [[ "$r" == "$t" ]]; then
+      [[ $glob == yes && -n "$prefix" ]] || { printf '%s\n' "$r"; return 0; }
+    elif reaches "$t" "$r" "$glob" "$prefix"; then printf '%s\n' "$r"; return 0; fi
+  done
+  for r in "${tr[@]}"; do
+    r=$(norm "$r")
+    if inside "$t" "$r" || reaches "$t" "$r" "$glob" "$prefix"; then printf '%s\n' "$r"; return 0; fi
+  done
+  return 1
+}
+# del_ok PATH GLOB: in a lane, deleting PATH stays in bounds: strictly below an allowed root (with
+# GLOB, at or below one), or below a sibling worktree the owner's session opened.
+del_ok() {
+  local a
+  ! owner_sibling "$1" || return 0
+  if [[ $2 == yes ]]; then in_allowed "$1"; return; fi
+  for a in "${allowed[@]}"; do [[ "$1" != "$a"/* ]] || return 0; done
+  return 1
 }
 # check_write WORD BASE WHAT: a file a shell command writes (lane mode only).
 check_write() {
