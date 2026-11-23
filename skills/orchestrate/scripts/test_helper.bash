@@ -82,8 +82,10 @@ export SPECTRA="${BATS_TEST_TMPDIR:-${BATS_FILE_TMPDIR:-/nonexistent}}/bin/spect
 # Nor the real lane worktrees: the checkout running the tests may have a .claude/worktrees of its
 # own, CI's does not. A suite that wants a worktree root sets ORCHESTRATE_WORKTREE_ROOT or unsets it.
 export ORCHESTRATE_WORKTREE_ROOT="${BATS_TEST_TMPDIR:-${BATS_FILE_TMPDIR:-/nonexistent}}/no-worktree-root"
-# stub_spectra: that spectra. `capabilities --json` declares load, orphans, jvm, idle and owner
-# (`owner --under` is described at its case below); `jvm --json` prints
+# stub_spectra: that spectra. `capabilities --json` declares load, orphans, jvm, idle, owner and
+# devices (`owner --under` is described at its case below); `devices --json` prints
+# $BATS_TEST_TMPDIR/spectra-devices.json, else no booted simulators and adb's server not running
+# (so device-lock.sh asks adb and simctl); `jvm --json` prints
 # $BATS_TEST_TMPDIR/spectra-jvm.json, else no JVMs; `idle --json` prints
 # $BATS_TEST_TMPDIR/spectra-idle.json (exit 3), else no idle holders. `load --json` prints
 # an idle host: SPECTRA_STUB_LOAD1 (default 0.5), SPECTRA_STUB_CPUS (8), SPECTRA_STUB_FREE_GB (32;
@@ -98,7 +100,7 @@ stub_spectra() {
 #!/usr/bin/env bash
 echo "$*" >>"$BATS_TEST_TMPDIR/spectra-calls"
 case "${1:-}" in
-  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"dev+test","interfaces":[{"name":"load"},{"name":"orphans"},{"name":"jvm"},{"name":"idle"},{"name":"owner"}]}' ;;
+  capabilities) echo '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"dev+test","interfaces":[{"name":"load"},{"name":"orphans"},{"name":"jvm"},{"name":"idle"},{"name":"owner"},{"name":"devices"}]}' ;;
   help) printf 'Subcommands:\n  load  x\n  orphans  x\n' ;;
   load)
     [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: load failed" >&2; exit 1; }
@@ -129,6 +131,8 @@ case "${1:-}" in
     [ "$(jq '.holders | length' "$t/spectra-owner.out")" -gt 0 ] || exit 3 ;;
   idle) if [ -f "$BATS_TEST_TMPDIR/spectra-idle.json" ]; then cat "$BATS_TEST_TMPDIR/spectra-idle.json"; exit 3; fi
     echo '{"result":{"holders":[]}}' ;;
+  devices) if [ -f "$BATS_TEST_TMPDIR/spectra-devices.json" ]; then cat "$BATS_TEST_TMPDIR/spectra-devices.json"
+    else echo '{"os":"darwin","android":{"status":"server_not_running","devices":[]},"ios_simulators":{"status":"ok","booted":[]}}'; fi ;;
   jvm) if [ -f "$BATS_TEST_TMPDIR/spectra-jvm.json" ]; then cat "$BATS_TEST_TMPDIR/spectra-jvm.json"; else echo '[]'; fi ;;
   orphans)
     [ "${SPECTRA_STUB_FAIL:-0}" != 1 ] || { echo "spectra: orphans failed" >&2; exit 1; }

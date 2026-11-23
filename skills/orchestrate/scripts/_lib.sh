@@ -342,8 +342,8 @@ orch_gh_priority() { export GH_BUDGET_PRIORITY="$1"; }
 # waaagh reads (ORCH_SPECTRA_SCHEMAS, the shapes in spectra-contract.tsv), an interface of a required
 # capability (CAP, or CAP.<variant> such as owner.under) at another major is refused, as is a
 # capabilities manifest at another major.
-ORCH_SPECTRA_MIN_VERSION=0.1.1
-ORCH_SPECTRA_SCHEMAS="spectra.capabilities=1 spectra.load=1 spectra.orphans=1 spectra.owner.under=1 spectra.idle=1"
+ORCH_SPECTRA_MIN_VERSION=0.1.2
+ORCH_SPECTRA_SCHEMAS="spectra.capabilities=1 spectra.load=1 spectra.orphans=1 spectra.owner.under=1 spectra.idle=1 spectra.devices=1"
 ORCH_SPECTRA_INSTALL="install spectra $ORCH_SPECTRA_MIN_VERSION or newer: brew install kaeawc/tap/spectra, or build it from https://github.com/kaeawc/spectra (make build)"
 _orch_spectra_caps="" _orch_spectra_help="" _orch_spectra_schemas=""
 # orch_spectra_version_ok V: 0 when V is a source build or a release >= ORCH_SPECTRA_MIN_VERSION,

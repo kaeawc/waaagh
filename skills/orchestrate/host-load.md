@@ -54,10 +54,12 @@ instead of reaching for `ps`, `lsof` or `top`. Each CLI command takes `--json`; 
 | Who holds a port, a file or a device path? | `spectra owner :8080`, `spectra owner <path>` | `owner` | Another lane's: leave it and pick another port or device |
 | Something keeps spawning short-lived processes | `spectra spawns --pid <pid> --duration 10s` | `spawns` | Name the parent in the report; a lane's retry loop is the lane's to stop |
 | A Gradle or Kotlin daemon misbehaving | `spectra jvm` (`gc_stats`, `thread_dump`) | `jvm` | Let it idle out or stop that PID; never `gradle --stop` |
-| Memory pressure or swap | `spectra memory` | `memory` | Under the backoff line: start nothing, let lanes finish |
+| Memory pressure or swap | `spectra memory` | `memory` (macOS, and Linux from spectra v0.1.2) | Under the backoff line: start nothing, let lanes finish |
 | Out of file descriptors or PTYs | `spectra system` | `system` | Tell the owner; restart nothing yourself |
 | How has one PID's memory trended? | `spectra memtrace <pid>` | `metrics`, `process` (`history`; daemon) | Growing without bound: report the lane and PID |
 | What is left over after lanes finished? | `spectra orphans --root <worktree root>` | `orphans` (`origin` names the starter) | The tick's `orphans` line (#332, `started-by=` names who started each group): tell that lane to stop its PIDs; kill nothing yourself |
+| Which processes (with their descendants) sit idle? | `spectra idle --root <worktree root>`, `spectra idle --pids <pid,...>` | `idle` | The tick's `slot-stalled` line (#333): message the lane named by the slot's label to stop |
+| Which emulators, adb devices and booted simulators are there? | `spectra devices --root <worktree root>` | `devices` | A device no lane's lock records: tell the owner; `device-lock.sh check` reads it (#369) |
 | What looks wrong at all? | `spectra whatswrong` | `diagnose`, `triage` | Follow its next steps; file a spectra issue when it cannot answer |
 
 Every row ends in one of: pause or message a lane, lower the lane cap, or tell the owner. Spectra

@@ -58,13 +58,13 @@ req() { bash -c 'source "$1/_lib.sh"; shift; orch_spectra_require "$@"' _ "$SCRI
 @test "a missing capability is one named error with the install line" {
   run req load lineage spawns
   [ "$status" -eq 1 ]
-  [ "$output" = "spectra: $B/spectra lacks: lineage spawns. Update it; install spectra 0.1.1 or newer: brew install kaeawc/tap/spectra, or build it from https://github.com/kaeawc/spectra (make build)" ]
+  [ "$output" = "spectra: $B/spectra lacks: lineage spawns. Update it; install spectra 0.1.2 or newer: brew install kaeawc/tap/spectra, or build it from https://github.com/kaeawc/spectra (make build)" ]
 }
 
 @test "no spectra, or one without the capabilities contract, is an error, never a fallback" {
   SPECTRA="$BATS_TEST_TMPDIR/nope" run req load
   [ "$status" -eq 1 ]
-  [[ "$output" == "spectra: not found ($BATS_TEST_TMPDIR/nope). waaagh requires it; install spectra 0.1.1 or newer:"* ]]
+  [[ "$output" == "spectra: not found ($BATS_TEST_TMPDIR/nope). waaagh requires it; install spectra 0.1.2 or newer:"* ]]
   echo 'not json' >"$B/caps.json"
   run req load
   [ "$status" -eq 1 ]
@@ -79,16 +79,20 @@ req() { bash -c 'source "$1/_lib.sh"; shift; orch_spectra_require "$@"' _ "$SCRI
   version '"0.1.0"'
   run req load
   [ "$status" -eq 1 ]
-  [[ "$output" == "spectra: $B/spectra is 0.1.0, below the required 0.1.1. install spectra 0.1.1 or newer:"* ]]
+  [[ "$output" == "spectra: $B/spectra is 0.1.0, below the required 0.1.2. install spectra 0.1.2 or newer:"* ]]
   version '"v0.0.9"'
   run req load
   [ "$status" -eq 1 ]
-  version '"v0.1.1-rc1"'   # a prerelease ranks below its release
+  version '"v0.1.1"'   # the release before spectra devices (#369)
+  run req load
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"is 0.1.1, below the required 0.1.2."* ]]
+  version '"v0.1.2-rc1"'   # a prerelease ranks below its release
   run req load
   [ "$status" -eq 1 ]
   # Releases at or above the minimum, git describe past one, and source builds: go build stamps
   # dev..., make build stamps git describe, a bare hash when no tag is an ancestor.
-  for v in '"0.1.1"' '"v0.1.1"' '"0.2.0"' '"0.10.0"' '"1.0.0"' '"v0.1.1-3-gfa841fb"' '"v0.1.1-dirty"' \
+  for v in '"0.1.2"' '"v0.1.2"' '"0.2.0"' '"0.10.0"' '"1.0.0"' '"v0.1.2-3-gfa841fb"' '"v0.1.2-dirty"' \
     '"0.2.0-rc1"' '"dev+fa841fba403f"' '"dev"' '"fa841fb"' '"fa841fb-dirty"'; do
     version "$v"
     run req load

@@ -12,7 +12,6 @@
 #            leaves it out when empty or false, so a live run cannot prove it), []? may be empty or null.
 #   script   the script (under skills/orchestrate/scripts) that reads it.
 #   null     null-ok when spectra legitimately returns null for the field itself, else -.
-# spectra devices (device-lock.sh, #369) is not in v0.1.1; #369 adds its rows.
 capabilities --json	.schema.name	_lib.sh	-
 capabilities --json	.schema.version	_lib.sh	-
 capabilities --json	.spectra_version	_lib.sh	-
@@ -59,3 +58,7 @@ jvm --json	.[].main_class?	heavy-build-slot.sh	-
 jvm --json	.[].java_home?	heavy-build-slot.sh	-
 jvm --json	.[].java_home_missing?	heavy-build-slot.sh	-
 jvm --json	.[].executable_deleted?	heavy-build-slot.sh	-
+devices --json	.android.status	device-lock.sh	-
+devices --json	.android.devices[]?.serial	device-lock.sh	-
+devices --json	.ios_simulators.status	device-lock.sh	-
+devices --json	.ios_simulators.booted[]?.udid	device-lock.sh	-
