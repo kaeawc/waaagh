@@ -1,0 +1,47 @@
+name: Lint
+
+# actionlint (#372) over the workflows this repository runs and the workflow template it ships for
+# other repositories to copy, with shellcheck on every `run:` block. A bad `${{ }}` expression, an
+# unknown input or a shellcheck error in either fails this check. It runs on pull requests that touch
+# a workflow or a template, on pushes to main, and by hand. Composite actions (actions/app-broker)
+# are not workflow files, so actionlint does not read them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'skills/orchestrate/templates/*.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push supersedes a lint run still in flight on the same ref.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # actionlint from its pinned release (checksum checked). It runs shellcheck on the run:
+      # blocks when shellcheck is on PATH, so the runner image's copy is required below.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          d="$RUNNER_TEMP/actionlint" && mkdir -p "$d"
+          tgz="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$d/$tgz" "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/$tgz"
+          echo "$ACTIONLINT_SHA256  $d/$tgz" | sha256sum -c -
+          tar -xzf "$d/$tgz" -C "$d" actionlint
+          echo "$d" >>"$GITHUB_PATH"
+      - name: Require shellcheck
+        run: shellcheck --version
+      - name: actionlint
+        run: actionlint -color .github/workflows/*.yml skills/orchestrate/templates/*.yml
