@@ -147,6 +147,26 @@ expand() {
   [[ "$w" == /* ]] || w="$base/$w"
   if [[ "$mode" == lex ]]; then norm "$w"; else resolve "$w"; fi
 }
+# cwd_lost: set (to the command, e.g. `popd`) once the hook cannot know the shell's directory for
+# the rest of the command line (popd, pushd other than `pushd DIR`, cd -, cd given both -L and -P);
+# a later `cd ABS` clears it. While set, a relative write, delete or git work tree is denied: the
+# hook cannot say where it lands.
+cwd_lost=""
+# lost_rel WORD: cwd_lost is set and WORD names a path relative to the cwd ($PWD counts; ~, $HOME
+# and $TMPDIR do not; a word holding any other variable is left to the usual checks).
+lost_rel() {
+  [[ -n "$cwd_lost" ]] || return 1
+  case "$1" in
+    "~" | \~/* | '$HOME' | '${HOME}' | '$HOME/'* | '${HOME}/'*) return 1 ;;
+    '$PWD' | '${PWD}' | '$PWD/'* | '${PWD}/'*) return 0 ;;
+  esac
+  if [[ -n "${TMPDIR:-}" ]]; then
+    case "$1" in '$TMPDIR' | '${TMPDIR}' | '$TMPDIR/'* | '${TMPDIR}/'*) return 1 ;; esac
+  fi
+  case "$1" in *'$'* | *'`'* | /*) return 1 ;; esac
+  return 0
+}
+lost_why() { printf '%s' "the working directory is unknown after \`$cwd_lost\`; use an absolute path"; }
 # inside A B: A is B or below it.
 inside() { [[ "$1" == "$2" || "$2" == / || "$1" == "$2"/* ]]; }
 # phys ABS: ABS with its nearest existing directory resolved to its physical path (pwd -P), so a
@@ -415,6 +435,7 @@ owner_sibling() {
 local_props() {
   local target=$1 base=$2 src t w; shift 2
   [[ $known_lane == no && -n "$lane" && $# -gt 0 ]] || return 1
+  ! lost_rel "$target" || return 1
   for src in "$@"; do
     [[ "$src" == android/local.properties || "$src" == */android/local.properties ]] || return 1
   done
@@ -458,6 +479,7 @@ subst_var() {
 # check_delete WORD BASE WHAT: a recursive deletion target.
 check_delete() {
   local w=$1 base=$2 what=$3 t glob=no prefix="" r s
+  if lost_rel "$w"; then deny "$what $w: $(lost_why)"; return 0; fi
   if ! t=$(expand "$w" "$base") && { ! s=$(subst_var "$w") || ! t=$(expand "$s" "$base"); }; then
     [[ -z "$lane" ]] || lane_deny "$what $w: path built from a variable; expand and echo the literal path first"
     return 0
@@ -535,6 +557,7 @@ check_write() {
   [[ -n "$lane" || ${#forbid[@]} -gt 0 ]] || return 0
   local w=$1 base=$2 what=$3 t f
   case "$w" in /dev/null | /dev/stdout | /dev/stderr | /dev/tty | /dev/fd/* | "") return 0 ;; esac
+  if lost_rel "$w"; then deny "$what $w: $(lost_why)"; return 0; fi
   t=$(expand "$w" "$base") || return 0
   if f=$(forbidden "$t"); then deny "$what $w: $(forbid_why "$t" "$f")"; return 0; fi
   [[ -n "$lane" ]] || return 0
@@ -543,12 +566,14 @@ check_write() {
 # check_git BASE ARG...: a mutating git command whose work tree (BASE, -C, --work-tree) lies under a
 # bound forbidden root. Read-only commands, fetch and worktree add stay allowed there.
 check_git() {
-  local dir=$1 sub="" f; shift
+  local dir=$1 sub="" f lost=no; shift
   ((${#forbid[@]})) || return 0
+  # lost: the work tree is the unknown cwd, or relative to it (cwd_lost).
+  [[ -z "$cwd_lost" ]] || lost=yes
   while (($#)); do
     case "$1" in
-      -C | --work-tree) (($# >= 2)) || return 0; dir=$(expand "$2" "$dir") || return 0; shift 2 ;;
-      --work-tree=*) dir=$(expand "${1#*=}" "$dir") || return 0; shift ;;
+      -C | --work-tree) (($# >= 2)) || return 0; lost_rel "$2" || lost=no; dir=$(expand "$2" "$dir") || return 0; shift 2 ;;
+      --work-tree=*) lost_rel "${1#*=}" || lost=no; dir=$(expand "${1#*=}" "$dir") || return 0; shift ;;
       -c | --git-dir | --namespace) shift; if (($#)); then shift; fi ;;
       -*) shift ;;
       *) sub=$1; shift; break ;;
@@ -570,10 +595,13 @@ check_git() {
       shift
       while (($#)) && [[ "$1" == -* ]]; do shift; done
       (($#)) || return 0
+      [[ $lost == yes ]] || ! lost_rel "$1" || lost=yes
+      [[ "$1" != /* ]] || lost=no
       dir=$(expand "$1" "$dir") || return 0
       sub="worktree remove/move" ;;
     *) return 0 ;;
   esac
+  if [[ $lost == yes ]]; then deny "git $sub: $(lost_why)"; return 0; fi
   if f=$(forbidden "$dir"); then deny "git $sub: $(forbid_why "$dir" "$f")"; fi
 }
 
@@ -681,6 +709,8 @@ tokenize() {
 destructive=no
 analyze() {
   local text=$1 cur=$2 depth=${3:-0} line term rest toks
+  # A bash -c or eval body starts where its caller stands: a lost cwd stays lost in it.
+  local cwd_lost=$cwd_lost
   local saw_kill=no saw_pidsrc=no cmd_subs="" cursub=0 quiet_kills=() subn=() subtoks=() q
   # prefix_ok: every top-level command so far is inert (a plain `cd DIR` the hook resolved, a quiet
   # kill, or a read-only command with no file redirection), so nothing in this text can have
@@ -843,24 +873,39 @@ analyze_simple() {
     cd | pushd)
       # The shell's cd is logical: it applies `..` to the logical cwd, lexically, so the target
       # normalises lexically (expand lex); cd -P walks it as the OS does (#380). The file operands
-      # after it resolve from that logical cwd as the OS walks them.
-      local copt=L
+      # after it resolve from that logical cwd as the OS walks them. Given both -L and -P, bash
+      # takes the last and zsh takes -P, so the hook cannot know which; nor where `cd -`, `cd ±N`,
+      # a bare `pushd` (swap), `pushd ±N` or `pushd -n` leave the shell: each sets cwd_lost.
+      local sawp=no sawl=no lost=""
       j=0
       while ((j < n)) && [[ "${a[j]}" == -[LPe@]* ]]; do
-        case "${a[j]}" in *P*) copt=P ;; *L*) copt=L ;; esac
+        [[ "${a[j]}" != *P* ]] || sawp=yes
+        [[ "${a[j]}" != *L* ]] || sawl=yes
         ((j += 1))
       done
       if ((j < n)) && [[ "${a[j]}" == -- ]]; then ((j += 1)); fi
       [[ $c == cd ]] || plain=no
-      if ((j == n)); then
-        if [[ $c == cd ]]; then cur=$home; fi
-      elif [[ "${a[j]}" == -* || ( $c == pushd && "${a[j]}" == +* ) ]]; then plain=no
-      elif [[ $copt == P ]] && cur=$(expand "${a[j]}" "$base"); then cur=$(phys "$cur")
-      else cur=$(expand "${a[j]}" "$base" lex) || { cur=$base; plain=no; }; fi
-      [[ -d "$cur" ]] || plain=no
-      enter_worktree "$cur" ;;
+      if [[ $sawp == yes && $sawl == yes ]]; then lost="$c ${a[*]:0:j}"
+      elif ((j == n)); then [[ $c == cd ]] || lost=pushd
+      elif [[ "${a[j]}" == -* || "${a[j]}" =~ ^\+[0-9]+$ ]]; then lost="$c ${a[j]}"; fi
+      if [[ -n "$lost" ]]; then
+        cwd_lost=$lost plain=no inert=no
+      elif ((j == n)); then cur=$home cwd_lost=""
+      else
+        # A relative target from a lost cwd stays lost; an absolute one the hook expands is known again.
+        local known=yes
+        if [[ $sawp == yes ]] && cur=$(expand "${a[j]}" "$base"); then cur=$(phys "$cur")
+        else cur=$(expand "${a[j]}" "$base" lex) || { cur=$base; plain=no; known=no; }; fi
+        [[ $known == no ]] || lost_rel "${a[j]}" || cwd_lost=""
+      fi
+      if [[ -n "$cwd_lost" ]]; then plain=no inert=no
+      else
+        [[ -d "$cur" ]] || plain=no
+        enter_worktree "$cur"
+      fi ;;
+    popd) cwd_lost=popd plain=no inert=no ;;
     export) ((i == 0)) && record_vars "$term" "$depth" $nredir "${a[@]:-}" ;;
-    for | case | select | function | source | . | popd)
+    for | case | select | function | source | .)
       plain=no
       [[ "$c" != source && "$c" != . ]] || { var_names=() var_vals=(); } ;;
     grep | egrep | fgrep | head | tail | cut | cat | echo | printf | ls | wc | tr | sleep | date | pwd)

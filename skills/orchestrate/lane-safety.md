@@ -72,6 +72,13 @@ is the owner's own session (the Claude desktop app runs every session in one), s
 with `lane-claim.sh add` before it starts, or its out-of-worktree writes reach the owner as prompts
 rather than denials. Temp dirs are `/tmp`, `/private/tmp`, `/var/folders` and
 `$TMPDIR` (`WAAAGH_LANE_TEMP` overrides); `WAAAGH_LANE_ALLOW` adds roots (colon-separated).
+The hook follows `cd` the way the shell does: `..` in a `cd` argument is applied by text against
+the logical working directory, and only `cd -P` resolves symlinks. Paths given to writes and
+deletes are judged by where they really lead, symlinks and `..` included, so a link inside the lane
+cannot reach the orchestrator's checkout (#380). After `popd`, a `pushd` other than `pushd DIR`,
+`cd -`, `cd ±N`, or a `cd` given both `-L` and `-P`, the working directory is unknown for the
+rest of the command: relative write and delete operands are denied, so use absolute paths, or
+`cd` to an absolute path first.
 A resolved `cd` into another linked worktree of the same repository makes that worktree writable
 for the rest of the command: a lane subagent starts in the orchestrator's working directory (a
 linked worktree itself in the desktop app) and reaches its own worktree by `cd`, so each command

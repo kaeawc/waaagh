@@ -95,6 +95,16 @@ asked() {
   WAAAGH_LANE_ALLOW="$T/allowlink" decide "echo x > $T/allowlink/f"; allowed
 }
 
+@test "a relative write or deletion after popd or another unknown cd is denied; an absolute one is judged (#383)" {
+  mkdir -p "$LANE/d1/d2" "$LANE/src/build"
+  decide "pushd d1/d2 && popd && rm -rf ../../x"; denied "the working directory is unknown after \`popd\`"
+  decide "pushd d1/d2 && pushd && echo x > ../../f"; denied "unknown after \`pushd\`"
+  decide "cd -P -L d1 && rm -rf x"; denied "unknown after \`cd -P -L\`"
+  decide "pushd src && rm -rf build && popd"; allowed
+  decide "pushd d1 && popd && rm -rf $LANE/src/build"; allowed
+  decide "popd && cd $LANE && rm -rf src/build && echo x > f"; allowed
+}
+
 @test "ordinary deletions are allowed outside a lane" {
   decide "rm -rf build" "$MAIN"; allowed
   decide 'rm -rf "$X"' "$MAIN"; allowed

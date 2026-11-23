@@ -192,6 +192,32 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   done_
 }
 
+@test "after popd, pushd ±N/-n/swap, cd - or cd -L -P the cwd is unknown: relative writes and deletes are denied (#383)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/sub" "$MAIN/src" "$T/scratch/a/b/c/d" "$NEST/d1/d2/d3" "$NEST/src/build"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$T/scratch/a/b/c/d" "$NEST/esc"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  # Each leaves the shell back in the lane, where ../../../ is the checkout.
+  for c in "pushd d1/d2/d3 && popd && rm -rf ../../../src" "pushd d1/d2/d3; popd; echo x > ../../../README" \
+    "pushd d1/d2/d3 && pushd && rm -rf ../../../src" "pushd d1/d2/d3 && pushd +1 && rm -rf ../../../src" \
+    "pushd d1/d2/d3 && pushd -n d1 && rm -rf ../../../src" "cd d1 && cd - && rm -rf ../../../src" \
+    "popd && cd d1 && rm -rf x" "popd && find . -delete" "popd && git -C . commit -m x"; do
+    expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
+  done
+  # bash takes the last of -L/-P, zsh takes -P: the hook cannot know which the shell runs.
+  for c in "cd -P -L sl/.. && rm -rf src" "cd -PL esc/../../../.. && rm -rf src" "cd -L -P sl/.. && rm -rf src"; do
+    expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
+  done
+  # A deletion before popd, an absolute path after it, or a cd to an absolute path stays allowed.
+  for c in "pushd src && rm -rf build && popd" "pushd d1 && popd && rm -rf $NEST/src/build" \
+    "pushd d1 && popd && cd $NEST && rm -rf src/build" "popd && echo x > $NEST/f" \
+    "cd d1 && rm -rf d2/x && echo x > f" "pushd d1/d2/d3 && rm -rf x"; do
+    expect allow Bash "$c" "$NEST" agent-3
+  done
+  done_
+}
+
 @test "a .. inside a symlink's target in the nested lane resolves as the OS does (#380)" {
   forbid "$MAIN"
   mkdir -p "$MAIN/sub"
