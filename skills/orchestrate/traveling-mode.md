@@ -187,7 +187,23 @@ of waaagh, spectra and krit, and in an open auto-mobile PR. A cloud session ran
 pending permission request would also add Webhooks write and Repository creation write on every
 repository.
 
-**Verified end to end (#360), in progress.** The composite action on this PR: run IDs below.
+**Verified end to end 2026-11-23 (#360).** In waaagh (the local action), on PR #368:
+- `status` posted `orchestrate/review` = success as `waaagh-bot[bot]` (run 45164491110), and
+  `check` read it back.
+- These requests were refused, and each wrote nothing:
+  - `merge` with no App status: "is not success: absent" (run 45164358898);
+  - a SHA that is not the PR's head (run 45164473447);
+  - a caller outside `APP_BROKER_ACTORS`, waaagh-bot[bot] itself (run 45164642636).
+- `merge` at the reviewed head merged #368: it was the broker's own merge.
+
+In spectra (the action pinned `@805b65b # v0.1.0`), on throwaway PR spectra#703:
+- `status` posted success as `waaagh-bot[bot]` (run 45164855639).
+- A wrong SHA was refused (run 45164833898).
+
+Dispatches for one PR share a concurrency group. GitHub keeps only one pending run per group, so
+when three dispatches for the same PR arrive while the first is still running, the middle one is
+cancelled before it starts (spectra run 45164836449). The caller already confirms every request
+on its next pass (`check`, or a read of the PR): on `absent`, send it again.
 
 ## Hourly cycle
 
