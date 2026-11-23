@@ -91,7 +91,9 @@ its 10-second timeout does not block, so a glob that could walk the disk is refu
 (#387). Behind those bounds, a deadline holds for the whole hook (#388): the checks run in a worker
 process, and if they have not decided after 6 seconds the hook stops the worker and fails closed,
 with "the check took too long; split the command or name the paths" (deny in a known lane or for a
-subagent's call, ask otherwise). Brace expansion is done by the hook itself, by bash's rule, without running anything. A
+subagent's call, ask otherwise). And `hooks/hooks.json` sets `"onFailure": "block"` on the hook
+(Claude Code v2.1.295 or later), so a hook that fails or times out blocks the call instead of
+letting it through. Brace expansion is done by the hook itself, by bash's rule, without running anything. A
 glob or brace in a `cd` target counts when it makes exactly one directory; otherwise the working
 directory is unknown for the rest of the command. `ln -tDIR` and `ln -sfTtDIR` read DIR as `-t DIR`. After `popd`, a `pushd` other than `pushd DIR`,
 `cd -`, `cd ±N`, or a `cd` given both `-L` and `-P`, the working directory is unknown for the
