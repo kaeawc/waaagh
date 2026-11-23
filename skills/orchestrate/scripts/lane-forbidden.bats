@@ -112,6 +112,48 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   done_
 }
 
+@test "a symlink inside the nested lane cannot reach the forbidden checkout (#380)" {
+  forbid "$MAIN"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$MAIN" "$NEST/flnk"
+  ln -s "$MAIN/README" "$NEST/fl"
+  ln -s "$MAIN/new.txt" "$NEST/dangling"
+  for c in "rm -rf $NEST/flnk/README" "echo x > $NEST/flnk/f" "echo x > flnk/f" "rm -rf flnk/src" \
+    "echo x > $NEST/flnk/new/dir/f" "echo x > $NEST/fl" "echo x >> fl" "echo x > dangling" \
+    "rm -rf $NEST/flnk" "rm -rf $NEST/fl"; do
+    expect deny Bash "$c" "$NEST" agent-3 "orchestrator's checkout $MAIN"
+  done
+  expect deny Write "$NEST/flnk/a.kt" "$NEST" agent-3 "orchestrator's checkout $MAIN"
+  expect deny Write "fl" "$NEST" agent-3 "orchestrator's checkout $MAIN"
+  done_
+}
+
+@test "a nested lane's own writes and deletions stay allowed through every spelling (#380)" {
+  forbid "$MAIN"
+  mkdir -p "$NEST/build" "$NEST/src"
+  P=$(cd "$NEST" && pwd -P)
+  spellings=("$NEST" "$P")
+  # macOS: the temp dir is /var/folders/... and its physical path /private/var/folders/...
+  case "$P" in /private/var/*) spellings+=("${P#/private}") ;; esac
+  case "$NEST" in /var/*) spellings+=("/private$NEST") ;; esac
+  for s in "${spellings[@]}"; do
+    for cwd in "$NEST" "$s"; do
+      for c in "echo x > $s/f" "echo x > $s/new/dir/f" "rm -rf $s/build" "rm -rf $s/src/a.kt" \
+        "echo x > f" "rm -rf build"; do
+        expect allow Bash "$c" "$cwd" agent-3
+      done
+      expect allow Write "$s/src/a.kt" "$cwd" agent-3
+    done
+  done
+  # A symlink to the lane itself, inside the lane or in the temp dir, deletes as before.
+  ln -s "$NEST" "$NEST/self"
+  ln -s "$NEST" "$T/scratch/tolane"
+  expect allow Bash "rm -rf $NEST/self" "$NEST" agent-3
+  expect allow Bash "rm $T/scratch/tolane" "$NEST" agent-3
+  expect allow Bash "echo x > $NEST/self/f" "$NEST" agent-3
+  done_
+}
+
 @test "edit tools: Edit, Write, MultiEdit and NotebookEdit; relative paths resolve against cwd" {
   forbid "$MAIN"
   for t in Edit Write MultiEdit NotebookEdit; do

@@ -131,6 +131,17 @@ phys() {
   while [[ ! -d "$d" && "$d" == /*/* ]]; do rest="/${d##*/}$rest"; d=${d%/*}; done
   if p=$(cd "$d" 2>/dev/null && pwd -P); then norm "$p$rest"; else printf '%s\n' "$1"; fi
 }
+# real ABS: phys ABS with a symlink at ABS itself followed too, dangling or not (a write through
+# `<lane>/f -> <checkout>/f` lands at its target), up to 40 links deep.
+real() {
+  local t=$1 l n=0
+  while [[ -L "$t" ]] && ((n++ < 40)); do
+    l=$(readlink "$t") || break
+    [[ "$l" == /* ]] || l="$(phys "${t%/*}")/$l"
+    t=$(norm "$l")
+  done
+  phys "$t"
+}
 # reaches T R GLOB PREFIX: R lies strictly below T, and deleting T (with GLOB: T's entries whose
 # names start with PREFIX) takes R with it.
 reaches() {
@@ -252,7 +263,7 @@ fi
 
 # Forbidden roots (#218), each also by its physical path (/tmp vs /private/tmp). A lane's own
 # worktree nested below one (.claude/worktrees/<lane>) stays writable: own.
-forbid=() own="" lane_forbidden=no
+forbid=() own="" own_phys="" lane_forbidden=no
 for v in "${forbid_raw[@]:-}"; do
   case "$v" in /* | "~" | \~/*) ;; *) continue ;; esac
   v=$(expand "$v" /) || continue
@@ -266,16 +277,19 @@ if ((${#forbid[@]})); then
     [[ "$lane" != "$v" && "$lane_phys" != "$v" ]] || lane_forbidden=yes
     [[ -z "$own" ]] || ! { inside "$v" "$own" || inside "$v" "$lane_phys"; } || own=""
   done
+  # The lane's own physical root: only a path physically inside it is the lane's own (#380).
+  [[ -z "$own" ]] || own_phys=$(phys "$lane_phys")
   # Unbound: the orchestrator's own call (no subagent, and its cwd is no lane or a forbidden root).
   if [[ -z "$agent" && ( -z "$lane" || $lane_forbidden == yes ) ]]; then forbid=(); fi
 fi
 # forbidden PATH: prints the bound forbidden root holding PATH, as spelled or by its physical path
-# (none inside the caller's own lane).
+# (none physically inside the caller's own lane: a symlink in the lane into the checkout is no
+# exemption, #380).
 forbidden() {
   local f p
   ((${#forbid[@]})) || return 1
-  p=$(phys "$1")
-  [[ -z "$own" ]] || ! { inside "$1" "$own" || inside "$p" "$lane_phys"; } || return 1
+  p=$(real "$1")
+  [[ -z "$own" ]] || ! inside "$p" "$own_phys" || return 1
   for f in "${forbid[@]}"; do
     if inside "$1" "$f" || inside "$p" "$f"; then printf '%s\n' "$f"; return 0; fi
   done
@@ -316,6 +330,9 @@ sibling_worktree() {
   for w in "${siblings[@]:-}"; do
     if [[ -n "$w" ]] && inside "$1" "$w"; then printf '%s\n' "$w"; return 0; fi
   done
+  # By the physical path only when PATH itself is no symlink: removing a link that sits outside every
+  # worktree removes the link, not the sibling it points into (#380).
+  [[ ! -L "$1" ]] || return 1
   p=$(phys "$1")
   [[ "$p" != "$1" ]] || return 1
   for w in "${siblings[@]:-}"; do
