@@ -102,7 +102,7 @@ norm() {
 # stays lexical wherever both walks reach the same directory (/var vs /private/var on macOS).
 resolve() {
   case "$1" in *..*) ;; *) norm "$1"; return 0 ;; esac
-  local p=$1 out="" part lex q
+  local p=$1 out="" part lex q linked=no
   local IFS=/
   # shellcheck disable=SC2086
   set -f; set -- $p; set +f
@@ -111,18 +111,21 @@ resolve() {
       "" | .) ;;
       ..)
         lex=${out%/*}
-        if [[ -n "$out" && -d "$out" ]] && q=$(cd -P "$out/.." 2>/dev/null && pwd -P) &&
-          [[ "$q" != "$(phys "${lex:-/}")" ]]; then out=${q%/}
+        # No symlink along OUT: its physical parent is its lexical one, no need to ask the OS.
+        if [[ $linked == yes && -n "$out" && -d "$out" ]] && q=$(cd -P "$out/.." 2>/dev/null && pwd -P) &&
+          [[ "$q" != "$(phys "${lex:-/}")" ]]; then out=${q%/} linked=no
         else out=$lex; fi ;;
-      *) out="$out/$part" ;;
+      *) out="$out/$part"; [[ ! -L "$out" ]] || linked=yes ;;
     esac
   done
   printf '%s\n' "${out:-/}"
 }
-# expand WORD BASE: prints an absolute path, or returns 1 when the word holds a variable or a
-# command substitution the hook cannot expand.
+# expand WORD BASE [lex]: prints an absolute path, or returns 1 when the word holds a variable or a
+# command substitution the hook cannot expand. A file operand resolves as the OS walks it (resolve);
+# with lex, a `cd` target normalises lexically, as the shell's logical cd applies `..` to its
+# logical cwd (with `<lane>/esc -> /tmp/a/b`, `cd esc/../..` lands above the lane, not in /tmp).
 expand() {
-  local w=$1 base=$2
+  local w=$1 base=$2 mode=${3:-}
   case "$w" in
     "~") w=$home ;;
     \~/*) w="$home/${w#\~/}" ;;
@@ -142,7 +145,7 @@ expand() {
   fi
   case "$w" in *'$'* | *'`'*) return 1 ;; esac
   [[ "$w" == /* ]] || w="$base/$w"
-  resolve "$w"
+  if [[ "$mode" == lex ]]; then norm "$w"; else resolve "$w"; fi
 }
 # inside A B: A is B or below it.
 inside() { [[ "$1" == "$2" || "$2" == / || "$1" == "$2"/* ]]; }
@@ -225,13 +228,25 @@ if [[ -n "$lane" ]]; then
     IFS=: read -r -a extra <<<"$temps:${WAAAGH_LANE_ALLOW:-}"
     for v in "${extra[@]}"; do [[ -z "$v" ]] || allowed+=("$(norm "$v")"); done
   fi
-  # Each allowed root by its physical path too: a deletion is judged by the path it reaches (#380).
-  for v in "${allowed[@]:1}"; do
-    p=$(phys "$v")
-    [[ "$p" == "$v" || "$p" == / || "$p" == "$home" ]] || allowed+=("$p")
-  done
 fi
 in_allowed() { local a; for a in "${allowed[@]}"; do inside "$1" "$a" && return 0; done; return 1; }
+# allowed_p: each configured root (state, temp, WAAAGH_LANE_ALLOW) by its physical path, used only to
+# judge the physical path a deletion reaches (del_ok, #380), never writes. A root whose physical path
+# is /, $HOME or a system root (exacts), or holds one, is left out: a link to /Users must not let
+# `rm -rf /Users/Shared/x` through.
+allowed_p=() exacts_pp=()
+if ((${#allowed[@]} > 1)); then
+  for v in "${allowed[@]:1}"; do
+    [[ "$v" != "$lane_phys" ]] || continue
+    p=$(phys "$v")
+    [[ "$p" != "$v" && "$p" != / ]] || continue
+    if ((${#exacts_pp[@]} == 0)); then
+      for r in "${exacts[@]}"; do exacts_pp+=("$r" "$(phys "$r")"); done
+    fi
+    for r in "${exacts_pp[@]}"; do inside "$r" "$p" && continue 2; done
+    allowed_p+=("$p")
+  done
+fi
 # enter_worktree DIR: a resolved `cd` into another linked worktree of this repository makes that
 # worktree writable too. A lane subagent starts in the orchestrator's working directory (rule 7),
 # itself a linked worktree in the desktop app, and reaches its own worktree by cd: without this its
@@ -503,13 +518,16 @@ protected() {
   done
   return 1
 }
-# del_ok PATH GLOB: in a lane, deleting PATH stays in bounds: strictly below an allowed root (with
-# GLOB, at or below one), or below a sibling worktree the owner's session opened.
+# del_ok PATH GLOB: in a lane, deleting PATH stays in bounds: strictly below an allowed root or its
+# physical path (allowed_p) (with GLOB, at or below one), or below a sibling worktree the owner's
+# session opened.
 del_ok() {
   local a
   ! owner_sibling "$1" || return 0
-  if [[ $2 == yes ]]; then in_allowed "$1"; return; fi
-  for a in "${allowed[@]}"; do [[ "$1" != "$a"/* ]] || return 0; done
+  for a in "${allowed[@]}" ${allowed_p[@]+"${allowed_p[@]}"}; do
+    if [[ $2 == yes ]]; then ! inside "$1" "$a" || return 0
+    else [[ "$1" != "$a"/* ]] || return 0; fi
+  done
   return 1
 }
 # check_write WORD BASE WHAT: a file a shell command writes (lane mode only).
@@ -693,7 +711,7 @@ analyze() {
     local is_cd=no
     if ((cursub == 0 && ${#toks[@]} == 2)) && [[ "${toks[0]}" == cd && "${toks[1]}" != -* && "$term" =~ ^(\;|nl|\&\&|end)$ ]] &&
       [[ "$prev_term" != "|" && "$prev_term" != "||" && ( "$prev_term" != "&&" || $prev_cd == yes ) ]] &&
-      expand "${toks[1]}" "$cur" >/dev/null; then inert=yes is_cd=yes; fi
+      expand "${toks[1]}" "$cur" lex >/dev/null; then inert=yes is_cd=yes; fi
     plain=yes
     analyze_simple "$term" "$cur" "$depth" "${toks[@]}"
     ((cursub > 0)) || [[ $inert == yes ]] || prefix_ok=no
@@ -822,14 +840,27 @@ analyze_simple() {
   local n=${#a[@]} low j
 
   case "$c" in
-    cd)
-      if ((n == 0)); then cur=$home; elif [[ "${a[0]}" != - ]]; then
-        cur=$(expand "${a[0]}" "$base") || { cur=$base; plain=no; }
-      else plain=no; fi
+    cd | pushd)
+      # The shell's cd is logical: it applies `..` to the logical cwd, lexically, so the target
+      # normalises lexically (expand lex); cd -P walks it as the OS does (#380). The file operands
+      # after it resolve from that logical cwd as the OS walks them.
+      local copt=L
+      j=0
+      while ((j < n)) && [[ "${a[j]}" == -[LPe@]* ]]; do
+        case "${a[j]}" in *P*) copt=P ;; *L*) copt=L ;; esac
+        ((j += 1))
+      done
+      if ((j < n)) && [[ "${a[j]}" == -- ]]; then ((j += 1)); fi
+      [[ $c == cd ]] || plain=no
+      if ((j == n)); then
+        if [[ $c == cd ]]; then cur=$home; fi
+      elif [[ "${a[j]}" == -* || ( $c == pushd && "${a[j]}" == +* ) ]]; then plain=no
+      elif [[ $copt == P ]] && cur=$(expand "${a[j]}" "$base"); then cur=$(phys "$cur")
+      else cur=$(expand "${a[j]}" "$base" lex) || { cur=$base; plain=no; }; fi
       [[ -d "$cur" ]] || plain=no
       enter_worktree "$cur" ;;
     export) ((i == 0)) && record_vars "$term" "$depth" $nredir "${a[@]:-}" ;;
-    for | case | select | function | source | . | pushd | popd)
+    for | case | select | function | source | . | popd)
       plain=no
       [[ "$c" != source && "$c" != . ]] || { var_names=() var_vals=(); } ;;
     grep | egrep | fgrep | head | tail | cut | cat | echo | printf | ls | wc | tr | sleep | date | pwd)

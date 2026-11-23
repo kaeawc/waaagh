@@ -171,6 +171,27 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   done_
 }
 
+@test "a cd target's .. is logical, as the shell applies it; cd -P is physical (#380)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/sub" "$MAIN/src" "$T/scratch/a/b/c/d"
+  printf 'x\n' >"$MAIN/README"
+  ln -s "$T/scratch/a/b/c/d" "$NEST/esc"
+  ln -s "$MAIN/sub" "$NEST/sl"
+  # esc/.. is the lane, not $T/scratch/a/b/c: four .. from esc land in the checkout.
+  for c in "cd esc/../../../.. && rm -rf src" "cd esc && cd ../../../.. && rm -rf src" \
+    "cd esc && cd ../../../.. && echo x > README" "cd esc/../../../.. && echo x > README" \
+    "pushd esc/../../../.. && rm -rf src" "cd -P sl/.. && echo x > README" "cd -P sl/.. && rm -rf src" \
+    "cd sl && echo x > ../README"; do
+    expect deny Bash "$c" "$NEST" agent-3 "orchestrator's checkout"
+  done
+  # sl/.. is the lane: these act inside it. A file operand still walks as the OS does.
+  for c in "cd sl/.. && rm -rf src" "cd sl && cd .. && echo x > f" "cd sl/.. && echo x > f" \
+    "cd -P esc && cd .. && rm -rf x" "cd esc && echo x > f" "cd esc && rm -rf ../x"; do
+    expect allow Bash "$c" "$NEST" agent-3
+  done
+  done_
+}
+
 @test "a .. inside a symlink's target in the nested lane resolves as the OS does (#380)" {
   forbid "$MAIN"
   mkdir -p "$MAIN/sub"

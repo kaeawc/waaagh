@@ -73,6 +73,28 @@ asked() {
   decide "rm -rf $LANE/s2/x"; allowed
 }
 
+@test "an allowed root that is a symlink widens no write or deletion beyond it (#380)" {
+  mkdir -p "$T/target" "$LANE/src"
+  ln -s /Users "$T/toUsers"
+  ln -s "$T" "$T/up"
+  ln -s "$HOME" "$T/homelink"
+  ln -s "$T/target" "$T/allowlink"
+  ln -s "$T/target" "$LANE/al"
+  WAAAGH_LANE_ALLOW="$T/toUsers" decide "rm -rf /Users/Shared/x"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/toUsers" decide "echo x > /Users/Shared/x"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/up" decide "echo x > $HOME/.zshrc"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/up" decide "rm -rf $HOME/x"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/homelink" decide "rm -rf $HOME/x"; denied "outside the lane worktree"
+  # $HOME itself spelled through a link.
+  HOME="$T/homelink" WAAAGH_LANE_ALLOW="$T/up" decide "rm -rf $T/home/x"; denied "outside the lane worktree"
+  HOME="$T/homelink" WAAAGH_LANE_ALLOW="$T/homelink" decide "echo x > $T/home/.zshrc"; denied "outside the lane worktree"
+  # A root's physical path judges only the path a deletion reaches, never a write.
+  WAAAGH_LANE_ALLOW="$T/allowlink" decide "echo x > $T/target/f"; denied "outside the lane worktree"
+  WAAAGH_LANE_ALLOW="$T/allowlink" decide "rm -rf $LANE/al/x"; allowed
+  WAAAGH_LANE_ALLOW="$T/allowlink" decide "rm -rf $T/allowlink/x"; allowed
+  WAAAGH_LANE_ALLOW="$T/allowlink" decide "echo x > $T/allowlink/f"; allowed
+}
+
 @test "ordinary deletions are allowed outside a lane" {
   decide "rm -rf build" "$MAIN"; allowed
   decide 'rm -rf "$X"' "$MAIN"; allowed
