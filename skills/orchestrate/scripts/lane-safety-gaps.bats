@@ -404,3 +404,84 @@ unregister_lane() { rm -f "$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"; }
   expect ask   'rm -f (hm)/.bashrc' "$LANE" "no registered lane"
   done_
 }
+
+@test "a command built to outrun the hook's timeout is decided in time, fail-closed (#387 review, #388)" {
+  mkdir -p "$LANE/out"
+  local p1 p2 p3 i s
+  p1="touch out/$(printf '{{{%.0s' $(seq 1800)); rm -rf ~"
+  p2="$(for ((i = 0; i < 45; i++)); do printf 'out/{A..z}{A..z} '; done); rm -rf ~"
+  p3="touch $(for ((i = 0; i < 60; i++)); do printf '{01..99}{01..99}'; done)"
+  s=$SECONDS
+  expect deny  "$p1" "$LANE" "word too long to check"
+  expect deny  "$p2" "$LANE" "rm -r ~: protected path"
+  expect deny  "$p3" "$LANE" "too many braces to check"
+  expect ask   "rm -rf out/$(printf '{a}%.0s' $(seq 100))" "$MAIN" "too many braces to check"
+  expect deny  "touch out/$(printf 'a%.0s' $(seq 4100))" "$LANE" "word too long to check"
+  ((SECONDS - s < 8)) || FAILS="$FAILS
+[timeout payloads] took $((SECONDS - s)) s"
+  # A deep nest under the bounds is paired in one pass; brace words are still judged.
+  expect allow "touch out/x$(printf '{%.0s' $(seq 60))a$(printf '}%.0s' $(seq 60))" "$LANE"
+  expect allow 'touch out/{a,{b,c{1..3}}}' "$LANE"
+  expect deny  'touch out/{a,{b,../../../c{1..3}}}' "$LANE" "writes outside"
+  done_
+}
+
+@test "the deadline watchdog prints one fail-closed decision when the checks stall (#388)" {
+  local out s
+  export WAAAGH_LANE_SAFETY_TEST_STALL=4 WAAAGH_LANE_SAFETY_DEADLINE=1
+  s=$SECONDS
+  out=$("$SCRIPTS/lane-safety.sh" <<<"$(payload 'ls' "$LANE")")
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ]
+  [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$out")" = deny ]
+  [[ "$out" == *"the check took too long; split the command or name the paths"* ]]
+  ((SECONDS - s < 3))
+  out=$("$SCRIPTS/lane-safety.sh" <<<"$(payload 'ls' "$MAIN")")
+  [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$out")" = ask ]
+  out=$("$SCRIPTS/lane-safety.sh" <<<"$(jq -cn --arg d "$MAIN" '{tool_name: "Bash", tool_input: {command: "ls"}, cwd: $d, agent_id: "a1"}')")
+  [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$out")" = deny ]
+  # Undelayed, the checks decide as before and the watchdog prints nothing.
+  unset WAAAGH_LANE_SAFETY_TEST_STALL
+  out=$("$SCRIPTS/lane-safety.sh" <<<"$(payload 'ls' "$LANE")")
+  [ -z "$out" ]
+  out=$("$SCRIPTS/lane-safety.sh" <<<"$(payload 'rm -rf ~' "$LANE")")
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ]
+  [[ "$out" == *"protected path"* ]]
+}
+
+@test "quoted or escaped braces cannot hide an expansion; quoted glob characters are plain (#387 review)" {
+  mkdir -p "$HOME/.ssh" "$LANE/src" "$LANE/out"
+  printf 'b\n' >"$HOME/.bashrc"
+  touch "$LANE/src/a"
+  ln -s "$HOME" "$LANE/hm"
+  expect deny  "rm -rf {hm/.ssh,'{'}" "$LANE" "quoted brace"
+  expect deny  'rm -rf {hm/.ssh,\{}' "$LANE" "quoted brace"
+  expect deny  'rm -rf {hm/.ssh,"{"}' "$LANE" "quoted brace"
+  expect deny  "rm -f {hm/.bashrc,'{'}" "$LANE" "quoted brace"
+  expect deny  "echo x > {hm/.bashrc,'{'}" "$LANE" "quoted brace"
+  expect deny  "ln -s {../../../README,'{'} out/" "$LANE" "quoted brace"
+  expect deny  "cd {hm,'{'} && rm -f .bashrc" "$LANE" "working directory is unknown"
+  expect ask   "rm -rf {hm/.ssh,'{'}" "$MAIN" "quoted brace"
+  # A fully quoted brace is a literal name.
+  expect allow "touch 'out/{a,b}'" "$LANE"
+  expect allow 'rm -f "out/{a,b}" out/\{x,y\}' "$LANE"
+  # Quoted ( ) and a lone # are plain; ${...} is no glob; out/** is out/*.
+  expect allow "cp src/a 'out/a (1).txt'" "$LANE"
+  expect allow 'touch "out/report (final).md"' "$LANE"
+  expect allow 'rm -f "out/a (copy).txt"' "$LANE"
+  expect allow 'cd out && echo x > "f(1)"' "$LANE"
+  expect allow 'mv out/a out/b#1' "$LANE"
+  expect allow 'tee out/a#b' "$LANE"
+  expect allow 'rm -f out/**' "$LANE"
+  expect allow 'rm -rf out/**' "$LANE"
+  expect allow "bash -c 'touch \"out/a (1)\"'" "$LANE"
+  expect deny  'rm -rf hm/**' "$LANE" "protected path"
+  expect deny  'rm -f out/**/x' "$LANE" "zsh glob syntax"
+  expect deny  'rm -f out/*#' "$LANE" "zsh glob syntax"
+  expect deny  'rm -f out/(a)' "$LANE" "zsh glob syntax"
+  expect deny  'bash -c "rm -rf {hm,zz}/.ssh"' "$LANE" "protected path"
+  local out
+  out=$("$SCRIPTS/lane-safety.sh" <<<"$(payload 'echo x > out/${HOME#/}x' "$LANE")")
+  [[ "$out" != *"zsh glob"* ]] || FAILS="$FAILS
+[\${HOME#/}] judged as a zsh glob: $out"
+  done_
+}

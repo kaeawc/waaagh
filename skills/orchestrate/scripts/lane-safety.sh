@@ -19,8 +19,11 @@
 #   from the link's directory) is out of them (#384). A glob in any path part is expanded and every
 #   match judged; over 100 matches in one command is too many to judge (#384). A brace expansion
 #   ({a,b}, {1..3}) is judged word by word, a glob in a cd target by its one match; a glob with
-#   more than 2 globbed path parts, zsh glob syntax (( ), ^, #, **, ~ past the start) and a brace
-#   around an unknown variable are refused unexpanded (#387; asked outside a lane).
+#   more than 2 globbed path parts, unquoted zsh glob syntax (( ), ^, **/, # after a glob character,
+#   ~ past the start), a brace around an unknown variable or beside a quoted brace or comma, and a
+#   word over 4096 characters or 64 braces are refused unexpanded (#387; asked outside a lane).
+#   A check undecided after 6 seconds fails closed (#388): denied in a known lane or for a
+#   subagent's call, asked elsewhere, before the hook's 10-second timeout lets the call through.
 #   Denied only in a known lane (payload agent_id, $WAAAGH_LANE_ROOT, or an active lanes.tsv row
 #   under the state root); in any other linked worktree, the owner's own session, they ask.
 # Forbidden roots (#218): the orchestrator's own checkout, from $WAAAGH_LANE_FORBID (colon list) and
@@ -74,6 +77,8 @@ agent=$(jq -r '.agent_id // empty' <<<"$payload")
 [[ -n "$cwd" ]] || cwd=$PWD
 [[ -n "$cmd" ]] || exit 0
 
+# lane_main: every check below, run in a worker process under the deadline at the end of this file.
+lane_main() {
 home=${HOME:-/nonexistent}
 state_root=${ORCHESTRATE_STATE_DIR:-$home/.claude/orchestrate}
 # Raw forbidden roots; an edit tool call has nothing else to check, so it stops here without any.
@@ -87,6 +92,20 @@ if [[ -r "$state_root/lane-forbidden" ]]; then
 fi
 [[ "$tool" == Bash || ${#forbid_raw[@]} -gt 0 ]] || exit 0
 US=$'\037' OP=$'\002'
+# Quote marks (#387 review): the tokenizer strips quotes, and spells each quoted or escaped
+# { } , ( ) # ^ ~ * as its own control byte (MK, in that order), so brace and zsh glob checks see
+# only the characters the shell would expand. unmark S sets um to S spelled back; a path is unmarked
+# before it is resolved (subst_word), a bash -c or eval body before it is tokenized again (analyze),
+# and the decision's reason before it is printed.
+MK=$'\021\022\023\024\025\026\027\030\031' MKB=$'\021\022\023'
+um=""
+unmark() {
+  local s=$1 c='{' d='}' e=',' f='(' g=')' h='#' i='^' j='~' k='*'
+  case "$s" in *[$MK]*) ;; *) um=$s; return 0 ;; esac
+  s=${s//$'\021'/$c} s=${s//$'\022'/$d} s=${s//$'\023'/$e} s=${s//$'\024'/$f} s=${s//$'\025'/$g}
+  s=${s//$'\026'/$h} s=${s//$'\027'/$i} s=${s//$'\030'/$j} s=${s//$'\031'/$k}
+  um=$s
+}
 
 # --- path helpers -------------------------------------------------------------------------------
 # norm ABS: lexical normalisation (., .., //, trailing /).
@@ -143,7 +162,8 @@ expand() {
 # relative when WORD is; returns 1 when another variable or a command substitution remains.
 sw=""
 subst_word() {
-  local w=$1 base=$2
+  local w base=$2
+  unmark "$1"; w=$um
   case "$w" in
     "~") w=$home ;;
     \~/*) w="$home/${w#\~/}" ;;
@@ -204,14 +224,19 @@ glob_expand() {
   if ((glob_left < 0)); then too_many "$3"; return 1; fi
   return 0
 }
-# zsh_glob WORD: WORD (a write, delete, ln or cd operand) holds glob syntax bash does not expand the
-# way the user's zsh does (#387 review): a ( ) group (`h(m|x)`, `(hm)`, qualifiers, extglob; the
-# tokenizer keeps a `(` that continues an argument word), `^`, `#`, `**`, or a `~` anywhere but a
-# leading `~` or `~/` (`*~*.c`, `~user`). A trailing `~` (a backup file, `rm -f *~`) is no glob.
-# With braces, the `~` test waits for each brace word (`{~,zz}` is `~` and `zz`).
+# zsh_glob WORD [braces]: WORD (a write, delete, ln or cd operand) holds unquoted glob syntax bash
+# does not expand the way the user's zsh does (#387 review): a ( ) group (`h(m|x)`, `(hm)`,
+# qualifiers, extglob; the tokenizer keeps a `(` that continues an argument word), `^`, a recursive
+# `**/`, a `#` after a glob character (`*#`, extended_glob), or a `~` anywhere but a leading `~` or
+# `~/` (`*~*.c`, `~user`). Quoted characters are marked (MK), so they never count (`'out/a (1).txt'`).
+# A lone `#` is literal (extended_glob is off by default: `out/b#1`), and so is one in `${...}`
+# (`${HOME#/}`); `**` not before a `/` is `*` in both shells (`out/**` is judged as `out/*`); a
+# trailing `~` (a backup file, `rm -f *~`) is no glob. With braces, the `~` test waits for each
+# brace word (`{~,zz}` is `~` and `zz`).
 zsh_glob() {
-  local w=${1//'$(...)'/} r
-  case "$w" in *'('* | *')'* | *'^'* | *'#'* | *'**'*) return 0 ;; esac
+  local w=${1//'$(...)'/} r p
+  while [[ "$w" == *'${'*'}'* ]]; do p=${w%%'${'*} r=${w#*'${'} r=${r#*\}} w=$p$r; done
+  case "$w" in *'('* | *')'* | *'^'* | *'**/'* | *[]*?]'#'*) return 0 ;; esac
   [[ "${2:-}" != braces ]] || return 1
   r=$w
   case "$r" in "~" | \~/*) r=${r#\~} ;; esac
@@ -221,52 +246,62 @@ zsh_glob() {
 # tilde expansion, so `rm -rf {~,zz}` removes $HOME. brace_words WORD: sets bw to WORD's brace
 # expansion, done here by the same rule as bash (the leftmost `{` whose matching `}` holds a
 # top-level comma or a sequence, repeated until none is left), so nothing is executed; returns 1
-# when WORD has none, 2 when it makes more than glob_max words.
+# when WORD has none, 2 when it makes more than glob_max words, 3 when the hook runs out of time.
+# pre_words bounds the work first: a word over word_max characters or with over brace_max `{` is
+# refused unexpanded (`{{{...` thousands deep made the split quadratic past the hook's timeout).
+word_max=4096 brace_max=64
 bw=() bs_pre="" bs_post="" bs_alts=()
 brace_words() {
-  local q=("$1") k=0 w a found=no
+  local q=("$1") k=0 w a found=no rc
   bw=()
   while ((k < ${#q[@]})); do
+    if over_time; then return 3; fi
     w=${q[k]}; k=$((k + 1))
-    if brace_split "$w"; then
+    rc=0
+    brace_split "$w" || rc=$?
+    if ((rc == 0)); then
       found=yes
       for a in "${bs_alts[@]}"; do q+=("$bs_pre$a$bs_post"); done
       ((${#q[@]} - k + ${#bw[@]} <= glob_max)) || return 2
+    elif ((rc == 3)); then return 3
     else bw+=("$w"); fi
   done
   [[ $found == yes ]] || return 1
 }
 # brace_split WORD: sets bs_pre, bs_alts and bs_post for WORD's leftmost brace expression; returns 1
-# when it has none.
+# when it has none, 3 when the hook runs out of time. One pass pairs each `{` with its `}` on a stack
+# and keeps the leftmost pair holding a top-level comma or a sequence, so a deep or unmatched nest
+# costs one walk of the word, not one per `{`.
 brace_split() {
-  local w=$1 n=${#1} i j c depth start commas body
-  for ((i = 0; i < n; i++)); do
-    [[ "${w:i:1}" == "{" ]] || continue
-    depth=0 commas=()
-    for ((j = i; j < n; j++)); do
-      c=${w:j:1}
-      if [[ "$c" == "{" ]]; then depth=$((depth + 1))
-      elif [[ "$c" == "}" ]]; then depth=$((depth - 1)); ((depth > 0)) || break
-      elif [[ "$c" == , && $depth == 1 ]]; then commas+=("$j"); fi
-    done
-    ((j < n)) || continue
-    bs_pre=${w:0:i} bs_post=${w:j+1} bs_alts=()
-    if ((${#commas[@]})); then
-      start=$((i + 1))
-      for c in "${commas[@]}"; do bs_alts+=("${w:start:c-start}"); start=$((c + 1)); done
-      bs_alts+=("${w:start:j-start}")
-      return 0
+  local w=$1 n=${#1} j c top=0 op=() cm=() i p start best=-1 alts=()
+  for ((j = 0; j < n; j++)); do
+    if ((!(j & 1023))) && over_time; then return 3; fi
+    c=${w:j:1}
+    if [[ "$c" == "{" ]]; then op[top]=$j cm[top]=""; top=$((top + 1))
+    elif [[ "$c" == , ]]; then ((top == 0)) || cm[top - 1]="${cm[top - 1]} $j"
+    elif [[ "$c" == "}" ]] && ((top)); then
+      top=$((top - 1)) i=${op[top]}
+      ((best < 0 || i < best)) || continue
+      if [[ -n "${cm[top]}" ]]; then
+        alts=() start=$((i + 1))
+        for p in ${cm[top]}; do alts+=("${w:start:p-start}"); start=$((p + 1)); done
+        alts+=("${w:start:j-start}")
+      else
+        bs_alts=()
+        brace_seq "${w:i+1:j-i-1}" || continue
+        alts=("${bs_alts[@]}")
+      fi
+      best=$i bs_pre=${w:0:i} bs_post=${w:j+1}
     fi
-    body=${w:i+1:j-i-1}
-    brace_seq "$body" && return 0
   done
-  return 1
+  ((best >= 0)) || return 1
+  bs_alts=("${alts[@]}")
 }
 # brace_seq BODY: sets bs_alts to the sequence {BODY} makes (integers, zero-padded when either end
 # is, or single letters; an optional step), at most glob_max + 1 of them; returns 1 when BODY is no
-# sequence.
+# sequence. No subshells: printf -v, so a long sequence costs no forks.
 brace_seq() {
-  local x y s=1 width=0 v cx cy
+  local x y s=1 width=0 v cx cy pv
   if [[ "$1" =~ ^(-?[0-9]+)\.\.(-?[0-9]+)(\.\.(-?[0-9]+))?$ ]]; then
     x=${BASH_REMATCH[1]} y=${BASH_REMATCH[2]}
     [[ -z "${BASH_REMATCH[4]}" ]] || s=${BASH_REMATCH[4]#-}
@@ -276,23 +311,27 @@ brace_seq() {
       return 0
     fi
     [[ "$x" != 0?* && "$x" != -0?* && "$y" != 0?* && "$y" != -0?* ]] || width=$((${#x} > ${#y} ? ${#x} : ${#y}))
-    x=$(dec "$x") y=$(dec "$y") s=$((10#$s)); ((s > 0)) || s=1
+    dec x "$x"; dec y "$y"; s=$((10#$s)); ((s > 0)) || s=1
     v=$x
     while ((${#bs_alts[@]} <= glob_max)); do
-      if ((width)); then bs_alts+=("$(printf '%0*d' "$width" "$v")"); else bs_alts+=("$v"); fi
+      if ((width)); then printf -v pv '%0*d' "$width" "$v"; bs_alts+=("$pv"); else bs_alts+=("$v"); fi
       if ((x <= y)); then v=$((v + s)); ((v <= y)) || break
       else v=$((v - s)); ((v >= y)) || break; fi
     done
     return 0
   fi
   if [[ "$1" =~ ^([A-Za-z])\.\.([A-Za-z])(\.\.(-?[0-9]+))?$ ]]; then
-    cx=$(printf '%d' "'${BASH_REMATCH[1]}") cy=$(printf '%d' "'${BASH_REMATCH[2]}")
+    printf -v cx '%d' "'${BASH_REMATCH[1]}"
+    printf -v cy '%d' "'${BASH_REMATCH[2]}"
     [[ -z "${BASH_REMATCH[4]}" ]] || s=${BASH_REMATCH[4]#-}
     ((${#s} <= 9)) || s=1
     s=$((10#$s)); ((s > 0)) || s=1
     v=$cx
     while ((${#bs_alts[@]} <= glob_max)); do
-      bs_alts+=("$(printf "\\$(printf '%03o' "$v")")")
+      printf -v pv '%03o' "$v"
+      # shellcheck disable=SC2059
+      printf -v pv "\\$pv"
+      bs_alts+=("$pv")
       if ((cx <= cy)); then v=$((v + s)); ((v <= cy)) || break
       else v=$((v - s)); ((v >= cy)) || break; fi
     done
@@ -300,38 +339,46 @@ brace_seq() {
   fi
   return 1
 }
-# dec N: the signed decimal N, leading zeros read as decimal.
-dec() { local n=$1 sg=""; [[ "$n" != -* ]] || { sg=-; n=${n#-}; }; printf '%s\n' "$sg$((10#$n))"; }
+# dec VAR N: sets VAR to the signed decimal N, leading zeros read as decimal.
+dec() { local n=$2 sg=""; [[ "$n" != -* ]] || { sg=-; n=${n#-}; }; printf -v "$1" '%s' "$sg$((10#$n))"; }
 # pre_words WORD BASE LABEL: the shell's own expansions judged before WORD's path (#387 review): a
 # zsh glob is refused; a brace expansion sets bw to its words, taken from glob_left (returns 0: judge
-# each word instead of WORD); one around a variable the hook cannot spell out, or making too many
-# words, is refused. Returns 1 to go on with WORD itself, 2 after refusing.
+# each word instead of WORD); one around a variable the hook cannot spell out, making too many
+# words, beside a quoted or escaped brace or comma (`{hm/.ssh,'{'}`: bash keeps the quoted `{`
+# literal, so the hook's own split would differ), or in a word over word_max characters or brace_max
+# braces, is refused. Returns 1 to go on with WORD itself, 2 after refusing.
 pre_words() {
-  local w=$1 rc=0 zsh="zsh glob syntax the hook cannot expand faithfully; name the paths"
+  local w=$1 rc=0 zsh="zsh glob syntax the hook cannot expand faithfully; name the paths" lb=$3 t
+  ((${#lb} <= 200)) || lb="${lb:0:200}..."
+  if ((${#w} > word_max)); then glob_refuse "$lb" "word too long to check (over $word_max characters); name the paths"; return 2; fi
   if [[ "$w" != *'{'*'}'* ]]; then
-    if zsh_glob "$w"; then glob_refuse "$3" "$zsh"; return 2; fi
+    if zsh_glob "$w"; then glob_refuse "$lb" "$zsh"; return 2; fi
     return 1
   fi
-  if zsh_glob "$w" braces; then glob_refuse "$3" "$zsh"; return 2; fi
+  t=${w//[!\{]/}
+  if ((${#t} > brace_max)); then glob_refuse "$lb" "too many braces to check (over $brace_max in one word); name the paths"; return 2; fi
+  if [[ "$w" == *[$MKB]* ]]; then glob_refuse "$lb" "quoted brace in a brace expansion; name the paths"; return 2; fi
+  if zsh_glob "$w" braces; then glob_refuse "$lb" "$zsh"; return 2; fi
   case "$w" in
     *'$'* | *'`'*)
       if subst_word "$w" "$2"; then w=$sw
       else
         brace_words "$w" || rc=$?
         if ((rc == 1)); then
-          if zsh_glob "$w"; then glob_refuse "$3" "$zsh"; return 2; fi
+          if zsh_glob "$w"; then glob_refuse "$lb" "$zsh"; return 2; fi
           return 1
         fi
-        glob_refuse "$3" "brace expansion around a variable or command substitution; expand it and name the paths"; return 2
+        glob_refuse "$lb" "brace expansion around a variable or command substitution; expand it and name the paths"; return 2
       fi ;;
   esac
   brace_words "$w" || rc=$?
   if ((rc == 1)); then
-    if zsh_glob "$1"; then glob_refuse "$3" "$zsh"; return 2; fi
+    if zsh_glob "$1"; then glob_refuse "$lb" "$zsh"; return 2; fi
     return 1
   fi
+  if ((rc == 3)); then glob_refuse "$lb" "brace expansion left unexpanded: the hook ran out of time; name the paths"; return 2; fi
   if ((rc == 0)); then glob_left=$((glob_left - ${#bw[@]})); fi
-  if ((rc != 0 || glob_left < 0)); then glob_refuse "$3" "brace expansion makes too many paths (over $glob_max); name them"; return 2; fi
+  if ((rc != 0 || glob_left < 0)); then glob_refuse "$lb" "brace expansion makes too many paths (over $glob_max); name them"; return 2; fi
   return 0
 }
 # glob_words WORD BASE: sets gw to the words the shell's own globbing makes of WORD (variables
@@ -539,6 +586,8 @@ if [[ -n "$lane" ]]; then
     done
   fi
 fi
+# The deadline's fail-closed decision is a deny in a known lane (see the end of this file).
+[[ $known_lane == no || -z "${wd:-}" ]] || : >"$wd/lane"
 
 # Forbidden roots (#218), each also by its physical path (/tmp vs /private/tmp). A lane's own
 # worktree nested below one (.claude/worktrees/<lane>) stays writable: own.
@@ -1008,7 +1057,9 @@ check_git() {
 # array, case pattern). Heredoc bodies and comments are skipped; a quoted newline
 # stays in its word as \035, so one command is always one line.
 tokenize() {
-  awk -v US="$US" -v OP="$OP" -v NL=$'\035' '
+  awk -v US="$US" -v OP="$OP" -v NL=$'\035' -v MK="$MK" '
+  # mk(c): c quoted or escaped, marked when the shell would expand it unquoted (MK above).
+  function mk(c,   k) { k = index("{},()#^~*", c); return k ? substr(MK, k, 1) : c }
   function flush() { if (have) { toks = toks (ntok ? US : "") word; ntok++; last = word; word = ""; have = 0 } }
   function emit(term) { flush(); if (ntok) print term "\036" toks "\036" cmdsubs; toks = ""; ntok = 0; cmdsubs = ""; last = "" }
   function optok(o) { flush(); toks = toks (ntok ? US : "") OP o; ntok++; last = OP o }
@@ -1030,17 +1081,17 @@ tokenize() {
     sq = 0; dq = 0; word = ""; have = 0; toks = ""; ntok = 0; nhd = 0; wantdelim = 0; cmdsubs = ""
     for (i = 1; i <= length(s); i++) {
       c = substr(s, i, 1); n = substr(s, i + 1, 1); n2 = substr(s, i + 2, 1)
-      if (sq) { if (c == "\047") sq = 0; else word = word (c == "\n" ? NL : c); continue }
+      if (sq) { if (c == "\047") sq = 0; else word = word (c == "\n" ? NL : mk(c)); continue }
       if (dq) {
         if (c == "\"") { dq = 0; continue }
         if (c == "\\" && (n == "\"" || n == "\\" || n == "$" || n == "`")) { word = word n; i++; continue }
         if (c == "$" && n == "(") { i = grab(s, i + 2, ")"); word = word "$(...)"; continue }
         if (c == "`") { i = grab(s, i + 1, "`"); word = word "$(...)"; continue }
-        word = word (c == "\n" ? NL : c); continue
+        word = word (c == "\n" ? NL : mk(c)); continue
       }
       if (c == "\047") { sq = 1; have = 1; continue }
       if (c == "\"") { dq = 1; have = 1; continue }
-      if (c == "\\") { if (n == "\n") { i++; continue } word = word n; have = 1; i++; continue }
+      if (c == "\\") { if (n == "\n") { i++; continue } word = word mk(n); have = 1; i++; continue }
       if (c == " " || c == "\t") { flush(); if (wantdelim) { } continue }
       if (c == "#" && !have) { while (i <= length(s) && substr(s, i, 1) != "\n") i++; i--; continue }
       if (c == "\n") {
@@ -1128,6 +1179,8 @@ analyze() {
   # subst_var). plain: set by analyze_simple for the command it judged.
   local straight=no plain=yes t
   ((depth < 4)) || return 0
+  # A bash -c or eval body arrives with its quoted characters marked: the shell reads it afresh.
+  unmark "$text"; text=$um
   if ((depth == 0)); then
     vars_text=$text var_names=() var_vals=()
     local o1='$(' o2='<(' o3='>('
@@ -1514,6 +1567,10 @@ analyze_simple() {
   destructive=no
 }
 
+# Test hook: stall the checks this many seconds (since the hook started) to exercise the deadline.
+if [[ "${WAAAGH_LANE_SAFETY_TEST_STALL:-}" =~ ^[0-9]$ ]]; then
+  while ((SECONDS < WAAAGH_LANE_SAFETY_TEST_STALL)); do :; done
+fi
 if [[ "$tool" == Bash ]]; then
   analyze "$cmd" "$cwd"
 elif t=$(expand "$cmd" "$cwd") && f=$(forbidden "$t"); then
@@ -1524,5 +1581,55 @@ decision="" reason=""
 if [[ -n "$denies" ]]; then decision=deny reason="lane safety (lane-safety.md): $denies"
 elif [[ -n "$asks" ]]; then decision=ask reason="lane safety (lane-safety.md): $asks"; fi
 [[ -n "$decision" ]] || exit 0
-jq -cn --arg d "$decision" --arg r "$reason" \
+unmark "$reason"
+jq -cn --arg d "$decision" --arg r "$um" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}'
+}
+
+# --- deadline (#387 review, #388) ---------------------------------------------------------------
+# Claude Code gives the hook 10 seconds (hooks.json), and a hook that times out does not block: the
+# call goes ahead. So the checks run in a worker process (lane_main, its output to a file) while a
+# watchdog, which spawns nothing, waits deadline seconds (default 6) and then signals this process,
+# its recorded parent ($$, never a pattern). On that signal this process kills the worker (its own
+# recorded PID) and prints the fail-closed decision: deny when the call is a subagent's or the
+# session a known lane (lane_main marks it in the temp dir), ask otherwise. Exactly one decision is
+# printed, and only by this process: the normal path ignores the signal before it prints the
+# worker's decision. Without a temp dir or a FIFO there is no watchdog, and the checks run inline.
+# WAAAGH_LANE_SAFETY_DEADLINE (1-6) shortens the deadline for tests.
+deadline=${WAAAGH_LANE_SAFETY_DEADLINE:-6}
+[[ "$deadline" =~ ^[1-6]$ ]] || deadline=6
+wd=""
+if ! wd=$(mktemp -d "${TMPDIR:-/tmp}/lane-safety.XXXXXX" 2>/dev/null) || ! mkfifo "$wd/f" 2>/dev/null; then
+  [[ -z "$wd" || ! -d "$wd" ]] || rm -rf "$wd"
+  wd=""
+  lane_main
+  exit 0
+fi
+main=$$
+lane_main >"$wd/out" &
+worker=$!
+# The watchdog reads a FIFO it holds open for writing too: no data, no EOF, only the timeout.
+(
+  [[ -p "$wd/f" ]] || exit 0
+  read -r -t "$deadline" _ <>"$wd/f" || true
+  kill -TERM "$main" 2>/dev/null || true
+) </dev/null >/dev/null 2>&1 &
+wdog=$!
+trap 'kill "$wdog" 2>/dev/null; rm -rf "$wd"' EXIT
+timed_out() {
+  trap '' TERM
+  kill "$worker" 2>/dev/null || true
+  local d=ask
+  if [[ -n "$agent" || -n "${WAAAGH_LANE_ROOT:-}" || -e "$wd/lane" ]]; then d=deny; fi
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":"%s"}}\n' \
+    "$d" "lane safety: the check took too long; split the command or name the paths"
+  exit 0
+}
+trap timed_out TERM
+rc=0
+wait "$worker" || rc=$?
+trap '' TERM
+out=""
+IFS= read -r -d '' out <"$wd/out" || true
+[[ -z "$out" ]] || printf '%s' "$out"
+exit "$rc"
