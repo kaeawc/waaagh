@@ -316,6 +316,15 @@ host_stub() {
   [ "$status" -eq 0 ]
   [ "$(snap_line orphans)" = "orphans 3 worktrees=lane-a(2),lane-b(removed:1)" ]
   [[ "${lines[0]}" == "verdict act "*"orphans=3"* ]]
+  # A recorded origin names the starter per worktree (agent, else session, else parent); the old form stays a prefix.
+  jq -n '{total: 3, groups: [
+      {worktree: "lane-a", worktree_removed: false, processes: [
+        {pid: 11, command: "node", origin: {known: true, parent: {pid: 5, command: "zsh", alive: false}, agent: {pid: 4242, command: "/usr/bin/claude", role: "claude", alive: false}}},
+        {pid: 12, command: "java", origin: {known: true, parent: {pid: 6, command: "bash", alive: true}}}]},
+      {worktree: "lane-b", worktree_removed: true, processes: [{pid: 13, command: "qemu", origin: {known: false, reason: "no daemon"}}]}]}' \
+    >"$BATS_TEST_TMPDIR/spectra-orphans.json"
+  run snap
+  [ "$(snap_line orphans)" = "orphans 3 worktrees=lane-a(2),lane-b(removed:1) started-by=lane-a:bash#6(alive)+claude#4242(exited)" ]
   # spectra failing, or missing, is unknown and holds nothing.
   SPECTRA_STUB_FAIL=1 run snap
   [ "$(snap_line orphans)" = "orphans unknown" ]
