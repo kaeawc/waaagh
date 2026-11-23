@@ -162,3 +162,15 @@ rm -rf $W/scratch/batch'; allowed
   decide "echo x > $LANE/f" "$OWN" agent-1; is deny "writes outside"
   WAAAGH_OWNER_SIBLING_WORKTREES=ask decide "echo x > $LANE/f" "$OWN"; is ask "writes outside"
 }
+
+@test "WAAAGH_OWNER_SIBLING_WORKTREES=allow: a symlink outside every worktree into a sibling still asks (#380)" {
+  export WAAAGH_OWNER_SIBLING_WORKTREES=allow
+  ln -s "$LANE/scratch" "$T/lnk"
+  ln -s "$LANE/scratch/f" "$T/flnk"
+  # Removing the link itself is no write below the sibling: it asks, as before #379.
+  decide "rm -rf $T/lnk" "$OWN"; is ask "outside the lane worktree"
+  decide "rm -rf $T/flnk" "$OWN"; is ask "outside the lane worktree"
+  # A path below the link reaches into the sibling, which the knob lets through.
+  decide "rm -rf $T/lnk/batch" "$OWN"; allowed
+  decide "echo x > $T/lnk/build.log" "$OWN"; allowed
+}
