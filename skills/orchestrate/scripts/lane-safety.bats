@@ -8,7 +8,7 @@ setup() {
   ROOT="$(cd "$SCRIPTS/../../.." && pwd)"
   T=$BATS_TEST_TMPDIR
   export HOME="$T/home" WAAAGH_LANE_TEMP="$T/scratch" ORCHESTRATE_STATE_DIR="$T/state"
-  unset ANDROID_HOME ANDROID_SDK_ROOT WAAAGH_LANE_ROOT WAAAGH_LANE_ALLOW WAAAGH_PROTECTED_PATHS WAAAGH_LANE_SAFETY ANDROID_SERIAL
+  unset CDPATH ANDROID_HOME ANDROID_SDK_ROOT WAAAGH_LANE_ROOT WAAAGH_LANE_ALLOW WAAAGH_PROTECTED_PATHS WAAAGH_LANE_SAFETY ANDROID_SERIAL
   mkdir -p "$HOME/Library/Android/sdk" "$T/scratch" "$T/main"
   git -C "$T/main" init -q
   git -C "$T/main" commit -q --allow-empty -m init
@@ -97,7 +97,8 @@ asked() {
 
 @test "a relative write or deletion after popd or another unknown cd is denied; an absolute one is judged (#383)" {
   mkdir -p "$LANE/d1/d2" "$LANE/src/build"
-  decide "pushd d1/d2 && popd && rm -rf ../../x"; denied "the working directory is unknown after \`popd\`"
+  decide "popd && rm -rf ../../x"; denied "the working directory is unknown after \`popd\`"
+  decide "pushd d1/d2 && popd && rm -rf ../../x"; denied "outside the lane worktree"
   decide "pushd d1/d2 && pushd && echo x > ../../f"; denied "unknown after \`pushd\`"
   decide "cd -P -L d1 && rm -rf x"; denied "unknown after \`cd -P -L\`"
   decide "pushd src && rm -rf build && popd"; allowed
