@@ -49,16 +49,18 @@ command (quotes, comments and heredoc bodies are data; `bash -c`, `eval`, `$(…
 | `rm -r` outside the worktree and temp dirs, on the worktree itself, or on a path built from a variable | allow | deny |
 | `rm` without `-r`, `unlink` on a protected root itself (`rm ~`, `rm -f ~/.ssh`) | deny | deny |
 | `rm` without `-r`, `unlink` of a file outside the worktree and temp dirs (a file below a protected root counts as a write: `rm -f ~/.ssh/known_hosts`) | allow | deny |
-| `ln` (any form) whose link, or whose target, lies outside the worktree, temp dirs and the state dir; a relative symlink target resolves from the link's directory (`ln -s <checkout> nl` is refused when made, so `ln -s <checkout> nl && echo x > nl/f` cannot pass) | allow | deny |
+| `xargs rm` (without `-r`), `xargs unlink`: the paths come from its input, which the hook cannot see (#389); a literal operand beside them is judged as `rm` judges it | ask | deny |
+| `find -exec`/`-execdir`/`-ok`/`-okdir` running `rm` or `unlink` (any path, `/bin/rm`): judged like `find -delete`, from its start points, and any literal operand beside `{}` as `rm` judges it (#389) | as `-delete` | as `-delete` |
+| `ln` (any form, also `gln`, `busybox ln`, `toybox ln`, and `cp -s`/`cp -l`, whose sources are link targets, #389) whose link, or whose target, lies outside the worktree, temp dirs and the state dir; a relative symlink target resolves from the link's directory (`ln -s <checkout> nl` is refused when made, so `ln -s <checkout> nl && echo x > nl/f` cannot pass) | allow | deny |
 | a write through a symlink whose real target lies outside (`echo x > <lane>/hm/.bashrc` with `hm -> $HOME`); a target under `/dev`, a temp dir or an allowed root stays allowed | allow | deny |
 | a glob in any path part (`rm -rf <lane>/*/.ssh`, `echo x > <lane>/s*/../README`): every match is judged; more than 100 matches in one command | as each match; ask | as each match; deny |
 | a brace expansion (`rm -rf {~,zz}`, `touch {../../..,zz}/README`): every word is judged; more than 100 words, braces around a variable the hook cannot spell out, a quoted or escaped brace or comma beside one (`rm -rf {hm/.ssh,'{'}`), or a word over 4096 characters or 64 braces | as each word; ask | as each word; deny |
-| a glob with more than 2 globbed path parts (`echo x > /System/*/*/*/*/x`), or unquoted zsh glob syntax in a write, delete, `ln` or `cd` operand (`h(m\|x)`, `(hm)`, `^`, `**/`, a `#` after a glob character, a `~` past the start; a quoted `'out/a (1).txt'`, a lone `#` as in `out/b#1` and `out/**`, which both shells read as `out/*`, are plain words): refused unexpanded, as is what is left once the hook has spent 3 seconds expanding | ask | deny |
+| a glob with more than 2 globbed path parts (`echo x > /System/*/*/*/*/x`), or unquoted zsh glob syntax in a write, delete, `ln` or `cd` operand (`h(m\|x)`, `(hm)`, `^`, `**/`, a `#` after a glob character, a numeric range `<1-10>` or `<->` (#389), a `~` past the start, a `~NAME` the hook cannot spell out (below); a quoted `'out/a (1).txt'`, a lone `#` as in `out/b#1` and `out/**`, which both shells read as `out/*`, are plain words): refused unexpanded, as is what is left once the hook has spent 3 seconds expanding | ask | deny |
 | `pkill`, `killall`, `xargs kill`, `kill` fed by `pgrep`/`pidof`/`lsof`/`ps`, `kill -1` | deny | deny |
 | quitting, killing or opening Simulator.app; `simctl shutdown/erase/delete all` | deny | deny |
 | `adb kill-server`; `adb emu kill` without `-s` | deny | deny |
 | `gradle --stop`, `./gradlew --stop` (every compatible daemon on the host) | allow | deny |
-| `>`, `>>`, `tee`, `cp`, `mv`, `sed -i`, `perl -i`, `dd of=` writing outside the worktree, temp dirs and the state dir | allow | deny |
+| `>`, `>>`, `tee`, `cp`, `mv`, `sed -i`, `perl -i`, `dd of=` writing outside the worktree, temp dirs and the state dir (the `-t` directory of `cp`/`mv`/`install` also as `-tDIR` or in a cluster, `-ft DIR`; options with a value, `-S` and `install -m/-o/-g`, skipped wherever they stand; `rsync -t` keeps times, #389) | allow | deny |
 | a destructive command that is backgrounded (`&`) or silenced (`>/dev/null`) | ask | ask |
 | a silenced stop of one named device: `adb -s SERIAL emu kill`, `simctl shutdown UDID` (not `all`, not `booted`); it loses nothing, and silence hides only "already stopped" or "no such device" | allow | allow |
 | `kill -0 PID` (also `-s 0`, `-n 0`) and `kill -l`: a liveness probe or a signal list, it signals nothing, silenced or not, whatever feeds it | allow | allow |
@@ -95,7 +97,15 @@ subagent's call, ask otherwise). And `hooks/hooks.json` sets `"onFailure": "bloc
 (Claude Code v2.1.295 or later), so a hook that fails or times out blocks the call instead of
 letting it through. Brace expansion is done by the hook itself, by bash's rule, without running anything. A
 glob or brace in a `cd` target counts when it makes exactly one directory; otherwise the working
-directory is unknown for the rest of the command. `ln -tDIR` and `ln -sfTtDIR` read DIR as `-t DIR`. After `popd`, a `pushd` other than `pushd DIR`,
+directory is unknown for the rest of the command. `ln -tDIR` and `ln -sfTtDIR` read DIR as `-t DIR`.
+`busybox` and `toybox` run their first argument as that tool, and the GNU tools by their
+`g`-prefixed names (Homebrew's `grm`, `gcp`, `gln`, `gfind`, ...) are judged as the tool they name
+(#389). `~NAME` is that user's home, as both shells spell it, when the hook can be sure (#389): zsh
+reads `~NAME` first as a named directory, which any parameter holding an absolute path also is
+(`root=/tmp; echo ~root` prints `/tmp`), so a name that appears anywhere else in the command or in
+the environment, a `hash -d`, a directory-stack number (`~1`) or an unknown user is refused as zsh
+glob syntax. A named directory the user's own startup files define is not visible to the hook. A
+quoted `~` is a plain character. After `popd`, a `pushd` other than `pushd DIR`,
 `cd -`, `cd ±N`, or a `cd` given both `-L` and `-P`, the working directory is unknown for the
 rest of the command: relative write and delete operands are denied, so use absolute paths, or
 `cd` to an absolute path first.

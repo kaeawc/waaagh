@@ -159,7 +159,8 @@ unregister_lane() { rm -f "$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"; }
     expect deny "cat l | $p kill -9" "$MAIN" "xargs kill"
   done
   expect allow 'cat l | xargs -n 1 echo' "$MAIN"
-  expect allow 'cat l | xargs -I {} rm {}' "$MAIN"
+  # Without -r: the operands come from the input, which the hook cannot see (#389).
+  expect ask   'cat l | xargs -I {} rm {}' "$MAIN" "xargs rm"
   done_
 }
 
@@ -547,5 +548,99 @@ unregister_lane() { rm -f "$ORCHESTRATE_STATE_DIR/o__r/lanes.tsv"; }
   expect deny  "mv -t $HOME src/x" "$LANE" "writes outside"
   expect allow 'cp -t out ../src/x' "$LANE"
   expect allow 'cp --target-directory=out ../src/x' "$LANE"
+  done_
+}
+
+@test "deletes through xargs and find -exec, and links through gln, busybox and cp -s/-l are judged (#389)" {
+  mkdir -p "$LANE/out" "$LANE/build" "$MAIN/src"
+  printf 'x\n' >"$MAIN/README"
+  printf 'x\n' >"$HOME/.bashrc"
+  # xargs rm / unlink without -r: what they delete is read from the input, so it is unknown.
+  for c in 'echo ~/.bashrc | xargs rm' 'xargs rm -f <list' 'xargs -0 unlink <list' 'find . -print0 | xargs -0 rm --' \
+    'xargs -I {} rm {} <list' 'gxargs rm <list' 'xargs grm <list'; do
+    expect deny "$c" "$LANE" "xargs"
+  done
+  expect ask 'echo ~/.bashrc | xargs rm' "$MAIN" "xargs rm"
+  expect ask 'xargs unlink <list' "$MAIN" "xargs unlink"
+  # Literal operands beside them are judged as rm judges them.
+  expect deny "xargs rm -f $HOME/.ssh <list" "$MAIN" "protected path $HOME/.ssh"
+  # find -exec/-execdir/-ok/-okdir rm or unlink is judged like -delete, from its start points, and
+  # any literal operand after rm too.
+  for c in 'find $HOME -name .bashrc -exec unlink {} \;' "find $HOME -name .bashrc -execdir rm {} +" \
+    "find $HOME -ok /bin/rm {} \;" "find $HOME -okdir unlink {} ';'" "find $HOME -exec /usr/bin/unlink {} \;"; do
+    expect deny "$c" "$MAIN" "protected path $HOME"
+  done
+  expect deny "find build -exec rm -f {} $MAIN/README \;" "$LANE" "outside the lane worktree"
+  expect deny "find $MAIN/src -exec unlink {} +" "$LANE" "outside the lane worktree"
+  expect allow 'find build -name "*.o" -exec unlink {} \;' "$LANE"
+  expect allow 'find build -exec rm -f {} +' "$LANE"
+  expect allow 'find build -exec grep -l x {} +' "$LANE"
+  # gln, busybox ln and toybox ln are ln; busybox and toybox are wrappers for every applet, and the
+  # GNU g-prefixed coreutils (Homebrew on macOS) are the tools they name.
+  for c in "gln -s $MAIN nl" "busybox ln -s $MAIN nl" "toybox ln -s $MAIN nl" "gln -sfT $MAIN/README rl"; do
+    expect deny "$c" "$LANE" "target of the link"
+  done
+  expect deny "busybox rm -rf $HOME/.ssh" "$MAIN" "protected path $HOME/.ssh"
+  for c in "grm -rf $MAIN/src" "gunlink $MAIN/README" "gcp /etc/hosts $MAIN/x" "gmv f $MAIN/x" \
+    "ginstall f $MAIN/x" "gtee $MAIN/x" "gtouch $MAIN/x" "gtruncate -s0 $MAIN/x" "gdd of=$MAIN/x" \
+    "gfind $MAIN/src -delete" "busybox cp /etc/hosts $MAIN/x"; do
+    expect deny "$c" "$LANE" "outside the lane worktree"
+  done
+  expect allow 'gln -s out nl' "$LANE"
+  expect allow 'busybox ln -s out nl' "$LANE"
+  # cp -s and cp -l make links: each source is judged as a link target.
+  for c in "cp -s $MAIN/README rl && echo x > rl" "cp -l $MAIN/README hl" "cp --symbolic-link $MAIN/README rl" \
+    "cp --link $MAIN/README hl" "cp -rs $MAIN/src mirror" "cp -fs $MAIN/README rl" "cp -al $MAIN/src copy" \
+    "cp -s -t out $MAIN/README" "cp -sT $MAIN/src mirror"; do
+    expect deny "$c" "$LANE" "target of the link"
+  done
+  expect allow "cp -s $LANE/out/a rl" "$LANE"
+  expect allow 'cp -l out/a hl' "$LANE"
+  expect allow "cp -r $MAIN/src copy" "$LANE"
+  done_
+}
+
+@test "cp/mv/install -tDIR and value options, rsync -t, zsh <x-y> ranges and ~user are judged as the shell runs them (#389)" {
+  mkdir -p "$LANE/out"
+  local rh
+  rh=$(bash -c 'echo ~root')
+  # -tDIR (attached), -t inside a cluster, and value options before or after the operands.
+  for c in "cp -t$MAIN f" "mv -t$MAIN f" "install -t$MAIN f" "cp -ft $MAIN f" "cp -vt$MAIN f" "mv -ft$MAIN f" \
+    "cp f $MAIN/x -S .bak" "cp -S .bak f $MAIN/x" "mv --suffix .bak f $MAIN/x" "install -m 644 f $MAIN/x" \
+    "install -m644 -o root f $MAIN/x" "install f $MAIN/x -g wheel" "install -Dm644 f $MAIN/x" \
+    "rsync -t out/a $MAIN/README" "rsync -avt out/ $MAIN/x"; do
+    expect deny "$c" "$LANE" "outside the lane worktree"
+  done
+  for c in 'cp -tout f' 'cp -ft out f' 'cp f out/x -S .bak' 'install -m 644 f out/x' 'rsync -t f out/x'; do
+    expect allow "$c" "$LANE"
+  done
+  # zsh numeric ranges are globs, not redirections; bash rejects them. Refused as zsh glob syntax in a
+  # write, delete, ln or cd operand; plain words when quoted; reading them is no write.
+  for c in 'echo x > <1-10>' 'echo x > out/<->' 'rm -rf <1->' 'rm -f out/f<2-9>' 'ln -s <1-3> l' 'touch d<-5>/x'; do
+    expect deny "$c" "$LANE" "zsh glob syntax"
+  done
+  expect deny 'cd <1-3> && rm -rf x' "$LANE" "unknown after"
+  expect ask  'rm -rf <1-10>' "$MAIN" "zsh glob syntax"
+  expect allow 'cat <1-10>' "$LANE"
+  expect allow "echo x > 'out/<1-10>'" "$LANE"
+  expect allow 'echo x > out/a<b' "$LANE"
+  expect allow 'cat <out/f' "$LANE"
+  # ~user is that user's home, as both shells spell it: judged there, not refused or read as a
+  # relative path.
+  expect deny  'rm -rf ~root/x' "$LANE" "outside the lane worktree"
+  expect deny  'echo x > ~root/.profile' "$LANE" "writes outside"
+  expect deny  'D=~root/x; rm -rf "$D"' "$LANE" "outside the lane worktree"
+  expect allow 'rm -rf ~root/x' "$MAIN"
+  WAAAGH_PROTECTED_PATHS=$rh expect deny 'rm -rf ~root' "$MAIN" "protected path $rh"
+  WAAAGH_PROTECTED_PATHS=$rh expect deny 'D=~root/.cache; rm -rf "$D"' "$MAIN" "protected path $rh"
+  # zsh reads ~NAME as a parameter's value when one is set (`root=/tmp; echo ~root` is /tmp): a name
+  # the command sets or the environment holds, a hash -d, an unknown user and a quoted ~ stay refused.
+  for c in 'root=/; rm -rf ~root/x' 'for root in /; do rm -rf ~root; done' 'hash -d w=/; rm -rf ~w' \
+    'rm -rf ~nosuchuserzz/x' 'rm -rf ~1/x'; do
+    expect ask "$c" "$MAIN" "zsh glob syntax"
+  done
+  root=/ expect ask 'rm -rf ~root/x' "$MAIN" "zsh glob syntax"
+  expect allow "echo x > '~root'/f" "$LANE"
+  expect allow "rm -rf './~root'" "$LANE"
   done_
 }
