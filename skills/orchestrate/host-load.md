@@ -35,7 +35,7 @@ HOLD or BACKOFF turns the `dispatch=<n>` reason into `host-hold`.
 |---|---|---|
 | `indexing` | `fseventsd` or Spotlight (`mds`, `mds_stores`, `mdworker`) leads, usually churning on many worktrees full of `node_modules` and build output | Shrink the worktree set first (`wt-cleanup.sh --apply`). Then raise an owner blocker: exclude the worktree root from Spotlight (System Settings > Spotlight > Search Privacy). `fseventsd` keeps its memory until a restart, so if its RSS stays high, ask the owner to plan a reboot. Waiting does not fix it. |
 | `lanes` | Processes whose working directory is in a lane worktree lead | Hold; check gates go through `gate-slot.sh` and that finished lanes stopped the PIDs they started. The worktree column names the lane. |
-| `ci-runner` | A self-hosted CI runner on this host leads (spectra's cause once kaeawc/spectra#603 lands; until then it shows as `other` naming the runner's `_work` directory) | Lower the lane cap while it runs; do not look for a runaway lane. |
+| `ci-runner` | A self-hosted CI runner on this host leads (spectra names it since v0.1.0, kaeawc/spectra#603) | Lower the lane cap while it runs; do not look for a runaway lane. |
 | `other` | Something outside the lanes leads (a backup, a browser, an IDE) | Tell the owner what it is. Do not stop it. |
 | `idle` | Nothing leads the CPU table | The load is falling or was brief: read it again before holding. |
 
