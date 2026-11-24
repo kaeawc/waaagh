@@ -11,7 +11,7 @@ setup() {
   ROOT="$(cd "$SCRIPTS/../../.." && pwd)"
   T=$BATS_TEST_TMPDIR
   export HOME="$T/home" WAAAGH_LANE_TEMP="$T/scratch" ORCHESTRATE_STATE_DIR="$T/state"
-  unset ANDROID_HOME ANDROID_SDK_ROOT WAAAGH_LANE_ROOT WAAAGH_LANE_ALLOW WAAAGH_PROTECTED_PATHS \
+  unset CDPATH ANDROID_HOME ANDROID_SDK_ROOT WAAAGH_LANE_ROOT WAAAGH_LANE_ALLOW WAAAGH_PROTECTED_PATHS \
     WAAAGH_LANE_SAFETY WAAAGH_LANE_FORBID ANDROID_SERIAL TMPDIR
   mkdir -p "$HOME" "$T/scratch" "$T/state" "$T/main"
   git -C "$T/main" init -q
@@ -199,8 +199,11 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   ln -s "$T/scratch/a/b/c/d" "$NEST/esc"
   ln -s "$MAIN/sub" "$NEST/sl"
   # Each leaves the shell back in the lane, where ../../../ is the checkout.
-  for c in "pushd d1/d2/d3 && popd && rm -rf ../../../src" "pushd d1/d2/d3; popd; echo x > ../../../README" \
-    "pushd d1/d2/d3 && pushd && rm -rf ../../../src" "pushd d1/d2/d3 && pushd +1 && rm -rf ../../../src" \
+  # popd returns to the directory pushd left (#385), the lane, so these are judged from there.
+  for c in "pushd d1/d2/d3 && popd && rm -rf ../../../src" "pushd d1/d2/d3; popd; echo x > ../../../README"; do
+    expect deny Bash "$c" "$NEST" agent-3 "orchestrator's checkout"
+  done
+  for c in "pushd d1/d2/d3 && pushd && rm -rf ../../../src" "pushd d1/d2/d3 && pushd +1 && rm -rf ../../../src" \
     "pushd d1/d2/d3 && pushd -n d1 && rm -rf ../../../src" "cd d1 && cd - && rm -rf ../../../src" \
     "popd && cd d1 && rm -rf x" "popd && find . -delete" "popd && git -C . commit -m x"; do
     expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
@@ -223,6 +226,55 @@ done_() { [ -z "$FAILS" ] || { echo "$FAILS"; return 1; }; }
   for c in "pushd src && rm -rf build && popd" "pushd d1 && popd && rm -rf $NEST/src/build" \
     "pushd d1 && popd && cd $NEST && rm -rf src/build" "popd && echo x > $NEST/f" \
     "cd d1 && rm -rf d2/x && echo x > f" "pushd d1/d2/d3 && rm -rf x"; do
+    expect allow Bash "$c" "$NEST" agent-3
+  done
+  done_
+}
+
+@test "the hook follows a cd only where the shell is sure to run it in this shell (#385)" {
+  forbid "$MAIN"
+  mkdir -p "$MAIN/src" "$NEST/d1/d2/d3" "$NEST/l1" "$NEST/src/build"
+  # Each payload of #385 and its variants: the shell stays in (or returns to) the lane, where
+  # ../../../ is the checkout, while a hook that trusted the cd would judge from d1/d2/d3.
+  # A subshell's cd is undone at its `)`, so the deletion is judged from the lane (#385).
+  for c in "( cd d1/d2/d3 ); rm -rf ../../../src" "(cd d1/d2/d3) && rm -rf ../../../src" \
+    "( cd d1 && cd d2/d3 ) ; echo x > ../../../README" "echo \$(rm -rf ../../../src); cd d1/d2/d3"; do
+    expect deny Bash "$c" "$NEST" agent-3 "orchestrator's checkout"
+  done
+  for c in "cd l1 .. && rm -rf ../src" "cd nonexist/a/b || rm -rf ../../../src" \
+    "cd nonexist/a/b; rm -rf ../../../src" "cd nonexist/a/b && true; rm -rf ../../../src" \
+    "cd nonexist/a/b && true || rm -rf ../../../src" "cd nonexist/a/b && (true) || rm -rf ../../../src" \
+    "rm -rf d1/x; cd d1/d2/d3; rm -rf ../../../src" "./build.sh; cd d1/d2/d3; rm -rf ../../../src" \
+    "if false; then cd d1/d2/d3; fi; rm -rf ../../../src" "for x in 1; do cd d1/d2/d3; done; echo x > ../../../README" \
+    "case x in y) cd d1/d2/d3;; esac; rm -rf ../../../src" "f() { cd d1/d2/d3; }; f; rm -rf ../../../src" \
+    "cd d1/d2/d3 | cat; rm -rf ../../../src" "echo | cd d1/d2/d3; rm -rf ../../../src" \
+    "cd d1/d2/d3 & rm -rf ../../../src" "cd d1/d2/d3 && true & rm -rf ../../../src" \
+    "eval cd d1/d2/d3; rm -rf ../../../src" "eval 'cd ../../..'; rm -rf src" \
+    "touch nf; mkdir -p nf/a/b; cd nf/a/b; rm -rf ../../../src" "mkdir n1/n2; cd n1/n2; rm -rf ../../../src" \
+    "pushd d1 && cd d2 && popd && rm -rf ../../../src" "cd d1/d2/d3 && pushd -n d1 && popd && rm -rf x"; do
+    expect deny Bash "$c" "$NEST" agent-3 "the working directory is unknown after"
+  done
+  # CDPATH (from the environment or the command) can send a relative cd elsewhere: bash looks there
+  # before the current directory. A ./ or ../ or absolute target is not searched.
+  for c in "CDPATH=$MAIN cd src && rm -rf build" "export CDPATH=$MAIN; cd src && rm -rf build" \
+    "cdpath=($MAIN); cd src && rm -rf build"; do
+    expect deny Bash "$c" "$NEST" agent-3 "CDPATH"
+  done
+  export CDPATH=$MAIN
+  expect deny Bash "cd src && rm -rf build" "$NEST" agent-3 "CDPATH"
+  expect allow Bash "cd ./src && rm -rf build" "$NEST" agent-3
+  expect allow Bash "cd $NEST/src && rm -rf build" "$NEST" agent-3
+  unset CDPATH
+  # The friction #383 added and #385's review asked to lift: a subshell's pushd/popd or cd -, and
+  # the directory stack within one command.
+  for c in "(pushd d1 && popd) && rm -rf src/build" "(cd d1 && cd -) && rm -rf src/build" \
+    "pushd d1 && ./build.sh; popd; echo ok > out.txt" "pushd d1 && popd && rm -rf src/build" \
+    "pushd d1 && pushd d2 && popd && popd && rm -rf src/build" "pushd nonexist && ./b.sh; popd; rm -rf src/build" \
+    "cd nonexist || exit 1; rm -rf x" "cd d1/d2/d3 || return; echo x > f" "cd d1/d2/d3; rm -rf x" \
+    "cd d1/d2/d3 && ./build.sh || rm -rf x" "if [ -d d1 ]; then cd d1 && rm -rf x; fi" \
+    "cd d1 && cd d2 && cd d3 && rm -rf x" "( cd d1/d2/d3 && rm -rf x ); rm -rf src/build" \
+    "cd src && echo \$(rm -rf build) && rm -rf x" "mkdir -p out/a; cd out/a; echo x > f" \
+    "mkdir -p $NEST/scratch; cd $NEST/scratch; echo x > f" "mkdir new; cd new; rm -rf x" "mkdir -pm 755 o2/b; cd o2; rm -rf x"; do
     expect allow Bash "$c" "$NEST" agent-3
   done
   done_

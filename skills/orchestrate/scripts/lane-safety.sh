@@ -44,6 +44,10 @@
 #   literal numbers above 1; a silenced stop of one named device (`adb -s SERIAL emu kill`,
 #   `simctl shutdown UDID`), which loses nothing. Never a kill: signal 0 (kill -0, -s 0, -n 0)
 #   and kill -l. A literal-PID kill is not "fed by a search", and ps -p/-q PID is a check, not one.
+# The cwd is followed only where the shell is sure to move (#385): a subshell's cd ends at its `)`,
+#   pushd/popd are tracked as a stack, and after a cd that may fail or not run (past `||`, at the
+#   end of its list), in a pipeline, a backgrounded list or eval, zsh's `cd OLD NEW`, or a relative
+#   cd with CDPATH set, the cwd is unknown: relative writes and deletes are denied (see analyze).
 # A resolved `cd` into another linked worktree of the same repository makes that worktree
 #   writable too: a lane subagent starts in the orchestrator's working directory and reaches its
 #   own worktree by cd.
@@ -438,9 +442,9 @@ glob_list() {
 }
 # too_many LABEL: a glob matched more paths than the hook judges.
 too_many() { glob_refuse "$1" "glob matches too many paths (over $glob_max); name them"; }
-# cwd_lost: set (to the command, e.g. `popd`) once the hook cannot know the shell's directory for
-# the rest of the command line (popd, pushd other than `pushd DIR`, cd -, cd given both -L and -P);
-# a later `cd ABS` clears it. While set, a relative write, delete or git work tree is denied: the
+# cwd_lost: set (to the command, e.g. `popd`, and why: lose) once the hook cannot know the shell's
+# directory for the rest of the command line (popd past the pushes, pushd other than `pushd DIR`,
+# cd -, cd given both -L and -P, and the cases analyze lists, #385); a later `cd ABS` clears it. While set, a relative write, delete or git work tree is denied: the
 # hook cannot say where it lands.
 cwd_lost=""
 # lost_rel WORD: cwd_lost is set and WORD names a path relative to the cwd ($PWD counts; ~, $HOME
@@ -458,7 +462,9 @@ lost_rel() {
   case "$1" in *'$'* | *'`'* | /*) return 1 ;; esac
   return 0
 }
-lost_why() { printf '%s' "the working directory is unknown after \`$cwd_lost\`; use an absolute path"; }
+lost_why() { printf '%s' "the working directory is unknown after $cwd_lost; use an absolute path"; }
+# cdpath_word WORD: WORD is a cd target bash looks up in CDPATH (not /, ./, ../, . or ..).
+cdpath_word() { case "$1" in /* | ./* | ../* | . | .. | "") return 1 ;; esac; return 0; }
 # inside A B: A is B or below it.
 inside() { [[ "$1" == "$2" || "$2" == / || "$1" == "$2"/* ]]; }
 # phys ABS: ABS with its nearest existing directory resolved to its physical path (pwd -P), so a
@@ -1093,15 +1099,23 @@ check_git() {
 # One line per simple command: "<terminator>\036<tok>\037<tok>...\036<ids>". Operator tokens start
 # with \002. Command substitutions ($(...), `...`) leave "$(...)" in the word and are emitted as
 # their own commands after a "subid\036<id>\036" line; <ids> lists (comma-separated) the
-# substitutions in that command's words. A "paren\036\036" line marks a ( or ) (subshell, function,
-# array, case pattern). Heredoc bodies and comments are skipped; a quoted newline
+# substitutions in that command's words. A "paren\036(\036" or "paren\036)\036" line marks a ( or )
+# (subshell, function, array, case pattern); an "op\036<operator>\036" line, an operator that ends no
+# command (after a `)`). Heredoc bodies and comments are skipped; a quoted newline
 # stays in its word as \035, so one command is always one line.
 tokenize() {
   awk -v US="$US" -v OP="$OP" -v NL=$'\035' -v MK="$MK" -v RG="$RG" '
   # mk(c): c quoted or escaped, marked when the shell would expand it unquoted (MK above).
   function mk(c,   k) { k = index("{},()#^~*", c); return k ? substr(MK, k, 1) : c }
   function flush() { if (have) { toks = toks (ntok ? US : "") word; ntok++; last = word; word = ""; have = 0 } }
-  function emit(term) { flush(); if (ntok) print term "\036" toks "\036" cmdsubs; toks = ""; ntok = 0; cmdsubs = ""; last = "" }
+  # A list operator with no command before it (after a `)`) is still printed, as an "op" line, so
+  # the cwd tracking sees how a subshell joins the list (#385).
+  function emit(term) {
+    flush()
+    if (ntok) print term "\036" toks "\036" cmdsubs
+    else if (term ~ /^(&&|\|\||\||&|;|nl)$/) print "op\036" term "\036"
+    toks = ""; ntok = 0; cmdsubs = ""; last = ""
+  }
   function optok(o) { flush(); toks = toks (ntok ? US : "") OP o; ntok++; last = OP o }
   # read a $( ... ) or ` ... ` body starting at position i (just after the opener); returns end index
   function grab(s, i, closer,   depth, c, body, q) {
@@ -1162,7 +1176,7 @@ tokenize() {
           if (have && word !~ /^[A-Za-z_][A-Za-z0-9_]*\+?=$/) word = word "("
           else if (!have && substr(last, 1, 1) != OP && last !~ /^(in|time|!|if|then|else|elif|do|while|until|\{|function|coproc)$/) { word = "("; have = 1 }
         }
-        emit("sub"); print "paren\036\036"; continue
+        emit("sub"); print "paren\036" c "\036"; continue
       }
       if (c == "$" && n == "(") { i = grab(s, i + 2, ")"); word = word "$(...)"; have = 1; continue }
       if (c == "`") { i = grab(s, i + 1, "`"); word = word "$(...)"; have = 1; continue }
@@ -1204,7 +1218,22 @@ tokenize() {
 # analyze TEXT BASE [DEPTH]: every simple command in TEXT; a cd changes the base (cur) for the
 # commands after it. saw_kill/saw_pidsrc/cur/cmd_subs/quiet_kills are read and set by
 # analyze_simple (dynamic scope).
-destructive=no
+#
+# The cwd is followed only where the shell is sure to have moved (#385); anywhere else it is lost
+# (lose) and relative write and delete operands are denied:
+# - a subshell ( ... ) restores cur, the lost state and the directory stack at its `)`; a command
+#   substitution is judged from the cwd of the command holding it, not the cwd at the end;
+# - pushd DIR pushes, popd pops back to the directory it left (dstack: K:DIR, a sure pushd; M:DIR, a
+#   pushd that may have failed, which pops back to DIR only from the bottom, where a failed pushd
+#   leaves popd nothing to pop; A, unknown: a plain cd under zsh's AUTO_PUSHD pushes too);
+# - a cd that may fail (its target is no directory now and no earlier mkdir makes it, or an earlier
+#   command may have changed the tree: anything but cd, mkdir and read-only commands) or may not run (inside if/while/for/case, or
+#   once a function is defined) holds only for the commands it chains with &&: after a `||` (unless
+#   the next command is `exit` or `return`) or at the end of its list, the cwd is lost;
+# - a cd in a pipeline (zsh runs the last element in this shell, bash none), in a backgrounded list,
+#   or inside an eval loses the cwd; so does zsh's two-operand `cd OLD NEW`, and a relative cd when
+#   CDPATH is set (in the environment, or anywhere in the command): bash searches it first.
+destructive=no cd_count=0 cdpath=no
 analyze() {
   local text=$1 cur=$2 depth=${3:-0} line term rest toks
   # A bash -c or eval body starts where its caller stands: a lost cwd stays lost in it.
@@ -1220,6 +1249,13 @@ analyze() {
   # form of prev_term), so a literal assignment now runs unconditionally in this shell (see
   # subst_var). plain: set by analyze_simple for the command it judged.
   local straight=no plain=yes t
+  # The cwd tracking above (#385). calm, cd_moved, cd_unsure, cd_ctx: set for and by analyze_simple
+  # per command. ch_*: the current list's state (ch_cd, an unsure cd it assumed; ch_any, any cd in
+  # it; ch_or, a `||` followed one; ch_exit, the `|| exit` that makes it sure; ch_pipe, the last
+  # command was piped). sv_*: the state saved at each `(`.
+  local dstack=() cdepth=0 cd_ctx=0 func_seen=no fs_calm=yes calm=no cd_moved="" cd_unsure="" prev_paren=""
+  local ch_cd="" ch_any="" ch_or=no ch_exit=no ch_pipe=no
+  local sv_cur=() sv_lost=() sv_ch=() sv_n=() sv_stk=() sub_cur=() sub_lost=() id made=()
   ((depth < 4)) || return 0
   # A bash -c or eval body arrives with its quoted characters marked: the shell reads it afresh.
   unmark "$text"; text=$um
@@ -1232,18 +1268,61 @@ analyze() {
   while IFS= read -r line; do
     term=${line%%$'\036'*} rest=${line#*$'\036'}
     cmd_subs=${rest##*$'\036'} rest=${rest%$'\036'*}
-    if [[ "$term" == subid ]]; then cursub=$rest; continue; fi
-    if [[ "$term" == paren ]]; then ((cursub > 0)) || prefix_ok=no; continue; fi
+    if [[ "$term" == subid ]]; then
+      cursub=$rest
+      # A substitution runs where the command holding it stands, in a subshell of its own.
+      if [[ -n "${sub_cur[cursub]+x}" ]]; then cur=${sub_cur[cursub]} cwd_lost=${sub_lost[cursub]}; fi
+      dstack=() cdepth=0 fs_calm=no prev_paren="" ch_cd="" ch_any="" ch_or=no ch_exit=no ch_pipe=no
+      continue
+    fi
+    if [[ "$term" == paren ]]; then
+      ((cursub > 0)) || prefix_ok=no
+      if [[ "$rest" == "(" ]]; then scope_push; prev_paren="("
+      else
+        # `name()`: a function definition, whose body runs only when it is called.
+        [[ "$prev_paren" != "(" ]] || func_seen=yes
+        scope_pop; prev_paren=")"
+      fi
+      continue
+    fi
+    prev_paren=""
+    if [[ "$term" == op ]]; then
+      list_end "$rest" ""
+      ((cursub > 0)) || prev_term=$rest
+      continue
+    fi
     IFS=$US read -r -a toks <<<"$rest"
     ((${#toks[@]})) || continue
+    # After a `||` that follows an unsure cd, this runs only when something failed, perhaps the cd.
+    if [[ $ch_or == yes ]]; then
+      ch_or=no
+      if [[ "${toks[0]}" == exit || "${toks[0]}" == return ]] && ((${#toks[@]} <= 2)); then ch_exit=yes
+      else lose "$ch_cd" "it may not have run: chain it with && or use an absolute path"; ch_cd=""; fi
+    fi
+    # Compound commands: a cd in a body (after then, do, else, a case pattern) may not run.
+    cd_ctx=$cdepth
+    for t in "${toks[@]}"; do
+      case "$t" in
+        if | while | until) cdepth=$((cdepth + 1)) ;;
+        then | do | else | elif | '!' | '{' | '}') ;;
+        fi | done | 'esac') ((cdepth == 0)) || cdepth=$((cdepth - 1)) ;;
+        for | select | case) cdepth=$((cdepth + 1)); break ;;
+        *) break ;;
+      esac
+    done
+    for id in ${cmd_subs//,/ }; do sub_cur[id]=$cur sub_lost[id]=$cwd_lost; done
     if ((cursub > 0)); then subn[cursub]=$((${subn[cursub]:-0} + 1)); subtoks[cursub]=$rest; fi
     inert=no
     local is_cd=no
     if ((cursub == 0 && ${#toks[@]} == 2)) && [[ "${toks[0]}" == cd && "${toks[1]}" != -* && "$term" =~ ^(\;|nl|\&\&|end)$ ]] &&
       [[ "$prev_term" != "|" && "$prev_term" != "||" && ( "$prev_term" != "&&" || $prev_cd == yes ) ]] &&
       expand "${toks[1]}" "$cur" lex >/dev/null; then inert=yes is_cd=yes; fi
-    plain=yes
+    plain=yes calm=no cd_moved="" cd_unsure=""
     analyze_simple "$term" "$cur" "$depth" "${toks[@]}"
+    # A substitution in it runs (later in this loop) before the command: it may change the tree.
+    [[ $calm == yes && -z "$cmd_subs" ]] || fs_calm=no
+    [[ -z "$cd_unsure" ]] || { ch_cd=$cd_unsure; ch_exit=no; }
+    list_end "$term" "$cd_moved"
     ((cursub > 0)) || [[ $inert == yes ]] || prefix_ok=no
     if ((cursub == 0)); then
       [[ $plain == yes && "$term" =~ ^(\;|nl|end)$ ]] || straight=no
@@ -1254,6 +1333,60 @@ analyze() {
   if [[ $saw_kill == yes && $saw_pidsrc == yes ]]; then
     deny "kill fed by a process search (pgrep/pidof/lsof/ps): kill only PIDs you recorded at start"
   fi
+}
+# made_ok DIR: an earlier mkdir in this text makes DIR (it is DIR, or with -p below DIR), and can:
+# its parent (with -p, its nearest existing ancestor) is a writable directory (#385).
+made_ok() {
+  local m p d e
+  for m in ${made[@]+"${made[@]}"}; do
+    p=${m%%:*} d=${m#*:}
+    [[ "$1" == "$d" ]] || { [[ $p == p ]] && inside "$d" "$1"; } || continue
+    if [[ $p == p ]]; then
+      e=$d
+      while [[ ! -e "$e" && "$e" == /*/* ]]; do e=${e%/*}; done
+    else e=${d%/*} e=${e:-/}; fi
+    [[ -d "$e" && -w "$e" ]] && return 0
+  done
+  return 1
+}
+# lose LABEL [WHY]: the cwd is unknown from here on, after the command LABEL (lost_why).
+lose() { cwd_lost="\`$1\`${2:+ ($2)}"; }
+# list_end TERM MOVED: the list operator TERM after a command (MOVED: the cd, pushd or popd it was)
+# or a subshell, for analyze's cwd tracking (#385).
+list_end() {
+  [[ -z "$2" ]] || ch_any=$2
+  if [[ -n "$2" ]] && [[ $ch_pipe == yes || "$1" == "|" ]]; then lose "$2" "in a pipeline: zsh runs its last part in this shell, bash none"; fi
+  ch_pipe=no
+  case "$1" in
+    '&&' | sub) ;;
+    '||') [[ -z "$ch_cd" ]] || ch_or=yes ;;
+    '|') ch_pipe=yes ;;
+    *)
+      if [[ "$1" == "&" && -n "$ch_any" ]]; then lose "$ch_any" "in a backgrounded list"
+      elif [[ -n "$ch_cd" && $ch_exit == no ]]; then lose "$ch_cd" "it may not have run: chain it with && or use an absolute path"; fi
+      ch_cd="" ch_any="" ch_or=no ch_exit=no ;;
+  esac
+}
+# scope_push / scope_pop: a subshell's `(` saves the cwd state and the list state; its `)` restores
+# them. A `)` with no `(` (a case pattern) restores nothing.
+scope_push() {
+  sv_cur+=("$cur") sv_lost+=("$cwd_lost") sv_ch+=("$ch_cd$US$ch_any$US$ch_or$US$ch_exit$US$ch_pipe") sv_n+=("${#dstack[@]}")
+  sv_stk+=(${dstack[@]+"${dstack[@]}"})
+  ch_cd="" ch_any="" ch_or=no ch_exit=no ch_pipe=no
+}
+scope_pop() {
+  local k=$((${#sv_cur[@]} - 1)) n m f
+  ((k >= 0)) || return 0
+  cur=${sv_cur[k]} cwd_lost=${sv_lost[k]} n=${sv_n[k]}
+  IFS=$US read -r ch_cd ch_any ch_or ch_exit ch_pipe <<<"${sv_ch[k]}"
+  [[ -n "$ch_or" ]] || ch_or=no
+  [[ -n "$ch_exit" ]] || ch_exit=no
+  [[ -n "$ch_pipe" ]] || ch_pipe=no
+  dstack=()
+  m=$((${#sv_stk[@]} - n))
+  for ((f = m; f < ${#sv_stk[@]}; f++)); do dstack+=("${sv_stk[f]}"); done
+  for ((f = ${#sv_stk[@]} - 1; f >= m; f--)); do unset 'sv_stk[f]'; done
+  unset 'sv_cur[k]' 'sv_lost[k]' 'sv_ch[k]' 'sv_n[k]'
 }
 
 # quiet_kill BASE IDS: a `kill $(cat PIDFILE) 2>/dev/null` (substitution IDS, cwd BASE). Silence
@@ -1363,7 +1496,8 @@ analyze_simple() {
     esac
   done
   if ((i == ${#args[@]})); then
-    # Assignments only: record the literal ones (subst_var).
+    # Assignments only: record the literal ones (subst_var). They change no file (#385).
+    [[ $filered == yes ]] || calm=yes
     [[ $plain == yes ]] && record_vars "$term" "$depth" $nredir "${args[@]}"
     return 0
   fi
@@ -1381,7 +1515,7 @@ analyze_simple() {
       # takes the last and zsh takes -P, so the hook cannot know which; nor where `cd -`, `cd ±N`,
       # a bare `pushd` (swap), `pushd ±N`, `pushd -n`, a `~-`/`~N`/`~+N` target or one the hook cannot
       # expand leave the shell: each sets cwd_lost.
-      local sawp=no sawl=no lost=""
+      local sawp=no sawl=no lost="" why=""
       j=0
       while ((j < n)) && [[ "${a[j]}" == -[LPe@]* ]]; do
         [[ "${a[j]}" != *P* ]] || sawp=yes
@@ -1390,8 +1524,11 @@ analyze_simple() {
       done
       if ((j < n)) && [[ "${a[j]}" == -- ]]; then ((j += 1)); fi
       [[ $c == cd ]] || plain=no
+      calm=yes cd_moved="$c${a[*]:+ ${a[*]}}" cd_count=$((cd_count + 1))
       if [[ $sawp == yes && $sawl == yes ]]; then lost="$c ${a[*]:0:j}"
       elif ((j == n)); then [[ $c == cd ]] || lost=pushd
+      # zsh's `cd OLD NEW` replaces OLD by NEW in $PWD (#385); bash refuses two operands.
+      elif ((n - j > 1)); then lost="$c ${a[*]:j}" why="zsh replaces the first operand by the second in the directory's name"
       elif [[ "${a[j]}" == -* || "${a[j]}" =~ ^\+[0-9]+$ || "${a[j]}" =~ ^~[-+0-9] ]]; then lost="$c ${a[j]}"; fi
       # The target as the shell makes it (#387 review): a zsh glob is refused and loses the cwd; a
       # brace expansion or glob that makes one word is that word, any other count loses the cwd.
@@ -1405,33 +1542,79 @@ analyze_simple() {
         if [[ -z "$lost" ]] && subst_word "$tw" "$base" && globbed "$sw"; then
           if glob_expand "$sw" "$base" "$c $tw" && ((${#gw[@]} == 1)); then tw=${gw[0]}; else lost="$c $tw"; fi
         fi
+        # CDPATH may send a relative cd elsewhere: bash looks there before the cwd (#385).
+        if [[ -z "$lost" && $cdpath == yes ]] && subst_word "$tw" "$base" && cdpath_word "$sw"; then
+          lost="$c $tw" why="CDPATH may send it elsewhere; use ./$tw or an absolute path"
+        fi
       fi
+      local old=$cur old_lost=$cwd_lost
       if [[ -n "$lost" ]]; then
-        cwd_lost=$lost plain=no inert=no
+        lose "$lost" "$why"; plain=no inert=no
       elif ((j == n)); then cur=$home cwd_lost=""
       else
         # A relative target from a lost cwd stays lost; an absolute one the hook expands is known again.
         local known=yes
         if [[ $sawp == yes ]] && cur=$(expand "$tw" "$base"); then cur=$(phys "$cur")
         # A target the hook cannot expand ($OLDPWD, $(dirs …), `…`) may lead anywhere: lost.
-        else cur=$(expand "$tw" "$base" lex) || { cur=$base; plain=no; known=no; cwd_lost="$c ${a[j]}"; }; fi
+        else cur=$(expand "$tw" "$base" lex) || { cur=$base; plain=no; known=no; lose "$c ${a[j]}"; }; fi
         [[ $known == no ]] || lost_rel "$tw" || cwd_lost=""
       fi
-      if [[ -n "$cwd_lost" ]]; then plain=no inert=no
+      if [[ -n "$cwd_lost" ]]; then plain=no inert=no dstack=(A)
       else
         [[ -d "$cur" ]] || plain=no
         enter_worktree "$cur"
+        # It may fail (no such directory now, or an earlier command may have changed the tree) or
+        # may not run (a compound command's body, a function's): see analyze.
+        if { [[ ! -d "$cur" ]] && ! made_ok "$cur"; } || [[ $fs_calm == no || $cd_ctx -gt 0 || $func_seen == yes ]]; then
+          cd_unsure=$cd_moved
+        fi
+        if [[ $c == cd || -n "$old_lost" ]]; then dstack+=(A)
+        elif [[ -n "$cd_unsure" ]]; then dstack+=("M:$old")
+        else dstack+=("K:$old"); fi
       fi ;;
-    popd) cwd_lost=popd plain=no inert=no ;;
+    mkdir)
+      # It removes nothing, and a later cd may enter what it makes (`mkdir -p WT/scratch; cd
+      # WT/scratch`): each directory is recorded for made_ok (#385).
+      [[ $filered == yes ]] || calm=yes
+      local mp=n mops=()
+      for ((j = 0; j < n; j++)); do
+        t=${a[j]}
+        case "$t" in
+          --parents) mp=p ;;
+          -m | --mode) ((j += 1)) ;;
+          --*) ;;
+          -?*) [[ "${t%%m*}" != *p* ]] || mp=p ;;
+          *) mops+=("$t") ;;
+        esac
+      done
+      for t in ${mops[@]+"${mops[@]}"}; do
+        ! lost_rel "$t" || continue
+        if t=$(expand "$t" "$base" lex); then made+=("$mp:$t"); fi
+      done ;;
+    popd)
+      # Back to the directory the matching pushd left (#385); past the pushes, or after a cd that
+      # zsh's AUTO_PUSHD may have pushed, the cwd is unknown.
+      plain=no inert=no calm=yes cd_moved="popd${a[*]:+ ${a[*]}}" cd_count=$((cd_count + 1))
+      local nd=${#dstack[@]} top="" pq=yes
+      for t in "${a[@]:-}"; do [[ -z "$t" || "$t" == -q ]] || pq=no; done
+      ((nd == 0)) || top=${dstack[nd - 1]}
+      if [[ $pq == yes ]] && [[ "$top" == K:* || ( "$top" == M:* && $nd == 1 ) ]]; then
+        cur=${top#?:} cwd_lost=""
+        unset 'dstack[nd - 1]'
+        [[ $cd_ctx == 0 && $func_seen == no ]] || cd_unsure=$cd_moved
+      else lose "$cd_moved"; dstack=(A); fi ;;
     export) ((i == 0)) && record_vars "$term" "$depth" $nredir "${a[@]:-}" ;;
     for | case | select | function | source | .)
       plain=no
+      [[ "$c" != function ]] || func_seen=yes
       [[ "$c" != source && "$c" != . ]] || { var_names=() var_vals=(); } ;;
     grep | egrep | fgrep | head | tail | cut | cat | echo | printf | ls | wc | tr | sleep | date | pwd)
       # Read-only with no file redirection, wrapper or substitution: it cannot write a pidfile or
       # move the cwd, so a quiet kill may follow it.
       if [[ $filered == no && $i == 0 && "${args[0]}" == "$c" && -z "$cmd_subs" && $cursub == 0 && $depth == 0 &&
-        "$term" =~ ^(\;|nl|\&\&|\|\||\||end)$ ]]; then inert=yes; fi ;;
+        "$term" =~ ^(\;|nl|\&\&|\|\||\||end)$ ]]; then inert=yes; fi
+      [[ $filered == yes ]] || calm=yes ;;
+    true | false | : | test | '[' | exit | return) [[ $filered == yes ]] || calm=yes ;;
     gradle | gradlew)
       # --stop stops every compatible daemon on the host, other lanes' running builds included (#318).
       if [[ -n "$lane" && " ${a[*]:-} " == *" --stop "* ]]; then
@@ -1588,7 +1771,11 @@ analyze_simple() {
       for ((j = 0; j < n; j++)); do
         if [[ "${a[j]}" == -*c* && "${a[j]}" != --* ]]; then analyze "${a[j+1]:-}" "$base" $((depth + 1)); break; fi
       done ;;
-    eval) analyze "${a[*]:-}" "$base" $((depth + 1)) ;;
+    eval)
+      # eval runs in this shell: a cd in it moves the cwd the rest of the command sees (#385).
+      local cds=$cd_count
+      analyze "${a[*]:-}" "$base" $((depth + 1))
+      ((cd_count == cds)) || { lose eval "a cd inside it"; cd_moved="eval"; } ;;
     tee)
       for t in "${a[@]:-}"; do [[ "$t" == -* ]] || check_write "$t" "$base" "tee"; done ;;
     touch | truncate)
@@ -1681,6 +1868,9 @@ mark_re=$'[\021-\032]'
 if [[ "$tool" == Bash && "$cmd" =~ $mark_re ]]; then
   deny "the command holds control characters (\\021-\\032) the check cannot judge; remove them"
 elif [[ "$tool" == Bash ]]; then
+  # CDPATH set in the environment, or set anywhere in the command (CDPATH=, export, zsh cdpath=( )).
+  [[ -z "${CDPATH:-}" ]] || cdpath=yes
+  case "$cmd" in *[Cc][Dd][Pp][Aa][Tt][Hh]*) cdpath=yes ;; esac
   analyze "$cmd" "$cwd"
 elif t=$(expand "$cmd" "$cwd") && f=$(forbidden "$t"); then
   deny "$tool $cmd: $(forbid_why "$t" "$f")"

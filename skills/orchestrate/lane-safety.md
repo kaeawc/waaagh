@@ -105,10 +105,24 @@ reads `~NAME` first as a named directory, which any parameter holding an absolut
 (`root=/tmp; echo ~root` prints `/tmp`), so a name that appears anywhere else in the command or in
 the environment, a `hash -d`, a directory-stack number (`~1`) or an unknown user is refused as zsh
 glob syntax. A named directory the user's own startup files define is not visible to the hook. A
-quoted `~` is a plain character. After `popd`, a `pushd` other than `pushd DIR`,
+quoted `~` is a plain character. After a `pushd` other than `pushd DIR`,
 `cd -`, `cd ±N`, or a `cd` given both `-L` and `-P`, the working directory is unknown for the
 rest of the command: relative write and delete operands are denied, so use absolute paths, or
 `cd` to an absolute path first.
+The hook follows a `cd` only where the shell is sure to make it (#385). A subshell's `cd` ends at
+its `)`, and a command substitution is judged from the directory of the command holding it.
+`pushd DIR` pushes and `popd` returns to the directory it left (`pushd d1 && ./build.sh; popd;
+echo ok > out.txt` is fine); a `popd` with nothing pushed, or after a plain `cd` (zsh's
+`AUTO_PUSHD` pushes one), loses the directory. A `cd` that may fail (its target does not exist
+yet and no earlier `mkdir` in the line makes it, or an earlier command in the line may have
+changed the tree: anything but `cd`, `mkdir` and read-only commands) or may not run (inside `if`/`while`/`for`/`case`, or once the command defines
+a function) holds only for the commands chained after it with `&&`: after a `||` (except
+`cd DIR || exit`) or at the end of its list, the directory is unknown. So is it after a `cd` in a
+pipeline (zsh runs the last part in the current shell, bash none), in a backgrounded list or in an
+`eval`, after zsh's two-operand `cd OLD NEW`, and after a relative `cd` while `CDPATH` is set (in
+the hook's environment or anywhere in the command; bash searches it before the current directory;
+`./DIR` is not searched). Chain with `&&`, or use absolute paths. A `CDPATH` or `cdpath` set only
+in the user's shell startup files is not visible to the hook.
 A resolved `cd` into another linked worktree of the same repository makes that worktree writable
 for the rest of the command: a lane subagent starts in the orchestrator's working directory (a
 linked worktree itself in the desktop app) and reaches its own worktree by `cd`, so each command
