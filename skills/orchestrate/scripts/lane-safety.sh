@@ -15,7 +15,9 @@
 #   that resolve outside the lane root, temp dirs, the state dir and $WAAAGH_LANE_ALLOW (temp dirs:
 #   $WAAAGH_LANE_TEMP, default /tmp:/private/tmp:/var/folders:$TMPDIR; lists are colon-separated),
 #   or whose real target through a symlink does (anything under /dev aside); rm without -r and
-#   unlink of an entry out of those bounds; ln whose link or target (a symlink's relative target
+#   unlink of an entry out of those bounds, and xargs rm/unlink, whose paths come from its input (#389;
+#   asked outside a lane); find -exec/-execdir/-ok/-okdir rm|unlink as find -delete; ln (also gln,
+#   busybox/toybox ln, cp -s/-l, #389) whose link or target (a symlink's relative target
 #   from the link's directory) is out of them (#384). A glob in any path part is expanded and every
 #   match judged; over 100 matches in one command is too many to judge (#384). A brace expansion
 #   ({a,b}, {1..3}) is judged word by word, a glob in a cd target by its one match; a glob with
@@ -101,13 +103,15 @@ US=$'\037' OP=$'\002'
 # only the characters the shell would expand. unmark S sets um to S spelled back; a path is unmarked
 # before it is resolved (subst_word), a bash -c or eval body before it is tokenized again (analyze),
 # and the decision's reason before it is printed.
-MK=$'\021\022\023\024\025\026\027\030\031' MKB=$'\021\022\023'
+# RG is the reverse: an unquoted zsh numeric range's `<` (`<1-10>`, `<->`), which the tokenizer keeps
+# in its word instead of reading a redirection, so zsh_glob refuses it (#389).
+MK=$'\021\022\023\024\025\026\027\030\031' MKB=$'\021\022\023' RG=$'\032'
 um=""
 unmark() {
-  local s=$1 c='{' d='}' e=',' f='(' g=')' h='#' i='^' j='~' k='*'
-  case "$s" in *[$MK]*) ;; *) um=$s; return 0 ;; esac
+  local s=$1 c='{' d='}' e=',' f='(' g=')' h='#' i='^' j='~' k='*' l='<'
+  case "$s" in *[$MK$RG]*) ;; *) um=$s; return 0 ;; esac
   s=${s//$'\021'/$c} s=${s//$'\022'/$d} s=${s//$'\023'/$e} s=${s//$'\024'/$f} s=${s//$'\025'/$g}
-  s=${s//$'\026'/$h} s=${s//$'\027'/$i} s=${s//$'\030'/$j} s=${s//$'\031'/$k}
+  s=${s//$'\026'/$h} s=${s//$'\027'/$i} s=${s//$'\030'/$j} s=${s//$'\031'/$k} s=${s//$'\032'/$l}
   um=$s
 }
 
@@ -162,15 +166,22 @@ expand() {
   [[ "$w" == /* ]] || w="$2/$w"
   if [[ "$mode" == lex ]]; then norm "$w"; else resolve "$w"; fi
 }
-# subst_word WORD BASE: sets sw to WORD with ~, $HOME, $PWD (BASE) and $TMPDIR spelled out, still
-# relative when WORD is; returns 1 when another variable or a command substitution remains.
+# subst_word WORD BASE: sets sw to WORD with ~, ~user (user_home), $HOME, $PWD (BASE) and $TMPDIR
+# spelled out, still relative when WORD is; returns 1 when another variable, a command substitution
+# or a ~NAME the hook cannot spell out remains.
 sw=""
 subst_word() {
-  local w base=$2
+  local w base=$2 n
   unmark "$1"; w=$um
-  case "$w" in
+  # Only an unquoted leading ~ expands: a quoted one ($1 holds its mark) is a plain character (#389).
+  case "$1" in
     "~") w=$home ;;
     \~/*) w="$home/${w#\~/}" ;;
+    \~?*) n=${1#\~} n=${n%%/*}; user_home "$n" || return 1; w="$uh${w#\~"$n"}" ;;
+    # Spelled ./~… so that judging the result again (expand) cannot expand it either.
+    $'\030'*) w="./$w" ;;
+  esac
+  case "$w" in
     '$HOME' | '${HOME}') w=$home ;;
     '$HOME/'*) w="$home/${w#\$HOME/}" ;;
     '${HOME}/'*) w="$home/${w#\$\{HOME\}/}" ;;
@@ -187,6 +198,25 @@ subst_word() {
   fi
   case "$w" in *'$'* | *'`'*) return 1 ;; esac
   sw=$w
+}
+# user_home NAME: sets uh to the home directory ~NAME names (#389), by bash's own tilde expansion of
+# the checked name (nothing else is evaluated). zsh reads ~NAME first as a named directory, which a
+# parameter holding an absolute path also is (`root=/tmp; echo ~root` is /tmp), so it returns 1 for
+# a name the hook cannot be sure of: no such user, a directory stack number (~1), a name that
+# appears anywhere else in the command (an assignment, read, for) or as an environment variable, or
+# a command using hash -d. A named directory the user's own startup files define is not visible.
+uh=""
+user_home() {
+  local n=$1 h t
+  [[ "$n" =~ ^[A-Za-z0-9._][A-Za-z0-9._-]*$ && ! "$n" =~ ^[0-9]+$ ]] || return 1
+  case "$cmd" in *hash*-d*) return 1 ;; esac
+  t=${cmd//"~$n"/}
+  t=${t//[!A-Za-z0-9._-]/ }
+  [[ " $t " != *" $n "* ]] || return 1
+  [[ -z "$(printenv -- "$n" 2>/dev/null)" ]] || return 1
+  eval "h=~$n"
+  [[ "$h" == /* ]] || return 1
+  uh=$h
 }
 # Globs (#384). The shell expands a glob before the command runs, so a glob in a middle path part
 # (`rm -rf <lane>/*/.ssh`, `echo x > <nest>/s*/../README`) reaches whatever it matches through, not
@@ -231,8 +261,8 @@ glob_expand() {
 # zsh_glob WORD [braces]: WORD (a write, delete, ln or cd operand) holds unquoted glob syntax bash
 # does not expand the way the user's zsh does (#387 review): a ( ) group (`h(m|x)`, `(hm)`,
 # qualifiers, extglob; the tokenizer keeps a `(` that continues an argument word), `^`, a recursive
-# `**/`, a `#` after a glob character (`*#`, extended_glob), or a `~` anywhere but a leading `~` or
-# `~/` (`*~*.c`, `~user`). Quoted characters are marked (MK), so they never count (`'out/a (1).txt'`).
+# `**/`, a `#` after a glob character (`*#`, extended_glob), a numeric range (`<1-10>`, `<->`, #389),
+# or a `~` anywhere but a leading `~`, `~/` or `~user` the hook can spell out (`*~*.c`, `~1`). Quoted characters are marked (MK), so they never count (`'out/a (1).txt'`).
 # A lone `#` is literal (extended_glob is off by default: `out/b#1`), and so is one in `${...}`
 # (`${HOME#/}`); `**` not before a `/` is `*` in both shells (`out/**` is judged as `out/*`); a
 # trailing `~` (a backup file, `rm -f *~`) is no glob. With braces, the `~` test waits for each
@@ -240,10 +270,14 @@ glob_expand() {
 zsh_glob() {
   local w=${1//'$(...)'/} r p
   while [[ "$w" == *'${'*'}'* ]]; do p=${w%%'${'*} r=${w#*'${'} r=${r#*\}} w=$p$r; done
-  case "$w" in *'('* | *')'* | *'^'* | *'**/'* | *[]*?]'#'*) return 0 ;; esac
+  case "$w" in *'('* | *')'* | *'^'* | *'**/'* | *[]*?]'#'* | *"$RG"*) return 0 ;; esac
   [[ "${2:-}" != braces ]] || return 1
   r=$w
-  case "$r" in "~" | \~/*) r=${r#\~} ;; esac
+  case "$r" in
+    "~" | \~/*) r=${r#\~} ;;
+    # ~user, when the hook can spell it out (user_home, #389).
+    \~[A-Za-z0-9._]*) p=${r#\~} p=${p%%/*}; ! user_home "$p" || r=${r#\~"$p"} ;;
+  esac
   [[ "$r" == *'~'?* ]]
 }
 # Brace expansion (#387 review). The shell expands `{a,b}` and `{x..y[..step]}` before globbing and
@@ -420,6 +454,7 @@ lost_rel() {
   case "$1" in
     "~" | \~/* | '$HOME' | '${HOME}' | '$HOME/'* | '${HOME}/'*) return 1 ;;
     '$PWD' | '${PWD}' | '$PWD/'* | '${PWD}/'*) return 0 ;;
+    \~[A-Za-z0-9._]*) local n=${1#\~}; n=${n%%/*}; ! user_home "$n" || return 1 ;;
   esac
   if [[ -n "${TMPDIR:-}" ]]; then
     case "$1" in '$TMPDIR' | '${TMPDIR}' | '$TMPDIR/'* | '${TMPDIR}/'*) return 1 ;; esac
@@ -1013,6 +1048,11 @@ check_ln() {
       "links outside the lane worktree $lane and temp dirs; a link created and used in one command is not checked when used"
   done
 }
+# xargs_refuse TOOL: `xargs rm` (without -r) or `xargs unlink` deletes the paths it reads from its
+# input, which the hook cannot see (#389): denied in a lane, asked elsewhere.
+xargs_refuse() {
+  glob_refuse "xargs $1" "it deletes the paths read from its input, which the hook cannot see; list them and $1 literal paths"
+}
 # check_git BASE ARG...: a mutating git command whose work tree (BASE, -C, --work-tree) lies under a
 # bound forbidden root. Read-only commands, fetch and worktree add stay allowed there.
 check_git() {
@@ -1064,7 +1104,7 @@ check_git() {
 # command (after a `)`). Heredoc bodies and comments are skipped; a quoted newline
 # stays in its word as \035, so one command is always one line.
 tokenize() {
-  awk -v US="$US" -v OP="$OP" -v NL=$'\035' -v MK="$MK" '
+  awk -v US="$US" -v OP="$OP" -v NL=$'\035' -v MK="$MK" -v RG="$RG" '
   # mk(c): c quoted or escaped, marked when the shell would expand it unquoted (MK above).
   function mk(c,   k) { k = index("{},()#^~*", c); return k ? substr(MK, k, 1) : c }
   function flush() { if (have) { toks = toks (ntok ? US : "") word; ntok++; last = word; word = ""; have = 0 } }
@@ -1140,6 +1180,8 @@ tokenize() {
       }
       if (c == "$" && n == "(") { i = grab(s, i + 2, ")"); word = word "$(...)"; have = 1; continue }
       if (c == "`") { i = grab(s, i + 1, "`"); word = word "$(...)"; have = 1; continue }
+      # zsh numeric range glob (`<1-10>`, `<->`): part of the word, not a redirection (#389).
+      if (c == "<" && match(substr(s, i), /^<[0-9]*-[0-9]*>/)) { word = word RG substr(s, i + 1, RLENGTH - 1); have = 1; i += RLENGTH - 1; continue }
       if (c == ">" || c == "<") {
         fd = ""; if (have && word ~ /^[0-9]+$/) { fd = word; word = ""; have = 0 }
         o = c
@@ -1425,6 +1467,8 @@ analyze_simple() {
     case "$t" in
       [A-Za-z_]*=*) [[ "${t%%=*}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || break; ((i += 1)) ;;
       command | builtin | exec | nohup | time | noglob | caffeinate) ((i += 1)) ;;
+      # A multi-call binary runs its first argument as that tool (`busybox ln`, `toybox rm`, #389).
+      busybox | toybox) ((i += 1)) ;;
       '{' | '}' | '!' | then | do | else | elif | if | while | until) plain=no; ((i += 1)) ;;
       sudo | doas)
         ((i += 1))
@@ -1458,6 +1502,8 @@ analyze_simple() {
     return 0
   fi
   local c=${args[i]##*/}
+  # The GNU tools by their g-prefixed names (Homebrew coreutils and findutils on macOS, #389).
+  case "$c" in grm | gunlink | gln | gcp | gmv | ginstall | gtee | gtouch | gtruncate | gdd | gfind) c=${c#g} ;; esac
   local a=("${args[@]:i+1}")
   local n=${#a[@]} low j
 
@@ -1642,11 +1688,13 @@ analyze_simple() {
         [[ $via_xargs == no ]] || deny "xargs rm -r deletes paths the hook cannot see; list and delete literal paths"
         for t in "${files[@]:-}"; do [[ -z "$t" ]] || check_delete "$t" "$base" "rm -r"; done
       else
+        [[ $via_xargs == no ]] || xargs_refuse rm
         # Without -r: one entry each, judged as a write is but by the entry rm removes (#384).
         for t in "${files[@]:-}"; do [[ -z "$t" ]] || check_delete "$t" "$base" "rm" no; done
       fi ;;
     unlink)
       destructive=yes
+      [[ $via_xargs == no ]] || xargs_refuse unlink
       for t in "${a[@]:-}"; do [[ -z "$t" || "$t" == -* ]] || check_delete "$t" "$base" "unlink" no; done ;;
     ln) check_ln "$base" "${a[@]:-}" ;;
     find)
@@ -1654,8 +1702,28 @@ analyze_simple() {
       for t in "${a[@]:-}"; do
         case "$t" in -delete) del=yes ;; esac
       done
+      # -exec, -execdir, -ok or -okdir running rm or unlink (#389) deletes what find matched below
+      # its start points, as -delete does; a literal operand beside {} is judged as rm judges it.
+      local xw xr k lits=()
       for ((j = 0; j < n; j++)); do
-        [[ "${a[j]}" == -exec || "${a[j]}" == -execdir ]] && [[ "${a[j+1]:-}" == rm || "${a[j+1]:-}" == */rm ]] && del=yes
+        case "${a[j]}" in -exec | -execdir | -ok | -okdir) ;; *) continue ;; esac
+        xw=${a[j+1]:-} xw=${xw##*/}
+        case "$xw" in rm | grm | unlink | gunlink) ;; *) continue ;; esac
+        del=yes xr=no
+        for ((k = j + 2; k < n; k++)); do
+          t=${a[k]}
+          case "$t" in
+            ';' | +) break ;;
+            '{}') ;;
+            --*) [[ "$t" != --recursive ]] || xr=yes ;;
+            -?*) [[ "$t" != *[rR]* || "$xw" == *unlink ]] || xr=yes ;;
+            *) lits+=("$t") ;;
+          esac
+        done
+        for t in ${lits[@]+"${lits[@]}"}; do
+          if [[ $xr == yes ]]; then check_delete "$t" "$base" "find -exec ${xw#g} -r"; else check_delete "$t" "$base" "find -exec ${xw#g}" no; fi
+        done
+        lits=()
       done
       if [[ $del == yes ]]; then
         destructive=yes
@@ -1713,18 +1781,53 @@ analyze_simple() {
     touch | truncate)
       for t in "${a[@]:-}"; do [[ "$t" == -* ]] || check_write "$t" "$base" "$c"; done ;;
     cp | mv | install | rsync)
-      local last="" tdir="" srcs=()
+      # The destination is the last operand, or the -t directory (cp, mv, install: `-t DIR`, `-tDIR`,
+      # inside a cluster as in `-ft DIR`, --target-directory); options that take a value (-S, and
+      # install's -m -o -g) are skipped wherever they stand (#389). rsync has no -t DIR (it keeps
+      # times). cp -s and cp -l make links instead of copies: judged as ln (#389).
+      local last="" tdir="" srcs=() lk="" notdir=no ends=no w o ch
       for ((j = 0; j < n; j++)); do
-        case "${a[j]}" in
-          -t) tdir=${a[j+1]:-}; ((j += 1)) ;;
-          --target-directory=*) tdir=${a[j]#*=} ;;
-          -*) ;;
-          *) [[ -z "$last" ]] || srcs+=("$last"); last=${a[j]} ;;
-        esac
+        w=${a[j]}
+        if [[ $ends == no && "$w" == -?* ]]; then
+          if [[ $c == rsync ]]; then [[ "$w" != -- ]] || ends=yes; continue; fi
+          case "$w" in
+            --) ends=yes ;;
+            --target-directory=*) tdir=${w#*=} ;;
+            --target-directory) tdir=${a[j+1]:-}; ((j += 1)) ;;
+            --no-target-directory) notdir=yes ;;
+            --symbolic-link) [[ $c != cp ]] || lk=sym ;;
+            --link) [[ $c != cp || $lk == sym ]] || lk=hard ;;
+            --suffix | --mode | --owner | --group) ((j += 1)) ;;
+            --*) ;;
+            *)
+              o=${w#-}
+              while [[ -n "$o" ]]; do
+                ch=${o:0:1} o=${o:1}
+                case "$c$ch" in
+                  *t) if [[ -n "$o" ]]; then tdir=$o; else tdir=${a[j+1]:-}; ((j += 1)); fi; o="" ;;
+                  *S | install[mog]) [[ -n "$o" ]] || ((j += 1)); o="" ;;
+                  *T) notdir=yes ;;
+                  cps) lk=sym ;;
+                  cpl) [[ $lk == sym ]] || lk=hard ;;
+                esac
+              done ;;
+          esac
+          continue
+        fi
+        [[ -z "$last" ]] || srcs+=("$last")
+        last=$w
       done
-      if [[ -n "$tdir" ]]; then [[ -z "$last" ]] || srcs+=("$last"); last=$tdir; fi
-      if [[ -n "$last" ]] && ! { [[ $c == cp ]] && local_props "$last" "$base" "${srcs[@]:-}"; }; then
-        check_write "$last" "$base" "$c"
+      if [[ -n "$lk" && -n "$last" ]]; then
+        local lna=()
+        [[ $lk != sym ]] || lna+=(-s)
+        [[ $notdir == no ]] || lna+=(-T)
+        [[ -z "$tdir" ]] || lna+=("--target-directory=$tdir")
+        check_ln "$base" ${lna[@]+"${lna[@]}"} -- ${srcs[@]+"${srcs[@]}"} "$last"
+      else
+        if [[ -n "$tdir" ]]; then [[ -z "$last" ]] || srcs+=("$last"); last=$tdir; fi
+        if [[ -n "$last" ]] && ! { [[ $c == cp ]] && local_props "$last" "$base" "${srcs[@]:-}"; }; then
+          check_write "$last" "$base" "$c"
+        fi
       fi ;;
     dd)
       for t in "${a[@]:-}"; do [[ "$t" != of=* ]] || check_write "${t#of=}" "$base" "dd"; done ;;
@@ -1758,12 +1861,12 @@ analyze_simple() {
 if [[ "${WAAAGH_LANE_SAFETY_TEST_STALL:-}" =~ ^[0-9]$ ]]; then
   while ((SECONDS < WAAAGH_LANE_SAFETY_TEST_STALL)); do :; done
 fi
-# The tokenizer marks quoted characters with the bytes \021-\031, so a command that already holds
+# The tokenizer marks quoted characters with the bytes \021-\031 (and a zsh range with \032), so a command that already holds
 # one could forge a mark (an unquoted `#` read as a comment hides the rest of the line). No real
 # command needs them: refuse it.
-mark_re=$'[\021-\031]'
+mark_re=$'[\021-\032]'
 if [[ "$tool" == Bash && "$cmd" =~ $mark_re ]]; then
-  deny "the command holds control characters (\\021-\\031) the check cannot judge; remove them"
+  deny "the command holds control characters (\\021-\\032) the check cannot judge; remove them"
 elif [[ "$tool" == Bash ]]; then
   # CDPATH set in the environment, or set anywhere in the command (CDPATH=, export, zsh cdpath=( )).
   [[ -z "${CDPATH:-}" ]] || cdpath=yes
