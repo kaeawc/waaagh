@@ -91,6 +91,46 @@ worktrees (12 GB) took the load from about 120 to 32 within minutes.
   collection: start no new worktree until it is back under, and report the budget row.
 - Over budget is not a reason to remove an unfinished tree. Finish or close its PR first.
 
+## Exclusive classes
+
+Some checks must never run at once on one host, even when gate slots are free. Database-backed
+suites, schema and migration checks, and code generators can share one local database, port or
+output directory. Two lanes running them together fail each other in ways that look like flaky
+tests. Such a check names an exclusive class (#396):
+
+```
+"$SCRIPTS/gate-slot.sh" --class db -- bun test:integration
+```
+
+- **What a class holds.** The command holds the class's one slot (`<slot dir>/class-db`) and a
+  normal gate slot. It keeps the gate slots' guarantees: a bounded `--wait` (then exit 75, naming
+  the holder's label and PID), reclaim of a holder that died or whose PID was reused, and nothing
+  killed. `--class` can be repeated. Names use lower-case letters, digits, `.`, `_` and `-`.
+- **Nothing is held while waiting.** Outside any slot, the classes and the gate slot are taken
+  together or not at all. A gate waiting for `db` holds no gate slot, so other lanes' gates still
+  run.
+- **Per repo**, `gate-env.sh` can map commands to classes by defining `gate_class`. It is called
+  with the gate's command words and prints zero or more class names:
+
+  ```bash
+  gate_class() {
+    case " $* " in
+      *" pytest "* | *"manage.py test"* | *" prisma migrate "*) echo db ;;
+    esac
+  }
+  ```
+
+  These add to any `--class` given. A failing `gate_class`, or a name it prints that is not
+  allowed, is a usage error (exit 2).
+- **Re-entrant.** A gate started inside a command that already holds the class runs in it. The
+  wrapper exports `ORCHESTRATE_CLASS_HELD` (`db=<pid>` words), and a marker counts only while that
+  PID still holds the slot. A nested gate that needs a class its ancestor does not hold takes it,
+  with the same bounded wait, while its ancestor keeps its gate slot. So name the class on the
+  outermost gate, which is also the command `gate_class` sees.
+- **Gradle and Xcode commands** take their classes first, then run through `heavy-build-slot.sh`
+  as usual, inside them.
+- The tick's `slot-stalled` line covers class slots too (`slot-stalled class-db pid=...`).
+
 ## Lane-private build output
 
 Lanes on one host must never share a build output directory. An iOS lane once failed with a

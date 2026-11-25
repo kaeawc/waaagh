@@ -536,7 +536,7 @@ fi
 # Stalled slots (#333): a held slot past the stall age whose holder and descendants are idle.
 stalled="" cand=() pids=""
 stall_min=${ORCHESTRATE_SLOT_STALL_MINUTES:-10}
-for d in "$(slot_root)"/{gate,heavy,boot}/slot-*; do
+for d in "$(slot_root)"/{gate,heavy,boot}/slot-* "$(slot_root)"/class-*/slot-1; do
   [[ -f "$d/holder" ]] && slot_live "$d" || continue
   [[ -n "$(find "$d/holder" -mmin "+$((stall_min - 1))" 2>/dev/null)" ]] || continue
   p=$(sed -n 1p "$d/holder") lbl=$(sed -n 3p "$d/holder")
