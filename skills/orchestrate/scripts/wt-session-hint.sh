@@ -57,14 +57,16 @@ if [[ "${1:-}" == --refresh ]]; then
     GIT_TERMINAL_PROMPT=0 git -C "$dir" fetch -q origin </dev/null >/dev/null 2>&1 || true
   fi
   # --pr-closed when the repository can be told (one gh read per otherwise-removable tree), else
-  # the local proofs only.
+  # the local proofs only. Through orch_run, so a test can stub wt-cleanup.sh (#233).
+  # shellcheck source=_lib.sh
+  source "$here/_lib.sh" || exit 0
+  # Exit codes are taken with && / ||, so an inherited errexit (SHELLOPTS) cannot end the refresh
+  # before its fallback.
   pr=yes
-  "$here/wt-cleanup.sh" --repo-dir "$dir" --pr-closed >"$tmp.rows" 2>/dev/null
-  rc=$?
+  orch_run wt-cleanup.sh --repo-dir "$dir" --pr-closed >"$tmp.rows" 2>/dev/null && rc=0 || rc=$?
   if ((rc == 2)); then
     pr=no
-    "$here/wt-cleanup.sh" --repo-dir "$dir" >"$tmp.rows" 2>/dev/null
-    rc=$?
+    orch_run wt-cleanup.sh --repo-dir "$dir" >"$tmp.rows" 2>/dev/null && rc=0 || rc=$?
   fi
   if ((rc == 0 || rc == 3)); then
     { printf '# wt-cleanup report at=%s pr-closed=%s repo-dir=%s\n' "$now" "$pr" "$dir"; cat "$tmp.rows"; } >"$tmp" && mv -f "$tmp" "$report"
