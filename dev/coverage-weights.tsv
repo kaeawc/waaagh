@@ -63,10 +63,12 @@ loops.bats	5
 main-health-auto-rerun.bats	8
 main-health-reruns.bats	4
 merge-holds.bats	11
-merge-queue-gaps.bats	14
+merge-queue-deps.bats	5
+merge-queue-exits.bats	7
+merge-queue-gaps.bats	7
 merge-queue-recovery.bats	12
 merge-queue-review.bats	13
-merge-queue.bats	12
+merge-queue.bats	7
 merge-selection.bats	6
 merge-sensitive-gaps.bats	7
 merge-sensitive.bats	10

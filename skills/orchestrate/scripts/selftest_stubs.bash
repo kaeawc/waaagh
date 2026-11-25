@@ -45,6 +45,12 @@ stub_gh_router() {
     cat <<'STUB'
 gh_stub_args "$@"
 echo "$a" >>"$FX/calls"
+# prs_of_query ARGS: the PR numbers of a batched threads query's `pN:` aliases, one per line, with
+# no grep or tr process per call (#112).
+prs_of_query() {
+  local q=$1 re=' p([0-9]+):'
+  while [[ "$q" =~ $re ]]; do echo "${BASH_REMATCH[1]}"; q=${q#*"${BASH_REMATCH[0]}"}; done
+}
 case "$a" in
   "api user") echo '{"login":"me"}' ;;
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
@@ -69,7 +75,7 @@ case "$a" in
           elif . == "more" then {reviewThreads: {pageInfo: {hasNextPage: true}, nodes: []}}
           elif type == "object" then {reviewThreads: {pageInfo: {hasNextPage: ((.pages | length) > 1), endCursor: "c1"}, nodes: .pages[0]}}
           else {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: .}} end)))}}' \
-        $(printf '%s\n' "$*" | grep -oE ' p[0-9]+:' | tr -dc '0-9\n')
+        $(prs_of_query "$*")
     fi ;;
   "pr merge"*) [ -f "$FX/merge-fails" ] && { echo "blocked"; exit 1; }
     # Like GitHub: refuse unless --match-head-commit names the current remote head exactly.

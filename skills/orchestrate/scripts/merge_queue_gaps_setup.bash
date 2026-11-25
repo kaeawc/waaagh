@@ -1,4 +1,4 @@
-# Setup and helpers shared by merge-queue-gaps.bats and merge-queue-review.bats
+# Setup and helpers shared by merge-queue-gaps.bats, merge-queue-exits.bats and merge-queue-review.bats
 # (split for a shorter parallel run, #112).
 # Loaded at file level by both; not a suite itself.
 

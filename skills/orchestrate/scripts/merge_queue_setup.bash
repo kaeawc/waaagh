@@ -1,4 +1,4 @@
-# Setup and helpers shared by merge-queue.bats and merge-queue-recovery.bats
+# Setup and helpers shared by merge-queue.bats, merge-queue-deps.bats and merge-queue-recovery.bats
 # (split for a shorter parallel run, #112).
 # Loaded at file level by both; not a suite itself.
 
