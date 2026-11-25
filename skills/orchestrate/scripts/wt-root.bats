@@ -20,7 +20,8 @@ busy() { printf '9\t%s\n' "$1" >>"$T/spectra-cwds"; }
 
 @test "path: the repository's root under WAAAGH_WORKTREE_HOME, from any of its worktrees; an override wins" {
   run wr path
-  [ "$status" -eq 0 ] && [ "$output" = "$R" ]
+  [ "$status" -eq 0 ]
+  [ "$output" = "$R" ]
   run wr path lane-7
   [ "$output" = "$R/lane-7" ]
   git -C "$M" worktree add -q -b l "$T/l"
@@ -31,7 +32,8 @@ busy() { printf '9\t%s\n' "$1" >>"$T/spectra-cwds"; }
   [ "$output" = "$T/h/worktrees.noindex/widget" ]
   # No HOME (a hook or cron environment): no root at all, never /worktrees.noindex.
   run env -u HOME bash -c 'cd "$1" && "$2/wt-root.sh" path' _ "$M" "$SCRIPTS"
-  [ "$status" -eq 2 ] && [[ "$output" == *"HOME is not set"* ]]
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"HOME is not set"* ]]
   HOME="" run wr path
   [ "$status" -eq 2 ]
   WAAAGH_WORKTREE_HOME="$T/w.noindex" run env -u HOME bash -c 'cd "$1" && "$2/wt-root.sh" path' _ "$M" "$SCRIPTS"
@@ -41,9 +43,11 @@ busy() { printf '9\t%s\n' "$1" >>"$T/spectra-cwds"; }
   run wr path a/b
   [ "$status" -eq 2 ]
   WAAAGH_WORKTREE_HOME="$T/w.noindex" run "$SCRIPTS/wt-root.sh" --repo-dir "$T" path
-  [ "$status" -eq 2 ] && [[ "$output" == *"not in a git checkout"* ]]
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not in a git checkout"* ]]
   run wr
-  [ "$status" -eq 2 ] && [[ "$output" == *usage:* ]]
+  [ "$status" -eq 2 ]
+  [[ "$output" == *usage:* ]]
   run wr path x --apply
   [ "$status" -eq 2 ]
 }
@@ -67,7 +71,8 @@ busy() { printf '9\t%s\n' "$1" >>"$T/spectra-cwds"; }
   run wr migrate --apply
   [ "$status" -eq 0 ]
   [ "$(row "$T/lanes/idle")" = $'moved\t-> '"$R"'/idle' ]
-  [ ! -e "$T/lanes/idle" ] && [ "$(git -C "$R/idle" branch --show-current)" = idle ]
+  [ ! -e "$T/lanes/idle" ]
+  [ "$(git -C "$R/idle" branch --show-current)" = idle ]
   [[ $'\n'"$(git -C "$M" worktree list --porcelain)"$'\n' == *$'\n'"worktree $R/idle"$'\n'* ]]
   for n in busy locked taken; do [ -d "$T/lanes/$n" ]; done
 }
@@ -102,7 +107,8 @@ busy() { printf '9\t%s\n' "$1" >>"$T/spectra-cwds"; }
   busy "$T/lanes/a"
   run wr migrate --dir "$T/lanes" --apply
   [ "$(row "$T/lanes")" = $'keep\ta process is working inside it' ]
-  [ -d "$T/lanes" ] && [ ! -L "$T/lanes" ]
+  [ -d "$T/lanes" ]
+  [ ! -L "$T/lanes" ]
   : >"$T/spectra-cwds"; mkdir "$T/lanes.noindex"
   run wr migrate --dir "$T/lanes" --apply
   [ "$(row "$T/lanes")" = $'keep\t'"$T"'/lanes.noindex exists: move its trees by hand' ]

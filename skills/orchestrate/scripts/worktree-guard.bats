@@ -99,7 +99,8 @@ allowed() { [ "$status" -eq 0 ] && [ -z "$output" ]; }
   run bash -c 'echo "not json worktree" | "$0"' "$SCRIPTS/worktree-guard.sh"; allowed
   run bash -c ': | "$0"' "$SCRIPTS/worktree-guard.sh"; allowed
   run "$SCRIPTS/worktree-guard.sh" --bogus </dev/null
-  [ "$status" -eq 2 ] && [[ "$output" == *usage:* ]]
+  [ "$status" -eq 2 ]
+  [[ "$output" == *usage:* ]]
   run "$SCRIPTS/worktree-guard.sh" -h </dev/null
   [ "$status" -eq 0 ] && [[ "$output" == *"Spotlight skips"* ]]
 }
