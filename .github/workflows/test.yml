@@ -60,6 +60,24 @@ jobs:
         run: shellcheck -S warning -x skills/orchestrate/scripts/*.sh skills/orchestrate/scripts/gh-shim/gh dev/*.sh
       - name: Validate manifests
         run: jq -e . .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json >/dev/null
+      # bash 3.2.57 (macOS /bin/bash) from its GNU release (checksum checked), off PATH: the suites
+      # run under the runner's bash 5, and cases that must hold on bash 3.2 (an empty "${a[@]}" is
+      # unbound under set -u before 4.4, #397) run it as $BASH32. BASH32_REQUIRED=1 makes them fail
+      # instead of skip when it is missing. gnu89, as the 2006 sources predate C99's implicit-
+      # declaration errors; bison, as the release's y.tab.c is older than its patched parse.y.
+      - name: Build bash 3.2
+        env:
+          BASH32_SHA256: 3fa9daf85ebf35068f090ce51283ddeeb3c75eb5bc70b1a4a7cb05868bfe06a4
+        run: |
+          command -v bison >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq bison >/dev/null; }
+          d="$RUNNER_TEMP/bash32" && mkdir -p "$d" && cd "$d"
+          curl -fsSLO https://ftp.gnu.org/gnu/bash/bash-3.2.57.tar.gz
+          echo "$BASH32_SHA256  bash-3.2.57.tar.gz" | sha256sum -c -
+          tar xzf bash-3.2.57.tar.gz && cd bash-3.2.57
+          ./configure --quiet --without-bash-malloc --disable-nls CFLAGS="-O1 -w -std=gnu89" >/dev/null
+          make -j"$(nproc)" -s >/dev/null
+          ./bash -c 'echo "$BASH_VERSION"' | grep -q '^3\.2\.57'
+          { echo "BASH32=$PWD/bash"; echo "BASH32_REQUIRED=1"; } >>"$GITHUB_ENV"
       - name: Hostile git config (the suites must not depend on it)
         run: |
           git config --global commit.gpgsign true
