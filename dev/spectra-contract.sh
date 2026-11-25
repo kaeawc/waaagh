@@ -43,7 +43,10 @@ while IFS=$'\t' read -r cmd path script null rest || [[ -n "$cmd" ]]; do
     exit 2
   fi
   rows+=("$cmd"$'\t'"$path"$'\t'"$script"$'\t'"$null")
-  printf '%s\n' "${cmds[@]}" | grep -qxF -- "$cmd" || cmds+=("$cmd")
+  # cmds is empty on the first row: bash before 4.4 calls a bare "${cmds[@]}" unbound under set -u (#397).
+  seen=""
+  for c in ${cmds[@]+"${cmds[@]}"}; do [[ "$c" == "$cmd" ]] && { seen=1; break; }; done
+  [[ -n "$seen" ]] || cmds+=("$cmd")
 done <"$contract"
 ((${#rows[@]})) || { echo "spectra-contract.sh: $contract lists no rows" >&2; exit 2; }
 

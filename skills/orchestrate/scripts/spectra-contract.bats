@@ -147,6 +147,56 @@ check() { "$CHECK" --spectra "$B/spectra" --root "$W" --contract "$C" "$@"; }
   [ -z "$(ls -A "$W")" ]
 }
 
+# --- bash 3.2 (macOS /bin/bash) ----------------------------------------------------------------------
+
+# A bash before 4.4, where "${a[@]}" of an empty array is unbound under set -u: $BASH32 (CI builds
+# bash 3.2.57 and sets it), else /bin/bash when it is one (macOS). BASH32_REQUIRED=1 (CI) makes a
+# missing one a failure, so the case cannot pass there by skipping.
+old_bash() {
+  local b
+  for b in "${BASH32:-}" /bin/bash; do
+    [[ -n "$b" && -x "$b" ]] || continue
+    "$b" -c '((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4)))' && { echo "$b"; return 0; }
+  done
+  return 1
+}
+
+@test "the checker runs clean under bash 3.2: no unbound variable on the first row (#397)" {
+  if ! OLD=$(old_bash); then
+    [ "${BASH32_REQUIRED:-}" != 1 ] || { echo "BASH32_REQUIRED=1 but BASH32=${BASH32:-} is not a bash before 4.4"; false; }
+    skip "no bash before 4.4 (set BASH32 to one)"
+  fi
+  # The premise: this bash does call an empty array unbound, so a pass below means the fix holds.
+  run -127 "$OLD" -uc 'a=(); printf "%s\n" "${a[@]}"'
+  [[ "$output" == *"a[@]: unbound variable"* ]]
+  echo '{"load1": 1.5, "cause": {"kind": "roots"}}' >"$B/load.json"
+  echo '{"version": "0.1.2"}' >"$B/version.json"
+  row "load --json" .load1 host-load.sh
+  row "version --json" .version _lib.sh
+  row "load --json" .cause.kind host-load.sh
+  run "$OLD" "$CHECK" --spectra "$B/spectra" --root "$W" --contract "$C"
+  [ "$status" -eq 0 ]
+  [ "$output" = "spectra contract: 3 rows, 2 commands, 0 failed" ]
+  [ "$(grep -c '^load --json$' "$B/calls")" -eq 1 ]   # still one run per command
+  # A broken path still fails under it.
+  row "load --json" .cause.worktree host-load.sh
+  run "$OLD" "$CHECK" --spectra "$B/spectra" --root "$W" --contract "$C"
+  [ "$status" -eq 1 ]
+  [[ "$output" != *unbound* ]]
+  [[ "$output" == *"FAIL host-load.sh .cause.worktree (load --json): .cause.worktree is missing"* ]]
+}
+
+@test "CI builds bash 3.2 and requires the bash 3.2 case before the suites run" {
+  WF="$ROOT/.github/workflows/test.yml"
+  build=$(grep -n 'name: Build bash 3.2' "$WF" | cut -d: -f1)
+  suites=$(grep -n 'run: dev/test.sh' "$WF" | cut -d: -f1)
+  [ -n "$build" ]
+  [ -n "$suites" ]
+  [ "$suites" -gt "$build" ]
+  grep -q 'BASH32_REQUIRED=1' "$WF"
+  grep -q 'BASH32=' "$WF"
+}
+
 # --- the contract itself ---------------------------------------------------------------------------
 
 @test "the contract parses, names real scripts, and covers every spectra subcommand the scripts run" {
