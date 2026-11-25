@@ -98,7 +98,8 @@ line="waaagh: 2 merged, 1 likely merged worktrees in main - review with"
   run hook
   [[ "$output" == "$line"* ]]
   sleep 0.3   # a refresh, had one started, would have fetched by now
-  [ ! -e "$FX/gh-calls" ] && [ ! -e "$FX/fetches" ]
+  [ ! -e "$FX/gh-calls" ]
+  [ ! -e "$FX/fetches" ]
   cmp -s "$r" "$BATS_TEST_TMPDIR/before"
 }
 
@@ -127,7 +128,8 @@ line="waaagh: 2 merged, 1 likely merged worktrees in main - review with"
   touch "$FX/gh-hang" "$FX/fetch-hang"
   s=$SECONDS
   run hook
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
   (( SECONDS - s <= 1 ))
   await '[ -s "$FX/fetches" ]'   # the refresh did start, in the background
   # Reading a fresh report: ten starts in well under a second each.
@@ -151,7 +153,8 @@ line="waaagh: 2 merged, 1 likely merged worktrees in main - review with"
 @test "--refresh writes the report in the foreground: header, wt-cleanup rows, no removal, one refresh at a time" {
   lanes
   run "$SCRIPTS/wt-session-hint.sh" --refresh "$M"
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
   r=$(report)
   read -r first <"$r"
   [[ "$first" =~ ^"# wt-cleanup report at="[0-9]+" pr-closed=yes repo-dir=$M"$ ]]
@@ -169,7 +172,9 @@ line="waaagh: 2 merged, 1 likely merged worktrees in main - review with"
   # A refresh already in flight (its lock held) is left alone.
   mkdir "$r.lock"; rm -f "$FX/fetches"
   run "$SCRIPTS/wt-session-hint.sh" --refresh "$M"
-  [ "$status" -eq 0 ] && [ -d "$r.lock" ] && [ ! -e "$FX/fetches" ]
+  [ "$status" -eq 0 ]
+  [ -d "$r.lock" ]
+  [ ! -e "$FX/fetches" ]
   rmdir "$r.lock"
 }
 
@@ -177,7 +182,8 @@ line="waaagh: 2 merged, 1 likely merged worktrees in main - review with"
   lane wip; commit wip h wip "wip"; idle wip
   run hook; await '[ -n "$(report)" ] && no_lock'
   run hook
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
   rm -rf "$ORCHESTRATE_STATE_DIR"
   git -C "$U" status >/dev/null
   run hook "$U"   # a clone with no linked worktree: no report, no refresh
@@ -185,7 +191,8 @@ line="waaagh: 2 merged, 1 likely merged worktrees in main - review with"
   sleep 0.3; [ ! -d "$ORCHESTRATE_STATE_DIR/wt-reports" ]
   mkdir "$BATS_TEST_TMPDIR/plain"
   run hook "$BATS_TEST_TMPDIR/plain"
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
   run "$SCRIPTS/wt-session-hint.sh" --bogus
   [ "$status" -eq 2 ]
   run "$SCRIPTS/wt-session-hint.sh" --refresh "$BATS_TEST_TMPDIR/none"
