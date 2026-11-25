@@ -77,6 +77,9 @@ allowed() { [ "$status" -eq 0 ] && [ -z "$output" ]; }
   run guard 'git worktree add "$WT/lane" -b lane'; denied
   [[ "$(reason)" == *'git worktree add $WT/lane: the hook cannot tell where a path built from a variable lands; spell it out under the lane root ('"$T"'/home/worktrees.noindex/widget/lane, from "$(wt-root.sh path lane)") or a temp dir'* ]]
   run guard 'git worktree add "$(pwd)/../x"'; denied
+  # No HOME: ~ is unknown too, never read as /.
+  HOME="" run guard "git worktree add ~/worktrees.noindex/../x"; denied
+  [[ "$(reason)" == *"cannot tell where"* ]]
 }
 
 @test "other commands, other worktree subcommands and quoted mentions pass untouched" {

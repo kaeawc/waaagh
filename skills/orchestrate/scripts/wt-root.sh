@@ -47,7 +47,14 @@ case "$name" in */* | . | ..) echo "wt-root.sh: NAME is one path part" >&2; exit
 
 # shellcheck source=_lib.sh
 source "$here/_lib.sh"
-root=$(orch_worktree_home "$repo_dir") || { echo "wt-root.sh: not in a git checkout: $repo_dir (or set ORCHESTRATE_WORKTREE_ROOT)" >&2; exit 2; }
+root=$(orch_worktree_home "$repo_dir") || {
+  if [[ -z "${ORCHESTRATE_WORKTREE_ROOT:-}${WAAAGH_WORKTREE_HOME:-}${HOME:-}" ]]; then
+    echo "wt-root.sh: HOME is not set: set WAAAGH_WORKTREE_HOME or ORCHESTRATE_WORKTREE_ROOT" >&2
+  else
+    echo "wt-root.sh: not in a git checkout: $repo_dir (or set ORCHESTRATE_WORKTREE_ROOT)" >&2
+  fi
+  exit 2
+}
 
 if [[ "$cmd" == path ]]; then
   printf '%s\n' "$root${name:+/$name}"

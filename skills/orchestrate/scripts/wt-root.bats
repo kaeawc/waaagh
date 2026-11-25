@@ -27,13 +27,20 @@ busy() { printf '9\t%s\n' "$1" >>"$T/spectra-cwds"; }
   run "$SCRIPTS/wt-root.sh" --repo-dir "$T/l" path x
   [ "$output" = "$R/x" ]
   unset WAAAGH_WORKTREE_HOME
-  run wr path
-  [ "$output" = "$HOME/worktrees.noindex/widget" ]
+  HOME="$T/h" run wr path
+  [ "$output" = "$T/h/worktrees.noindex/widget" ]
+  # No HOME (a hook or cron environment): no root at all, never /worktrees.noindex.
+  run env -u HOME bash -c 'cd "$1" && "$2/wt-root.sh" path' _ "$M" "$SCRIPTS"
+  [ "$status" -eq 2 ] && [[ "$output" == *"HOME is not set"* ]]
+  HOME="" run wr path
+  [ "$status" -eq 2 ]
+  WAAAGH_WORKTREE_HOME="$T/w.noindex" run env -u HOME bash -c 'cd "$1" && "$2/wt-root.sh" path' _ "$M" "$SCRIPTS"
+  [ "$output" = "$T/w.noindex/widget" ]
   ORCHESTRATE_WORKTREE_ROOT=/elsewhere run wr path x
   [ "$output" = /elsewhere/x ]
   run wr path a/b
   [ "$status" -eq 2 ]
-  run "$SCRIPTS/wt-root.sh" --repo-dir "$T" path
+  WAAAGH_WORKTREE_HOME="$T/w.noindex" run "$SCRIPTS/wt-root.sh" --repo-dir "$T" path
   [ "$status" -eq 2 ] && [[ "$output" == *"not in a git checkout"* ]]
   run wr
   [ "$status" -eq 2 ] && [[ "$output" == *usage:* ]]

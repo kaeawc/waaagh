@@ -427,13 +427,15 @@ orch_spectra_require() {
 # directory's) belong (#394), whether or not it exists yet: ORCHESTRATE_WORKTREE_ROOT, else
 # <WAAAGH_WORKTREE_HOME, default ~/worktrees.noindex>/<repo>, <repo> being the main checkout's
 # directory name. Spotlight indexes no directory whose name ends in .noindex, nor anything below it.
-# Returns 1 outside a git checkout when ORCHESTRATE_WORKTREE_ROOT is unset.
+# Returns 1 when ORCHESTRATE_WORKTREE_ROOT is unset and DIR is outside a git checkout, or neither
+# WAAAGH_WORKTREE_HOME nor HOME is set (a hook or cron environment may lack HOME: no /worktrees.noindex).
 orch_worktree_home() {
-  local common name
+  local common name base=${WAAAGH_WORKTREE_HOME:-}
   if [[ -n "${ORCHESTRATE_WORKTREE_ROOT:-}" ]]; then echo "$ORCHESTRATE_WORKTREE_ROOT"; return; fi
+  [[ -n "$base" ]] || { [[ -n "${HOME:-}" ]] && base=$HOME/worktrees.noindex; } || return 1
   common=$(git -C "${1:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
   name=${common%/}; name=${name%/.git}; name=${name%.git}; name=${name##*/}
-  echo "${WAAAGH_WORKTREE_HOME:-$HOME/worktrees.noindex}/${name:-repo}"
+  echo "$base/${name:-repo}"
 }
 # orch_worktree_root: where this checkout's lane worktrees live, resolved: orch_worktree_home when
 # it exists, else the legacy <main checkout>/.claude/worktrees when that exists (an

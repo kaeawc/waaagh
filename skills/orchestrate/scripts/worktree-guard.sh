@@ -94,8 +94,9 @@ judge() {
   case "$raw" in
     *'$('*wt-root.sh*' path '*) return 0 ;;
     '$TMPDIR'/* | '${TMPDIR}'/*) return 0 ;;
-    \~ | \~/*) p=${HOME:-}${raw#\~} ;;
-    '$HOME'/* | '${HOME}'/*) p=${HOME:-}/${raw#*/} ;;
+    # With no HOME, ~ and $HOME stay unknown (judged as a variable below), never /.
+    \~ | \~/*) p=${HOME:-'$HOME'}${raw#\~} ;;
+    '$HOME'/* | '${HOME}'/*) p=${HOME:-'$HOME'}/${raw#*/} ;;
     *) p=$raw ;;
   esac
   name=${raw%/}; name=${name##*/}
