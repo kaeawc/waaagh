@@ -336,7 +336,7 @@ host_stub() {
 @test "a slot held past the stall age by an idle holder is named; a young or busy one is not (#333)" {
   echo "beat=$ORCHESTRATE_NOW deadline=$((ORCHESTRATE_NOW + 60)) pid=0" >"$ST/merge-loop.beat"
   export ORCHESTRATE_SLOT_DIR="$BATS_TEST_TMPDIR/slots"
-  sleep 60 & idle_pid=$!; sleep 60 & busy_pid=$!
+  sleep 60 & idle_pid=$!; sleep 60 & busy_pid=$!; sleep 60 & class_pid=$!
   hold() { # POOL N PID LABEL MINUTES-AGO
     local d="$ORCHESTRATE_SLOT_DIR/$1/slot-$2"
     mkdir -p "$d"
@@ -346,16 +346,18 @@ host_stub() {
   hold heavy 1 "$idle_pid" lane-x 25
   hold gate 1 "$busy_pid" lane-y 25
   hold gate 2 "$$" lane-z 2
-  jq -n --argjson p "$idle_pid" '{result: {holders: [{pid: $p, command: "bash"}]}}' >"$BATS_TEST_TMPDIR/spectra-idle.json"
+  hold class-db 1 "$class_pid" lane-w 30   # an exclusive class (#396) is a pool like the others
+  jq -n --argjson p "$idle_pid" --argjson c "$class_pid" '{result: {holders: [{pid: $p, command: "bash"}, {pid: $c, command: "bash"}]}}' >"$BATS_TEST_TMPDIR/spectra-idle.json"
   run snap
-  kill "$idle_pid" "$busy_pid" 2>/dev/null || true
+  kill "$idle_pid" "$busy_pid" "$class_pid" 2>/dev/null || true
   [ "$status" -eq 0 ]
-  [[ "$(snap_line slot-stalled)" =~ ^"slot-stalled heavy pid=$idle_pid held="2[5-9]"m label=lane-x"$ ]]
-  [ "$(printf '%s\n' "$output" | grep -c '^slot-stalled')" -eq 1 ]
-  [[ "${lines[0]}" == "verdict act "*"slot-stalled=1"* ]]
-  # Spectra was asked about the two old holders only, with the stall age as its minimum.
-  grep -qx "idle --pids $(sort -n <<<"$idle_pid"$'\n'"$busy_pid" | paste -sd, -) --min-age 10m --json" "$BATS_TEST_TMPDIR/spectra-calls" ||
-    grep -qx "idle --pids $busy_pid,$idle_pid --min-age 10m --json" "$BATS_TEST_TMPDIR/spectra-calls"
+  [[ "$output" =~ $'\n'"slot-stalled heavy pid=$idle_pid held="2[5-9]"m label=lane-x"$'\n' ]]
+  [[ "$output" =~ $'\n'"slot-stalled class-db pid=$class_pid held="(29|3[0-4])"m label=lane-w"($'\n'|$) ]]
+  [ "$(printf '%s\n' "$output" | grep -c '^slot-stalled')" -eq 2 ]
+  [[ "${lines[0]}" == "verdict act "*"slot-stalled=2"* ]]
+  # Spectra was asked about the three old holders only, with the stall age as its minimum.
+  asked=$(sed -n 's/^idle --pids \([0-9,]*\) --min-age 10m --json$/\1/p' "$BATS_TEST_TMPDIR/spectra-calls" | tr , '\n' | sort -n | paste -sd, -)
+  [ "$asked" = "$(printf '%s\n' "$idle_pid" "$busy_pid" "$class_pid" | sort -n | paste -sd, -)" ]
 }
 
 @test "stalled-slot checks with no spectra are unknown, and a dead holder is not checked (#333)" {

@@ -117,6 +117,31 @@ slot_held() {
   basename -- "$(dirname -- "$d")"
 }
 
+# Exclusive classes (#396): class NAME is a one-slot pool, class-NAME, beside gate and heavy, so
+# its holder runs alone among the commands of that class on this host (a shared local database, a
+# port, a generator's output). gate-slot.sh holds it with its gate slot. Its re-entrancy marker is
+# ORCHESTRATE_CLASS_HELD, "NAME=PID" words, one per class an ancestor wrapper holds.
+slot_class_ok() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]*$ && ${#1} -le 40 ]]; }
+
+# slot_class_held NAME: an ancestor wrapper holds class NAME for this process, and still does.
+slot_class_held() {
+  local e pid d
+  d="$(slot_root)/class-$1/slot-1"
+  for e in ${ORCHESTRATE_CLASS_HELD:-}; do
+    [[ "${e%%=*}" == "$1" ]] || continue
+    pid=${e#*=}
+    [[ "$pid" =~ ^[0-9]+$ && "$(sed -n 1p "$d/holder" 2>/dev/null || true)" == "$pid" ]] && slot_live "$d" && return 0
+  done
+  return 1
+}
+
+# slot_holder_desc DIR: "<label> pid <PID>" of a slot's holder, or "a claim in progress".
+slot_holder_desc() {
+  local pid label
+  pid=$(sed -n 1p "$1/holder" 2>/dev/null || true) label=$(sed -n 3p "$1/holder" 2>/dev/null || true)
+  if [[ -n "$pid" ]]; then echo "${label:-?} pid $pid"; else echo "a claim in progress"; fi
+}
+
 # slot_parked DIR: a heavy build started inside this gate's command is waiting for, or running in,
 # the heavy slot (DIR/parked holds its PID, and it is alive). The gate only waits on that build.
 slot_parked() {
