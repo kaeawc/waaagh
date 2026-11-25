@@ -120,9 +120,12 @@ if ! mkdir "$lock" 2>/dev/null; then
 fi
 echo "$now" >"$lock/at"
 # Detached: its own stdio (a hook whose child holds stdout is waited on), immune to the session's
-# hangup, started from outside every worktree.
+# hangup, started from outside every worktree, and with none of the launcher's shell options or
+# startup file (SHELLOPTS, BASH_ENV): no inherited errexit or xtrace. Under bashcov an inherited
+# xtrace made it a concurrent traced process in another directory, which slows bashcov for the
+# rest of its run (its working-directory stack grows with every switch).
 # The main checkout when there is one (the common dir is its .git), else this checkout.
 dir=$PWD
 [[ "$common" != */.git || ! -d "${common%/.git}" ]] || dir=${common%/.git}
-(cd "$common" && WT_SESSION_HINT_LOCK=$lock exec nohup "$here/wt-session-hint.sh" --refresh "$dir" </dev/null >/dev/null 2>&1) </dev/null >/dev/null 2>&1 &
+(cd "$common" && WT_SESSION_HINT_LOCK=$lock exec env -u SHELLOPTS -u BASH_ENV nohup "$here/wt-session-hint.sh" --refresh "$dir" </dev/null >/dev/null 2>&1) </dev/null >/dev/null 2>&1 &
 exit 0

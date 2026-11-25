@@ -120,4 +120,4 @@ update-pace.bats	7
 usage-header.bats	9
 verify-on-main.bats	10
 wt-cleanup.bats	17
-wt-session-hint.bats	290
+wt-session-hint.bats	15

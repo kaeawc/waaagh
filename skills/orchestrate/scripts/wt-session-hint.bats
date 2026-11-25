@@ -18,8 +18,11 @@ setup() {
   # wt-cleanup.sh stub: logs its arguments, blocks while $FX/cleanup-hang exists, exits 2 for
   # --pr-closed when $FX/no-repo exists (as the real one does when it cannot tell the repository),
   # else prints $FX/rows.
+  # The stubs that wait, and every poll below, are /bin/sh, not bash: under dev/coverage.sh bashcov
+  # traces each bash line through one reader, and a traced poll slows the very refresh it waits
+  # for, and every suite after it in the shard (two shards hit their 30-minute limit).
   cat >"$STUBS/wt-cleanup.sh" <<'STUB'
-#!/usr/bin/env bash
+#!/bin/sh
 echo "$*" >>"$FX/cleanup-calls"
 while [ -e "$FX/cleanup-hang" ]; do sleep 0.2; done
 case " $* " in *" --pr-closed "*) [ ! -e "$FX/no-repo" ] || exit 2 ;; esac
@@ -41,7 +44,7 @@ STUB
   # git: every fetch is logged, and blocks while $FX/fetch-hang exists.
   real_git=$(command -v git)
   cat >"$BIN/git" <<STUB
-#!/usr/bin/env bash
+#!/bin/sh
 for a in "\$@"; do
   if [ "\$a" = fetch ]; then echo "\$*" >>"\$FX/fetches"; while [ -e "\$FX/fetch-hang" ]; do sleep 0.2; done; break; fi
 done
@@ -70,15 +73,21 @@ STUB
 # test: release every hang and wait for the refresh lock to go.
 teardown() {
   rm -f "$FX/cleanup-hang" "$FX/fetch-hang"
-  local _; for _ in $(seq 1 150); do no_lock && return 0; sleep 0.2; done
+  await "$no_lock" || true
 }
 
 hook() { (cd "${1:-$M}" && "$SCRIPTS/wt-session-hint.sh"); }
 report() { ls "$ORCHESTRATE_STATE_DIR"/wt-reports/*.tsv 2>/dev/null; }
-# Polls every 0.2 s, up to 2 minutes: under bashcov every traced poll queues behind one reader.
-await() { local _; for _ in $(seq 1 600); do eval "$1" && return 0; sleep 0.2; done; echo "timed out: $1"; return 1; }
+# await SH-CONDITION: poll it in /bin/sh (untraced) every 0.1 s, up to 2 minutes. FX and
+# ORCHESTRATE_STATE_DIR are exported, so a condition reads them as $FX and $ORCHESTRATE_STATE_DIR.
+await() {
+  /bin/sh -c 'i=0; while [ $i -lt 1200 ]; do eval "$1" && exit 0; sleep 0.1; i=$((i + 1)); done; exit 1' _ "$1" ||
+    { echo "timed out: $1"; return 1; }
+}
+no_lock='! ls "$ORCHESTRATE_STATE_DIR"/wt-reports/*.lock >/dev/null 2>&1'
+has_report='ls "$ORCHESTRATE_STATE_DIR"/wt-reports/*.tsv >/dev/null 2>&1'
 no_lock() { ! ls "$ORCHESTRATE_STATE_DIR"/wt-reports/*.lock >/dev/null 2>&1; }
-refreshed() { await '[ -n "$(report)" ] && no_lock'; }
+refreshed() { await "$has_report && $no_lock"; }
 line="waaagh: 3 merged, 1 likely merged worktrees in main - review with"
 
 @test "first start is silent and refreshes in the background; the next start prints one line; nothing is removed" {
@@ -122,11 +131,11 @@ line="waaagh: 3 merged, 1 likely merged worktrees in main - review with"
   sleep 0.3
   [ "$(wc -l <"$FX/cleanup-calls")" -eq 1 ]
   rm -f "$FX/cleanup-hang"
-  await no_lock
+  await "$no_lock"
   # A lock left by a refresh that died is taken over after an hour.
   mkdir "$r.lock"; echo 1 >"$r.lock/at"; rm -f "$FX/cleanup-calls"
   ORCHESTRATE_NOW=$(( later + 43200 )) run hook   # the refresh above dated its report +12h
-  await '[ -s "$FX/cleanup-calls" ] && no_lock'
+  await "[ -s \"\$FX/cleanup-calls\" ] && $no_lock"
 }
 
 @test "the hook never waits on the refresh: with git fetch and wt-cleanup hanging it returns at once (timing)" {
