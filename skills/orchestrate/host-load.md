@@ -80,7 +80,14 @@ worktrees (12 GB) took the load from about 120 to 32 within minutes.
   ```
 
   Finished means: the branch's PRs are all merged or closed, the tree is clean, its HEAD is
-  pushed, and it has been idle for 2 hours or more. Exit 3 means the budget is still exceeded after
+  pushed, and it has been idle for 2 hours or more. A squash- or rebase-merged lane, whose HEAD is
+  on no remote branch once its branch is deleted, counts as finished when it is proven merged into
+  `origin/<default>` (#393): HEAD is an ancestor of it, every commit is patch-equivalent
+  (`git cherry`), merging HEAD changes nothing (`git merge-tree`), the lane's whole diff is one
+  squash commit there, or a merged PR has HEAD as its head. Each row names the proof. A lane
+  subject that landed as `<subject> (#N)` with PR N merged is only `likely merged`: listed, and
+  removed only with `--include-likely` after the owner has looked. Fetch first: the proofs read
+  `origin/<default>` as last fetched. Exit 3 means the budget is still exceeded after
   collection: start no new worktree until it is back under, and report the budget row.
 - Over budget is not a reason to remove an unfinished tree. Finish or close its PR first.
 
