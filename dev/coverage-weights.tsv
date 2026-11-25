@@ -119,5 +119,7 @@ triage-tick.bats	22
 update-pace.bats	7
 usage-header.bats	9
 verify-on-main.bats	10
+worktree-guard.bats	10
 wt-cleanup.bats	17
+wt-root.bats	9
 wt-session-hint.bats	15
