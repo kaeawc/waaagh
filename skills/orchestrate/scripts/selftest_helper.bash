@@ -28,6 +28,23 @@ verdict_of() { # checks... -> the verdict and detail of one PR built from them
   "$SCRIPTS/pr-ready.sh" --repo o/r --no-threads 2>/dev/null | cut -f2,6
 }
 
+# Many verdict_of cases in one pr-ready.sh run (#112): `expect VERDICT<TAB>DETAIL CHECK...` adds a
+# case (its own PR, numbered in order), and verdicts_match runs pr-ready once over every case and
+# fails naming each case whose PR's verdict and detail differ. Each PR is classified on its own
+# checks alone, so this asserts what one verdict_of call per case would.
+expect() { want+=("$1"); shift; cases+=("$(printf '%s\n' "$@" | jq -cs .)"); }
+verdicts_match() {
+  local i got bad=""
+  for i in "${!cases[@]}"; do pr_row "$((i + 1))" me false false MERGEABLE "${cases[i]}"; done | jq -s . >"$FX/prs.json"
+  got=$("$SCRIPTS/pr-ready.sh" --repo o/r --no-threads 2>/dev/null | awk -F'\t' '$1 ~ /^[0-9]+$/ { print $1 "\t" $2 "\t" $6 }' | sort -n)
+  [ "$(grep -c . <<<"$got")" -eq "${#cases[@]}" ] || { echo "want ${#cases[@]} rows, got: $got"; return 1; }
+  for i in "${!cases[@]}"; do
+    [ "$(sed -n "$((i + 1))p" <<<"$got")" = "$((i + 1))"$'\t'"${want[i]}" ] ||
+      bad+=$'\n'"case $((i + 1)): want ${want[i]}, got $(sed -n "$((i + 1))p" <<<"$got" | cut -f2-) for ${cases[i]}"
+  done
+  [ -z "$bad" ] || { echo "$bad"; return 1; }
+}
+
 merge_fixture() {
   stub_gh_router
   echo '{"state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":"abcdef0123456789abcdef0123456789abcdef01","author":{"login":"me"},"mergeable":"MERGEABLE"}' >"$FX/pr.json"

@@ -23,14 +23,15 @@ await() { local _; for _ in $(seq 1 200); do eval "$1" && return 0; sleep 0.05; 
 # A background child left running holds bats' fd 3 and hangs the run: a failed test still releases
 # its held commands and stops the process it parked in a worktree.
 teardown() {
-  release a
+  release a; release b
   if [[ -n "${busy_pid:-}" ]]; then kill "$busy_pid" 2>/dev/null || true; fi
 }
 
 @test "gates beyond the slot count wait, and every slot is freed afterwards" {
-  for i in 1 2 3; do gate --slots 2 -- bash -c "echo start >>'$BATS_TEST_TMPDIR/log'; $(held a); echo end >>'$BATS_TEST_TMPDIR/log'" & done
+  for i in 1 2 3; do gate --slots 2 -- bash -c "echo start >>'$BATS_TEST_TMPDIR/log'; $(held a); echo end >>'$BATS_TEST_TMPDIR/log'" 2>"$BATS_TEST_TMPDIR/err-$i" & done
   await '[ "$(grep -c start "$BATS_TEST_TMPDIR/log" 2>/dev/null)" = 2 ]'
-  sleep 0.3   # time for a third gate to start, if it did not wait
+  # The third gate says it is waiting (it has looked at the slots and found none), not a sleep (#112).
+  await 'grep -qh "^gate-slot: waiting (2/2 gates busy" "$BATS_TEST_TMPDIR"/err-*'
   [ "$(holders gate)" -eq 2 ]
   [ "$(grep -c start "$BATS_TEST_TMPDIR/log")" -eq 2 ]
   release a
@@ -88,12 +89,16 @@ teardown() {
   await '[ -s "$L" ]'
   # The heavy build takes its slot, then waits for the running gate; a gate asked for after that
   # waits for the heavy build.
-  "$SCRIPTS/heavy-build-slot.sh" -- bash -c "echo heavy-start >>'$L'; sleep 0.2; echo heavy-end >>'$L'" &
+  "$SCRIPTS/heavy-build-slot.sh" -- bash -c "echo heavy-start >>'$L'; $(held b); echo heavy-end >>'$L'" &
   await '[ "$(holders heavy)" = 1 ]'
-  gate -- bash -c "echo gate2-start >>'$L'; echo gate2-end >>'$L'" &
-  sleep 0.2   # time for either to start, if it did not wait
+  gate -- bash -c "echo gate2-start >>'$L'; echo gate2-end >>'$L'" 2>"$BATS_TEST_TMPDIR/gate2.err" &
+  # Each waits, as each says, instead of a sleep that gives them time to start (#112).
+  await 'grep -q "^gate-slot: waiting" "$BATS_TEST_TMPDIR/gate2.err"'
   [ "$(cat "$L")" = gate-start ]
   release a
+  await 'grep -q heavy-start "$L"'
+  [ "$(tr '\n' ' ' <"$L")" = "gate-start gate-end heavy-start " ]   # gate2 still waits for the heavy build
+  release b
   wait
   [ "$(tr '\n' ' ' <"$L")" = "gate-start gate-end heavy-start heavy-end gate2-start gate2-end " ]
 }
@@ -101,7 +106,7 @@ teardown() {
 @test "a heavy build that cannot start in time exits 75 and releases its slot" {
   gate -- bash -c "$(held a)" &
   await '[ "$(holders gate)" = 1 ]'
-  run "$SCRIPTS/heavy-build-slot.sh" --wait 1 -- true
+  run "$SCRIPTS/heavy-build-slot.sh" --wait 0 -- true   # one look, then exit 75: no need to wait a second (#112)
   [ "$status" -eq 75 ]
   [[ "$output" == *"gates still running"* ]]
   [ "$(holders heavy)" -eq 0 ]
@@ -142,7 +147,7 @@ teardown() {
   # A gate that is not parked still holds a nested heavy build back.
   "$G" -- bash -c "$(held a)" &
   await '[ "$(holders gate)" = 1 ]'
-  run "$G" -- "$H" --wait 1 -- true
+  run "$G" -- "$H" --wait 0 -- true
   [ "$status" -eq 75 ]
   [[ "$output" == *"gates still running"* ]]
   release a
@@ -157,13 +162,14 @@ teardown() {
   await '[ "$(holders gate)" = 1 ]'
   slot="$ORCHESTRATE_SLOT_DIR/gate/slot-1"
   # Another process's slot (the PID does not match), a slot outside this pool root, and no PID.
-  ORCHESTRATE_SLOT_HELD="$slot" ORCHESTRATE_SLOT_HOLDER=$$ run gate --slots 1 --wait 1 -- true
+  # --wait 0: one look at the slots, then exit 75, the same refusal without the second's wait (#112).
+  ORCHESTRATE_SLOT_HELD="$slot" ORCHESTRATE_SLOT_HOLDER=$$ run gate --slots 1 --wait 0 -- true
   [ "$status" -eq 75 ]
-  ORCHESTRATE_SLOT_HELD="$slot" run gate --slots 1 --wait 1 -- true
+  ORCHESTRATE_SLOT_HELD="$slot" run gate --slots 1 --wait 0 -- true
   [ "$status" -eq 75 ]
   mkdir -p "$BATS_TEST_TMPDIR/other/gate/slot-1"
   cp "$slot/holder" "$BATS_TEST_TMPDIR/other/gate/slot-1/holder"
-  ORCHESTRATE_SLOT_HELD="$BATS_TEST_TMPDIR/other/gate/slot-1" ORCHESTRATE_SLOT_HOLDER=$(sed -n 1p "$slot/holder") run gate --slots 1 --wait 1 -- true
+  ORCHESTRATE_SLOT_HELD="$BATS_TEST_TMPDIR/other/gate/slot-1" ORCHESTRATE_SLOT_HOLDER=$(sed -n 1p "$slot/holder") run gate --slots 1 --wait 0 -- true
   [ "$status" -eq 75 ]
   release a
   wait

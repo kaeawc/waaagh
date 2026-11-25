@@ -43,30 +43,32 @@ load selftest_pr_setup
   stub_gh_router
   echo '[]' >"$FX/rules.json"
   T1=2026-09-27T01:00:00Z T2=2026-09-27T02:00:00Z
+  cases=() want=()   # each case is its own PR; one pr-ready run classifies them all (#112)
   # A later sibling in the same run does not replace a cancelled job.
-  [ "$(verdict_of "$(check unit CANCELLED CI $T1 70 700)" "$(check lint SUCCESS CI $T2 70 701)")" = $'BLOCK\tfail:unit' ]
+  expect $'BLOCK\tfail:unit' "$(check unit CANCELLED CI $T1 70 700)" "$(check lint SUCCESS CI $T2 70 701)"
   # The same without any run identity: still blocked.
-  [ "$(verdict_of "$(check unit CANCELLED CI $T1)" "$(check lint SUCCESS CI $T2)")" = $'BLOCK\tfail:unit' ]
+  expect $'BLOCK\tfail:unit' "$(check unit CANCELLED CI $T1)" "$(check lint SUCCESS CI $T2)"
   # Same job name in two workflows: the Linux failure is not hidden by the Mac success.
-  [ "$(verdict_of "$(check test FAILURE Linux $T1 71 710)" "$(check test SUCCESS Mac $T2 72 720)")" = $'BLOCK\tfail:test' ]
+  expect $'BLOCK\tfail:test' "$(check test FAILURE Linux $T1 71 710)" "$(check test SUCCESS Mac $T2 72 720)"
   # Same name from two providers (an Actions job and a status context).
-  [ "$(verdict_of "$(check test FAILURE "" $T1 "" "" StatusContext)" "$(check test SUCCESS CI $T2 73 730)")" = $'BLOCK\tfail:test' ]
+  expect $'BLOCK\tfail:test' "$(check test FAILURE "" $T1 "" "" StatusContext)" "$(check test SUCCESS CI $T2 73 730)"
   # A rerun attempt (same run, newer job id) replaces the failure, whatever the timestamps say.
-  [ "$(verdict_of "$(check unit FAILURE CI $T2 74 740)" "$(check unit SUCCESS CI $T2 74 741)")" = $'READY\t-' ]
-  [ "$(verdict_of "$(check unit FAILURE CI "" 74 740)" "$(check unit SUCCESS CI "" 74 741)")" = $'READY\t-' ]
+  expect $'READY\t-' "$(check unit FAILURE CI $T2 74 740)" "$(check unit SUCCESS CI $T2 74 741)"
+  expect $'READY\t-' "$(check unit FAILURE CI "" 74 740)" "$(check unit SUCCESS CI "" 74 741)"
   # A genuinely newer run of the same workflow and job replaces a cancellation...
-  [ "$(verdict_of "$(check unit CANCELLED CI $T1 75 750)" "$(check unit SUCCESS CI $T2 76 760)")" = $'READY\t-' ]
+  expect $'READY\t-' "$(check unit CANCELLED CI $T1 75 750)" "$(check unit SUCCESS CI $T2 76 760)"
   # ...but not a failure: two runs of one workflow on the same head (push and pull_request) both count.
-  [ "$(verdict_of "$(check unit FAILURE CI $T1 75 750)" "$(check unit SUCCESS CI $T2 76 760)")" = $'BLOCK\tfail:unit' ]
+  expect $'BLOCK\tfail:unit' "$(check unit FAILURE CI $T1 75 750)" "$(check unit SUCCESS CI $T2 76 760)"
   # Partial rerun: the rerun job replaces only itself; an untouched failure in that run stays.
-  [ "$(verdict_of "$(check unit FAILURE CI $T1 77 770)" "$(check e2e FAILURE CI $T1 77 771)" "$(check unit SUCCESS CI $T2 77 772)")" = $'BLOCK\tfail:e2e' ]
+  expect $'BLOCK\tfail:e2e' "$(check unit FAILURE CI $T1 77 770)" "$(check e2e FAILURE CI $T1 77 771)" "$(check unit SUCCESS CI $T2 77 772)"
   # Matrix jobs are distinct checks; one failing leg blocks.
-  [ "$(verdict_of "$(check "test (linux)" SUCCESS CI $T1 78 780)" "$(check "test (mac)" FAILURE CI $T1 78 781)")" = $'BLOCK\tfail:test (mac)' ]
+  expect $'BLOCK\tfail:test (mac)' "$(check "test (linux)" SUCCESS CI $T1 78 780)" "$(check "test (mac)" FAILURE CI $T1 78 781)"
   # Duplicates without run identity and equal or missing timestamps: every instance counts.
-  [ "$(verdict_of "$(check build FAILURE CI $T1)" "$(check build SUCCESS CI $T1)")" = $'BLOCK\tfail:build' ]
-  [ "$(verdict_of "$(check build SUCCESS CI "")" "$(check build FAILURE CI "")")" = $'BLOCK\tfail:build' ]
+  expect $'BLOCK\tfail:build' "$(check build FAILURE CI $T1)" "$(check build SUCCESS CI $T1)"
+  expect $'BLOCK\tfail:build' "$(check build SUCCESS CI "")" "$(check build FAILURE CI "")"
   # A cancelled matrix template without run identity is not superseded.
-  [ "$(verdict_of "$(check 'job (${{ matrix.os }})' CANCELLED PR $T1)" "$(check build SUCCESS PR $T2)")" = $'BLOCK\tfail:job (${{ matrix.os }})' ]
+  expect $'BLOCK\tfail:job (${{ matrix.os }})' "$(check 'job (${{ matrix.os }})' CANCELLED PR $T1)" "$(check build SUCCESS PR $T2)"
+  verdicts_match
 }
 
 @test "pr-ready lets a legacy status context's newer status replace its older one" {
@@ -167,8 +169,12 @@ load selftest_pr_setup
 
 @test "the merge-bot loop over 20 ready PRs makes 20 thread calls, not 210" {
   stub_gh_router
-  for n in $(seq 20 -1 1); do
-    ready_prs "$n"
+  # The 20 PR lists (20 rows down to 1) from one jq, not two per pass (#112).
+  lists=()
+  while IFS= read -r l; do lists+=("$l"); done < <(pr_rows 1 20 me false false MERGEABLE "$OKC" | jq -sc '. as $a | range(20; 0; -1) | $a[:.]')
+  [ "${#lists[@]}" -eq 20 ]
+  for l in "${lists[@]}"; do
+    printf '%s\n' "$l" >"$FX/prs.json"
     "$SCRIPTS/pr-ready.sh" --repo o/r --base main >/dev/null 2>&1
   done
   [ "$(grep -c graphql "$FX/calls")" -eq 20 ]
