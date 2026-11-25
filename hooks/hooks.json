@@ -1,5 +1,5 @@
 {
-  "description": "waaagh lane safety contract (skills/orchestrate/lane-safety.md): blocks deleting protected or out-of-lane paths, pattern kills, quitting Simulator.app, shell writes outside a lane's worktree, and lane edits in the orchestrator's own checkout; at session start, a one-line count of merged worktrees to clean up (wt-session-hint.sh, never removes)",
+  "description": "waaagh lane safety contract (skills/orchestrate/lane-safety.md): blocks deleting protected or out-of-lane paths, pattern kills, quitting Simulator.app, shell writes outside a lane's worktree, and lane edits in the orchestrator's own checkout; new worktrees outside a .noindex root Spotlight skips (worktree-guard.sh); at session start, a one-line count of merged worktrees to clean up (wt-session-hint.sh, never removes)",
   "hooks": {
     "PreToolUse": [
       {
@@ -10,6 +10,16 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/lane-safety.sh",
             "timeout": 10,
             "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/worktree-guard.sh",
+            "timeout": 5
           }
         ]
       }
