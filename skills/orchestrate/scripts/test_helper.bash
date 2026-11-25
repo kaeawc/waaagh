@@ -49,6 +49,9 @@ export GH_READ_FAKE_SLEEP=1 GH_READ_JITTER=0
 export ORCHESTRATE_STATE_DIR="${BATS_TEST_TMPDIR:-$BATS_FILE_TMPDIR}/orch-state-default"
 # No suite paces its stubbed gh through gh-budget.sh unless it puts the shim on PATH itself.
 unset ORCHESTRATE_GH_BUDGET GH_BUDGET_ACTIVE
+# No suite posts review comments unless it sets ORCHESTRATE_REVIEW_POST itself: waaagh's own
+# .claude/settings.json sets it to comment for every session in this repo (#362).
+unset ORCHESTRATE_REVIEW_POST
 # Stubbing a sibling script (#233): put an executable stub of that one name in a directory and
 # export ORCHESTRATE_SCRIPTS_DIR=<dir> (_lib.sh's orch_run); every other sibling still runs from
 # the real tree, so coverage credits it. Never copy the scripts directory: a copy is credited

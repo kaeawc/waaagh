@@ -196,9 +196,10 @@ ship|fix-first|rethink --head <sha> --findings <file>`: a ship whose findings la
 (exit 6) and holds the PR. With `ORCHESTRATE_REVIEW_POST=comment` the findings are also posted on
 the PR as a COMMENT review, once per head and verdict; it never approves or requests changes, and
 the account that posts is whatever gh is authenticated as (a bot token or gh shim makes it the
-bot). The latest verdict is a merge gate (#206): anything but `ship`
-holds the PR on every merge path (`pr-ready.sh` SKIP `review:<verdict>`, `pr-merge.sh` exit 14,
-`merge-queue.sh` `held`) and adds a `hold.sh` hold until `review-ship`; a newer `ship` row releases
+bot). Set it per repo in Claude Code's `env` settings: waaagh commits it in `.claude/settings.json`;
+a repo that keeps it out of version control puts it in `.claude/settings.local.json` (#362). The
+latest verdict is a merge gate (#206): anything but `ship` holds the PR on every merge path
+(`pr-ready.sh` SKIP `review:<verdict>`, `pr-merge.sh` exit 14, `merge-queue.sh` `held`) and adds a `hold.sh` hold until `review-ship`; a newer `ship` row releases
 it. Starting a fix pass on a PR, for any reason, is `"$SCRIPTS/review-ledger.sh" fix --pr N` before
 the lane starts: it holds the PR the same way, so the merge loop never merges a branch a fix lane
 is still writing. Every lane confirms the PR is still open before each push (`roles/_common.md`).
