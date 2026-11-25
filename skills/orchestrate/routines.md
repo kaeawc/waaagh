@@ -42,7 +42,7 @@ Checked on 2026-11-21.
 | Need | How |
 |---|---|
 | Create | `RemoteTrigger create` with `routines.sh render`'s body. The response's `trigger.id` (`trig_…`) is the routine |
-| Wire a worker to GitHub | `RemoteTrigger create_webhook_trigger` with `routines.sh hook`'s body: `{routine_trigger_id, hook_type: "app", source: "github", scope_id: "owner/repo", events: [...], filter: {labels: [...]}}`. Other shapes are refused (`scope: {repository}`, `events: ["issues.labeled"]`, `filter: {label}`). The `labels` filter is accepted but not echoed back, so treat it as unverified: every worker prompt checks its own label first and exits on any other event. `implement` has no filter (`issues` events), on purpose |
+| Wire a worker to GitHub | `RemoteTrigger create_webhook_trigger` with `routines.sh hook`'s body: `{routine_trigger_id, hook_type: "app", source: "github", scope_id: "owner/repo", events: [...], filter: {labels: [...]}}`. Other shapes are refused (`scope: {repository}`, `events: ["issues.labeled"]`, `filter: {label}`). The `labels` filter is accepted but not echoed back, so treat it as unverified until [Check the label filter](#check-the-label-filter-361) records a result: every worker prompt checks its own label first and exits on any other event. `implement` has no filter (`issues` events), on purpose |
 | Change a prompt, model, sources or schedule | `RemoteTrigger update` with `routines.sh render --update`'s body, a partial update that never touches `name` or `enabled` |
 | Enable or disable | `RemoteTrigger update` with `{"enabled": true}` or `{"enabled": false}` |
 | Delete | **Not in the tool.** The claude.ai page deletes a routine with `DELETE /v1/code/triggers/<id>`: open `https://claude.ai/code/routines/<id>`, open the menu beside the routine's name, choose **Delete**, then confirm. This deletes its webhook triggers and run history too. A session can do this in a browser where the owner is signed in to claude.ai (Claude in Chrome), or the owner does it |
@@ -132,6 +132,77 @@ routine.
 5. Optional: remove the labels, the briefs and the broker workflow from the repository, by PR for
    the files. Keep them if the repository may travel again.
 
+## Check the label filter (#361)
+
+Does `filter: {labels: ["cloud-review"]}` stop a worker firing on every `pull_request` event? If
+it does not, each event (opened, synchronize, labeled, ...) costs a worker start that exits at its
+label check, and counts toward the routine's hourly cap of GitHub events. The docs say the Labels
+filter matches "Labels applied to the PR", the PR's labels at the time of the event, not only the
+label just added
+([Add a GitHub trigger](https://code.claude.com/docs/en/routines#add-a-github-trigger)). If so, a
+push to a PR that still carries the label fires it too. Step 7 measures that.
+
+Run this from a Claude Code session on the owner's account, where `RemoteTrigger list` works. A
+Hive worker session gets `Remote triggers unavailable: essential-traffic-only` (2026-11-25).
+`SCRIPTS` is `skills/orchestrate/scripts`. Wait about a minute after each GitHub step, so the
+events stay separate and each run can be matched to its step.
+
+1. **A test repository** `T` (`owner/name`) that the Claude GitHub App is installed on, with
+   webhook delivery on. A throwaway repository is best: the worker will review a PR there. It needs
+   the labels (`"$SCRIPTS/routines.sh" labels --repo T --apply`) plus one other label, e.g.
+   `gh label create other --repo T`. It needs no broker workflow, briefs or state store.
+2. **Create one worker-review routine**, as `travel-routines-create` does, for this role only:
+   - `"$SCRIPTS/routines.sh" render --role review --repo T --env ENV`, then send it with
+     `RemoteTrigger create`. Note `trigger.id` as `ID`, then run
+     `"$SCRIPTS/routines.sh" record --role review --repo T --trigger-id ID`.
+   - `"$SCRIPTS/routines.sh" hook --role review --repo T --trigger-id ID`, then send it with
+     `RemoteTrigger create_webhook_trigger`. This body, filter included, is what gets tested.
+   - `RemoteTrigger update ID {"enabled": true}`. A disabled routine does not fire, so this check is
+     the one place a routine is enabled outside a trip. Step 8 disables it.
+3. **Open a PR without the label** (`opened`):
+
+   ```
+   gh repo clone T /tmp/lf && cd /tmp/lf && git switch -c lf-check
+   date >lf.txt && git add lf.txt && git commit -m "label filter check"
+   git push -u origin lf-check
+   gh pr create --repo T --fill
+   ```
+4. **Push to it** (`synchronize`): `date >>lf.txt && git commit -am push && git push`.
+5. **Add another label** (`labeled`, not ours): `gh pr edit lf-check --repo T --add-label other`.
+6. **Add `cloud-review`** (`labeled`, ours):
+   `gh pr edit lf-check --repo T --add-label cloud-review`. Wait until `RemoteTrigger list_runs ID`
+   shows a run for it.
+7. **Push while the PR carries `cloud-review`** (`synchronize`, labelled):
+   `gh pr view lf-check --repo T --json labels` must list `cloud-review`. If the review run
+   removed it, add it again and wait for that run first. Then
+   `date >>lf.txt && git commit -am push2 && git push`.
+8. **Read the runs, then tear down.** `RemoteTrigger list_runs ID`, then `get_run_log` on each run:
+   its prompt shows the event that fired it. Then `RemoteTrigger update ID {"enabled": false}`,
+   delete the routine on claude.ai (`travel-routines-teardown`),
+   `"$SCRIPTS/routines.sh" forget --repo T --trigger-id ID`, and close the PR.
+
+`list_runs` lists only fires that created a session, which is exactly the cost in question. Read
+which steps got a run:
+
+| Steps 3, 4, 5 | Step 6 (and any re-add) | Step 7 | Reading |
+|---|---|---|---|
+| none | one each | none | the filter applies to the label just added |
+| none | one each | one | the filter applies to the PR's labels: a push to a labelled PR fires the worker |
+| one each | one each | one | the filter is ignored: every `pull_request` event fires the worker |
+| none | none | none | nothing fired: check webhook delivery and that the routine is enabled |
+
+Post which steps got a run, and each run's event, on #361. Then add a dated line under
+[Record](#record), and update the "Wire a worker to GitHub" cell above.
+
+If the filter is ignored, decide one of these:
+- narrow the event, e.g. `events: ["pull_request.labeled"]` if the API takes it (the refusal list
+  above names only `issues.labeled`), then do steps 2–8 again with that body;
+- or accept the cost: each worker fire exits at its label check.
+
+If the filter applies to the PR's labels, a worker also fires on every push made while its label
+is on, e.g. repair's own pushes before it removes `cloud-repair`. Those runs exit at the prompt's
+label check, but each one counts toward the hourly cap.
+
 ## Record
 
 - **2026-11-21.** Created disabled, for kaeawc/auto-mobile (minute 7) and kaeawc/spectra
@@ -140,3 +211,8 @@ routine.
 - **2026-11-21, later.** All eight routines were torn down through the claude.ai page as a teardown
   exercise. Each deletion was a `DELETE /v1/code/triggers/<id>` that returned 200, and
   `RemoteTrigger list` then showed no `travel:` routine.
+- **2026-11-25.** The label filter check (#361) has not run. From a Hive worker session,
+  `RemoteTrigger list` returned `Remote triggers unavailable: essential-traffic-only`, so no
+  routine or webhook trigger could be created there. The owner runs
+  [Check the label filter](#check-the-label-filter-361). Until its result is recorded here,
+  treat the filter as unverified.
