@@ -95,3 +95,16 @@ rl() { "$SCRIPTS/review-ledger.sh" record --repo o/r --pr 5 "$@"; }
   [ "$status" -eq 0 ]
   [[ "$output" == *fixing* ]]
 }
+
+@test "waaagh posts as comments: its .claude/settings.json sets ORCHESTRATE_REVIEW_POST=comment (#362)" {
+  run jq -r '.env.ORCHESTRATE_REVIEW_POST' "$SCRIPTS/../../../.claude/settings.json"
+  [ "$status" -eq 0 ]
+  [ "$output" = comment ]
+}
+
+@test "an inherited ORCHESTRATE_REVIEW_POST does not reach a suite (test_helper unsets it)" {
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  run env ORCHESTRATE_REVIEW_POST=comment bash -c 'BATS_TEST_TMPDIR=$1; source "$2/test_helper.bash"; echo "${ORCHESTRATE_REVIEW_POST-unset}"' _ "$BATS_TEST_TMPDIR" "$SCRIPTS"
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = unset ]
+}
