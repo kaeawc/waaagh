@@ -64,6 +64,7 @@ loops.bats	5
 main-health-auto-rerun.bats	8
 main-health-reruns.bats	4
 merge-holds.bats	11
+merge-pass.bats	6
 merge-queue-deps.bats	5
 merge-queue-exits.bats	7
 merge-queue-gaps.bats	7

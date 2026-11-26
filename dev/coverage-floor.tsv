@@ -43,6 +43,7 @@ skills/orchestrate/scripts/lane-safety.sh	94
 skills/orchestrate/scripts/learning.sh	98
 skills/orchestrate/scripts/loops.sh	90
 skills/orchestrate/scripts/main-health.sh	99
+skills/orchestrate/scripts/merge-pass.sh	80
 skills/orchestrate/scripts/merge-queue.sh	93
 skills/orchestrate/scripts/merge-sensitive.sh	95
 skills/orchestrate/scripts/open-blockers.sh	99
