@@ -5,6 +5,7 @@
 # Usage: pr-merge.sh --pr N --head SHA [--repo OWNER/REPO] [--author LOGIN]...
 #                    [--method squash|merge|rebase] [--main-fix]
 #                    [--admin --except-check NAME... --evidence TEXT] [--ignore-check NAME]...
+#                    [--advisory-file]
 #                    [--worktree DIR --merge-check CMD]
 #   --head      the head SHA (any prefix >= 7) that pr-ready.sh judged; a moved head refuses
 #   --admin     bypass branch protection. Allowed only in the fast path: more open PRs than
@@ -17,6 +18,7 @@
 #               check), or the merge is refused with exit 6.
 #   --ignore-check  advisory checks, passed to pr-ready.sh for that row. If one of them is failing
 #               on the head, --evidence is required too (and logged), as in direct mode.
+#   --advisory-file  add the names in <state dir>/advisory-checks as --ignore-check (#412)
 # Without --admin the same fresh row must be READY for this exact head, or the merge is refused
 # with exit 7 (the row's verdict and reasons are printed), so the merge never depends on the
 # server's branch protection. Ungated merging is a deliberate mode: ORCHESTRATE_DIRECT_MERGE=1,
@@ -88,7 +90,7 @@ source "$here/_lib.sh"
 orch_gh_priority high
 
 repo="" pr="" head="" method=squash admin=no evidence="" main_fix=no mwt="" mcheck=""
-authors=() excepts=() ignores=()
+authors=() excepts=() ignores=() advisory=no
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -100,6 +102,7 @@ while (($#)); do
     --evidence) evidence=$2; shift 2 ;;
     --except-check) excepts+=("$2"); shift 2 ;;
     --ignore-check) ignores+=("$2"); shift 2 ;;
+    --advisory-file) advisory=yes; shift ;;
     --main-fix) main_fix=yes; shift ;;
     --worktree) mwt=$2; shift 2 ;;
     --merge-check) mcheck=$2; shift 2 ;;
@@ -115,6 +118,11 @@ api=$(orch_gh_api pr-merge.sh) || exit 2
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 state=$(orch_state_dir "$repo")
+# --advisory-file: the names in <state dir>/advisory-checks (#412) count as --ignore-check, with
+# its rule: a failing one needs --evidence (the probe below reads the raw state).
+if [[ "$advisory" == yes ]]; then
+  while IFS= read -r c; do [[ -z "$c" ]] || ignores+=("$c"); done < <(orch_advisory_checks "$repo")
+fi
 log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "${head:0:9}" "$*" >>"$state/merges.log"; }
 
 # gql_read ARGS...: a bounded GraphQL read (gh-read.sh) into $got. Returns 0 on success; 1 when
