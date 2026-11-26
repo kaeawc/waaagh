@@ -225,7 +225,9 @@ EOF
       if ((${#t} > 120)); then
         t=${t:0:120}; [[ "$t" != *" "* ]] || t=${t% *}
         # Under a C locale the cut counts bytes: drop a split character's leftover bytes.
-        t=$(printf '%s' "$t" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || printf '%s' "$t")
+        # (iconv -c prints the cleaned text but exits 1 on an incomplete last character.)
+        clean=$(printf '%s' "$t" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)
+        [[ -z "$clean" ]] || t=$clean
       fi
       if [[ "$name" =~ (20[0-9]{2})([01][0-9])([0-3][0-9])$ ]]; then d="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
       elif [[ "$mod" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then d=${BASH_REMATCH[1]}

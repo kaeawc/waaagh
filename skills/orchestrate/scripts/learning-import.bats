@@ -142,10 +142,13 @@ L() { "$SCRIPTS/learning.sh" "$1" --repo o/r "${@:2}"; }
 
 @test "review #423: a title cut under a C locale keeps valid UTF-8" {
   N="$BATS_TEST_TMPDIR/u"; mkdir -p "$N"
-  printf -- '---\nname: cjk-20261106\ndescription: %s\ntype: feedback\n---\nR.\n\n**Why:** w.\n\n**How to apply:** h.\n' "$(printf 'ルール%.0s' $(seq 1 50))" >"$N/f.md"
+  printf -- '---\nname: cjk-20261106\ndescription: %s\ntype: feedback\n---\nR.\n\n**Why:** w.\n\n**How to apply:** h.\n' "x$(printf 'ルール%.0s' $(seq 1 50))" >"$N/f.md"   # the x makes the 120-byte cut split a character
   LC_ALL=C run L import --memory-dir "$N"
   [ "$status" -eq 0 ]
   printf '%s' "${lines[0]}" | iconv -f UTF-8 -t UTF-8 >/dev/null
+  t=${lines[0]#*$'\t'*$'\t'}
+  [ "$(printf '%s' "$t" | wc -c | tr -d ' ')" -le 120 ]   # cut, not doubled
+  [[ "$t" == xルール* ]]
 }
 
 @test "import needs an existing --memory-dir" {
