@@ -84,14 +84,14 @@ L() { "$SCRIPTS/learning.sh" "$1" --repo o/r "${@:2}"; }
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = $'would add\t2026-09-14\tRead the issue before writing Closes' ]
   [ "${lines[1]}" = $'would add\t2026-10-26\tOwner 2026-10-26: keep up to 10 worklanes running' ]
-  [ "${lines[2]}" = "memories=5 feedback=4 new=2 known=0 superseded=1 incomplete=1" ]
-  [ ! -e "$STATE/learnings" ]
+  [ "${lines[2]}" = "memories=5 feedback=4 new=2 known=0 superseded=1 incomplete=1 failed=0" ]
+  [ ! -e "$STATE" ]   # not even the state directory
 }
 
 @test "--apply writes each one with its rule, why and how, and a second run adds nothing" {
   run L import --memory-dir "$M" --apply --roles orchestrator,implementation-lane
   [ "$status" -eq 0 ]
-  [ "${lines[2]}" = "memories=5 feedback=4 new=2 known=0 superseded=1 incomplete=1" ]
+  [ "${lines[2]}" = "memories=5 feedback=4 new=2 known=0 superseded=1 incomplete=1 failed=0" ]
   f="$STATE/learnings/2026-10-26-owner-2026-10-26-keep-up-to-10-worklanes-running.md"
   [ "${lines[1]}" = $'added\t'"$f" ]
   grep -qx 'source: memory:ten-lanes-20261026' "$f"
@@ -101,13 +101,39 @@ L() { "$SCRIPTS/learning.sh" "$1" --repo o/r "${@:2}"; }
   grep -qx '\*\*Rule:\*\* The owner said on 2026-10-26: keep up to 10 worklanes going.' "$f"
   grep -qx '\*\*Why:\*\* throughput matters more than per-change device checks now.' "$f"
   grep -qx -- '- Ignore the CPU cap.' "$f"
-  run grep -c 'Not part of the learning' "$f"
-  [ "$output" = 0 ]
+  grep -qx 'Not part of the learning.' "$f"   # kept: later amendments live after How to apply
   run L import --memory-dir "$M" --apply
   [ "$status" -eq 0 ]
-  [ "$output" = "memories=5 feedback=4 new=0 known=2 superseded=1 incomplete=1" ]
+  [ "$output" = "memories=5 feedback=4 new=0 known=2 superseded=1 incomplete=1 failed=0" ]
   run L list
   [ "${#lines[@]}" -eq 2 ]
+  # Retired after the import: still known, never imported again (review #423).
+  L retire --id 2026-10-26-owner-2026-10-26-keep-up-to-10-worklanes-running --note "folded"
+  run L import --memory-dir "$M" --apply
+  [ "$output" = "memories=5 feedback=4 new=0 known=2 superseded=1 incomplete=1 failed=0" ]
+}
+
+@test "review #423: a taken id or an empty slug gets the memory's name; CRLF memories parse; long titles cut at a word" {
+  N="$BATS_TEST_TMPDIR/n"; mkdir -p "$N"
+  for x in a b; do printf -- '---\nname: dup-%s-20261101\ndescription: Same title\ntype: feedback\n---\nRule %s.\n\n**Why:** w.\n\n**How to apply:** h.\n' "$x" "$x" >"$N/f_$x.md"; done
+  printf -- '---\nname: jp-20261102\ndescription: 日本語のルール\ntype: feedback\n---\nルール.\n\n**Why:** w.\n\n**How to apply:** h.\n' >"$N/f_jp.md"
+  printf -- '---\r\nname: crlf-20261103\r\ndescription: Windows line ends\r\ntype: feedback\r\n---\r\nRule.\r\n\r\n**Why:** w.\r\n\r\n**How to apply:** h.\r\n' >"$N/f_crlf.md"
+  long=$(printf 'word%.0s ' $(seq 1 40))
+  printf -- '---\nname: long-20261104\ndescription: %s\ntype: feedback\n---\nRule.\n\n```\n**Why:** inside a fence\n```\n\n**Why:** w.\n\n**How to apply:** h.\n' "$long" >"$N/f_long.md"
+  run L import --memory-dir "$N"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = $'would add\t2026-11-01\tSame title' ]
+  [ "${lines[1]}" = $'would add\t2026-11-01\tSame title (dup-b-20261101)' ]
+  [ "${lines[2]}" = $'would add\t2026-11-03\tWindows line ends' ]
+  [ "${lines[3]}" = $'would add\t2026-11-02\t日本語のルール (jp-20261102)' ]
+  [[ "${lines[4]}" == $'would add\t2026-11-04\tword word '*"word" ]]
+  [ "${lines[5]}" = "memories=5 feedback=5 new=5 known=0 superseded=0 incomplete=0 failed=0" ]
+  run L import --memory-dir "$N" --apply
+  [ "${lines[5]}" = "memories=5 feedback=5 new=5 known=0 superseded=0 incomplete=0 failed=0" ]
+  f=$(ls "$STATE"/learnings/2026-11-04-*.md)
+  grep -qxF '**Rule:** Rule.' "$f"
+  grep -qxF '**Why:** inside a fence' "$f"     # inside the fence: part of the rule, not its Why
+  grep -qxF '**Why:** w.' "$f"
 }
 
 @test "import needs an existing --memory-dir" {

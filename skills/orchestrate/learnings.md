@@ -51,8 +51,11 @@ of a learning: a rule, **Why:** and **How to apply:**.
 Superseded memories (SUPERSEDED in the description or body) and ones missing a part are skipped,
 and a memory already imported is never imported twice (its source is `memory:<name>`). Imported
 learnings are `--trigger owner --scope repo`, tagged `orchestrator` unless `--roles` says more.
-Run a consolidation pass afterwards: memory often holds an amended rule next to the one it
-replaced.
+Everything after **How to apply:** comes along, because memories often amend their rule there
+("**Update 2026-11-08:** 12 lanes, not 16"): read each imported learning's How part, and supersede
+or rewrite a learning whose Rule line an amendment overrides. Then run a consolidation pass:
+memory often holds an amended rule next to the one it replaced. A retired or superseded import is
+never imported again (`learnings/imported.log`).
 
 ## Scope: local or upstream
 

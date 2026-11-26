@@ -30,9 +30,11 @@
 #             apply:** parts, except MEMORY.md and superseded ones (SUPERSEDED in its description
 #             or body). Title: the description; date: a -YYYYMMDD name suffix, else the memory's
 #             modified date, else the file's; source: memory:<name>; --trigger owner --scope repo,
-#             roles default orchestrator. A memory imported before (same source) is skipped. A dry
-#             run (`would add<TAB>date<TAB>title` lines) unless --apply (`added<TAB>path`); then one
-#             summary line: `memories=<n> feedback=<n> new=<n> known=<n> superseded=<n> incomplete=<n>`
+#             roles default orchestrator. A memory imported before is skipped, even after its
+#             learning was retired or superseded (learnings/imported.log). A title whose id is
+#             taken gets the memory's name added. A dry run (`would add<TAB>date<TAB>title`)
+#             unless --apply (`added<TAB>path`, `not added: <name>: <why>`); then one summary line:
+#             `memories=<n> feedback=<n> new=<n> known=<n> superseded=<n> incomplete=<n> failed=<n>`
 # Env: ORCHESTRATE_LEARNINGS_CONSOLIDATE_EVERY (default 10) learnings added between passes.
 # Exit: 0 ok | 2 usage | 3 refused (id exists, unknown id, repo-scope upstream) | 9 the upstream
 #       issue was sent but its URL is unknown (see <state dir>/ops/upstream-<id>.json)
@@ -79,11 +81,12 @@ done
 refuse() { echo "refused: $*"; exit 3; }
 
 repo=$(orch_repo "$repo")
-state=$(orch_state_dir "$repo")
+# A dry-run import writes nothing, not even the state directory.
+if [[ "$cmd" == import && "$apply" != yes ]]; then state="$(orch_state_root)/${repo//\//__}"
+else state=$(orch_state_dir "$repo"); fi
 dir="$state/learnings"
 ledger="$state/campaign.json"
 today=$(jq -rn --argjson t "$(orch_now)" '$t | strftime("%Y-%m-%d")')
-# A dry-run import writes nothing, not even the directory.
 [[ "$cmd" == import && "$apply" != yes ]] || mkdir -p "$dir"
 
 # fm FILE KEY: one front-matter value.
@@ -178,23 +181,29 @@ EOF
     roles=${roles:-orchestrator}
     [[ "$roles" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || usage
     trim() { local t=$1; t=${t#"${t%%[![:space:]]*}"}; t=${t%"${t##*[![:space:]]}"}; printf '%s' "$t"; }
-    memories=0 feedback=0 new=0 known=0 superseded=0 incomplete=0
+    # The slug add derives from a title (same steps), to see an id clash before add refuses it.
+    slug_of() { norm "$1" | tr ' ' '-' | cut -c1-50 | sed 's/-*$//'; }
+    # Every memory ever imported, kept apart from the entries: a retired or superseded import
+    # must not come back on the next run.
+    imported="$dir/imported.log"
+    memories=0 feedback=0 new=0 known=0 superseded=0 incomplete=0 failed=0 ids=" "
     for m in "$memdir"/*.md; do
       [[ -f "$m" && "${m##*/}" != MEMORY.md ]] || continue
       memories=$((memories + 1))
       # Front matter (name, description, type, modified), then the body split at **Why:** and
-      # **How to apply:** (a later `## ` heading ends it). Fields: lines, then \036-separated parts.
-      parsed=$(awk 'NR == 1 && $0 == "---" { fm = 1; next }
+      # **How to apply:** outside code fences; everything after **How to apply:** is kept (later
+      # amendments live there). CR line ends are dropped. Fields: lines, then \036-separated parts.
+      parsed=$(awk '{ sub(/\r$/, "") }
+        NR == 1 && $0 == "---" { fm = 1; next }
         fm && $0 == "---" { fm = 0; sec = "rule"; next }
         fm { if (sub(/^name: */, "")) name = $0; else if (sub(/^description: */, "")) desc = $0
              else if ($0 ~ /^ *type: *feedback *$/) type = "feedback"; else if (sub(/^ *modified: */, "")) mod = $0
              next }
         sec == "" { sec = "rule" }
-        sec == "how" && /^## / { sec = "end" }
-        sec == "end" { next }
         /SUPERSEDED/ { sup = 1 }
-        /^\*\*Why:\*\*/ { sec = "why"; sub(/^\*\*Why:\*\* */, "") }
-        /^\*\*How to apply:\*\*/ { sec = "how"; sub(/^\*\*How to apply:\*\* */, "") }
+        /^ *```/ { fence = !fence }
+        !fence && sec == "rule" && /^\*\*Why:\*\*/ { sec = "why"; sub(/^\*\*Why:\*\* */, "") }
+        !fence && sec == "why" && /^\*\*How to apply:\*\*/ { sec = "how"; sub(/^\*\*How to apply:\*\* */, "") }
         { part[sec] = part[sec] $0 "\n" }
         END { if (desc ~ /SUPERSEDED/) sup = 1
           printf "%s\n%s\n%s\n%s\n%s\n\036%s\036%s\036%s", name, desc, type, sup ? "yes" : "no", mod,
@@ -208,21 +217,35 @@ EOF
       name=${name:-$(basename "$m" .md)}
       if [[ "$sup" == yes ]]; then superseded=$((superseded + 1)); continue; fi
       if [[ -z "$r" || -z "$w" || -z "$h" ]]; then incomplete=$((incomplete + 1)); continue; fi
-      if grep -qxF "source: memory:$name" "$dir"/[0-9]*.md 2>/dev/null; then known=$((known + 1)); continue; fi
+      if grep -qxF "memory:$name" "$imported" 2>/dev/null ||
+        grep -qxF "source: memory:$name" "$dir"/[0-9]*.md 2>/dev/null; then known=$((known + 1)); continue; fi
       t=$(trim "${desc:-$name}")
       if [[ "$t" == \"*\" || "$t" == \'*\' ]]; then t=${t:1:${#t}-2}; fi   # a quoted YAML scalar
-      t=${t:0:120}
+      # At most 120 characters, cut at a word boundary (never inside a multi-byte character).
+      if ((${#t} > 120)); then t=${t:0:120}; [[ "$t" != *" "* ]] || t=${t% *}; fi
       if [[ "$name" =~ (20[0-9]{2})([01][0-9])([0-3][0-9])$ ]]; then d="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
       elif [[ "$mod" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then d=${BASH_REMATCH[1]}
       else d=$(date -r "$m" +%Y-%m-%d); fi
-      new=$((new + 1))
-      if [[ "$apply" != yes ]]; then printf 'would add\t%s\t%s\n' "$d" "$t"; continue; fi
-      out=$("$here/learning.sh" add --repo "$repo" --title "$t" --rule "$r" --why "$w" --how "$h" \
-        --source "memory:$name" --trigger owner --scope repo --roles "$roles" --date "$d") ||
-        { echo "not added: $name: $out"; new=$((new - 1)); known=$((known + 1)); continue; }
-      printf 'added\t%s\n' "$out"
+      # An empty slug (no ASCII letters or digits) or an id taken (by an entry or earlier in this
+      # run): the memory's name goes into the title to tell them apart.
+      sl=$(slug_of "$t")
+      if [[ -z "$sl" || -f "$dir/$d-$sl.md" || "$ids" == *" $d-$sl "* ]]; then
+        t="$t ($name)"; sl=$(slug_of "$t")
+      fi
+      if [[ -z "$sl" || -f "$dir/$d-$sl.md" || "$ids" == *" $d-$sl "* ]]; then
+        echo "not added: $name: no free id for its title"; failed=$((failed + 1)); continue
+      fi
+      ids+="$d-$sl "
+      if [[ "$apply" != yes ]]; then printf 'would add\t%s\t%s\n' "$d" "$t"; new=$((new + 1)); continue; fi
+      if out=$("$here/learning.sh" add --repo "$repo" --title "$t" --rule "$r" --why "$w" --how "$h" \
+        --source "memory:$name" --trigger owner --scope repo --roles "$roles" --date "$d" 2>&1); then
+        echo "memory:$name" >>"$imported"
+        printf 'added\t%s\n' "$out"; new=$((new + 1))
+      else
+        echo "not added: $name: $(head -n 1 <<<"$out")"; failed=$((failed + 1))
+      fi
     done
-    echo "memories=$memories feedback=$feedback new=$new known=$known superseded=$superseded incomplete=$incomplete"
+    echo "memories=$memories feedback=$feedback new=$new known=$known superseded=$superseded incomplete=$incomplete failed=$failed"
     ;;
   list)
     while IFS= read -r f; do
