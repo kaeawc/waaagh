@@ -45,6 +45,14 @@ STUB
 #!/bin/sh
 echo "loops $*" >>"$FX/calls"
 STUB
+  cat >"$ST/review-ledger.sh" <<'STUB'
+#!/bin/sh
+echo "review-ledger $*" >>"$FX/calls"; cat "$FX/shipped-ledger" 2>/dev/null || true
+STUB
+  cat >"$ST/cancel-stale-runs.sh" <<'STUB'
+#!/bin/sh
+echo "cancel-stale-runs $*" >>"$FX/calls"; echo "stale=2 kept=5 cancelled=2 failed=0"
+STUB
   cat >"$ST/hold.sh" <<'STUB'
 #!/bin/sh
 echo "hold $*" >>"$FX/calls"; cat "$FX/holds" 2>/dev/null || true
@@ -192,6 +200,20 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
   mp
   [ "$status" -eq 2 ]
   [[ "$output" == *"group name ui*: use letters"* ]]
+}
+
+@test "--advisory-file reaches pr-ready and pr-merge; approved PRs join PR_READY_EXTRA; --cancel-every N" {
+  printf '44\taaa44\n' >"$FX/shipped-ledger"
+  mp --advisory-file --cancel-every 2
+  [ "$status" -eq 0 ]
+  grep -q '^pr-ready .* --advisory-file$' "$FX/calls"
+  grep -q '^pr-merge .*--advisory-file --pr 7 ' "$FX/calls"
+  grep -qx 'extra= 44 ' "$FX/calls"
+  [ "${lines[1]}" = "merged 12" ]
+  [ "${lines[2]}" = "cancel-stale-runs stale=2 kept=5 cancelled=2 failed=0" ]   # after merge 2
+  [ "$(grep -c '^cancel-stale-runs --repo o/r --apply$' "$FX/calls")" -eq 1 ]
+  mp --cancel-every x
+  [ "$status" -eq 2 ]
 }
 
 @test "an outage stops the pass (exit 5); pr-ready failing is exit 3; usage errors are exit 2" {
