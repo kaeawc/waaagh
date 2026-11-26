@@ -88,6 +88,7 @@ regen-merge.bats	4
 regression-gates.bats	11
 repair-inflight.bats	10
 reporting.bats	5
+reship.bats	4
 review-callers.bats	6
 review-followup.bats	9
 review-gate-gaps.bats	6
