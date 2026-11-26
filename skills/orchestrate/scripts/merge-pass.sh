@@ -20,6 +20,8 @@
 #      with --author, --ignore-check and --exclude-label (needs-device-recheck always), the
 #      priority file's PRs in PR_READY_EXTRA; a short page is reported (`note pr-ready ...`), and
 #      shipped-blocked.sh prints each approved PR that is not READY.
+#   Serial groups: <state dir>/serial-groups, `NAME REGEX` per line; PRs whose title matches REGEX
+#      (extended, any case) merge one per pass (`hold <n> serial:NAME (one merge per pass)`).
 #   3. READY rows in order: the PR numbers in <state dir>/merge-priority first (one per line, in
 #      file order), then the rest oldest first. Before each: device-recheck.sh check (anything
 #      but exit 0 holds it).
@@ -116,6 +118,29 @@ rows() {
     awk -v pf="$state/merge-priority" 'BEGIN { while ((getline l < pf) > 0) if (l ~ /^[0-9]+/) { sub(/[^0-9].*/, "", l); if (!(l in rank)) rank[l] = ++r } }
       { k = ($1 in rank) ? rank[$1] : 1000000 + $1; print k, $0 }' | sort -n | cut -d' ' -f2-
 }
+# Serial groups (#412): <state dir>/serial-groups, one `NAME REGEX` per line (# comments): open
+# PRs whose title matches REGEX (extended, any case) merge one per pass, so PRs that edit the same
+# files land one at a time on a fresh base. The first READY row of a group in merge order goes;
+# when it merges, the group's other rows wait for the next pass.
+group_of() { :; }
+gfile="$state/serial-groups"
+if [[ -f "$gfile" ]]; then
+  titles=$("$here/gh-read.sh" --tries 3 -- pr list --repo "$repo" --state open --limit 300 --json number,title \
+    --jq '.[] | "\(.number)\t\(.title)"' 2>/dev/null) ||
+    { echo "merge-pass.sh: serial-groups is set but the PR titles could not be read; nothing merged" >&2; beat; summary; exit 3; }
+  groups=$(sed -e 's/\r$//' -e 's/^[[:space:]]*//' "$gfile" | grep -v -e '^$' -e '^#' || true)
+  # group_of N: the first group whose regex matches N's title, or nothing.
+  group_of() {
+    local t name re
+    t=$(awk -F'\t' -v n="$1" '$1 == n { sub(/^[^\t]*\t/, ""); print; exit }' <<<"$titles")
+    [[ -n "$t" ]] || return 0
+    while read -r name re; do
+      [[ -n "$re" ]] || continue
+      if grep -qiE -- "$re" <<<"$t" 2>/dev/null; then echo "$name"; return 0; fi
+    done <<<"$groups"
+  }
+fi
+merged_groups=" "
 done_prs=" "
 if ! list=$(rows); then echo "merge-pass.sh: pr-ready.sh failed; nothing merged" >&2; beat; summary; exit 3; fi
 ready=$(grep -c . <<<"$list" || true)
@@ -132,14 +157,18 @@ while ((merged < cap)); do
   done <<<"$list"
   [[ -n "$next" ]] || break
   done_prs+="$next "
+  g=$(group_of "$next")
+  if [[ -n "$g" && "$merged_groups" == *" $g "* ]]; then
+    echo "hold $next serial:$g (one merge per pass)"; held=$((held + 1)); continue
+  fi
   dl=$(orch_run device-recheck.sh check --repo "$repo" --pr "$next" 2>/dev/null) && drc=0 || drc=$?
   # Anything but a clear answer holds: a crash must not let a device-regression fix through.
   if ((drc != 0)); then echo "hold $next ${dl:-device-recheck.sh exit $drc}"; held=$((held + 1)); continue; fi
-  if [[ "$dry" == yes ]]; then echo "would merge $next"; merged=$((merged + 1)); continue; fi
+  if [[ "$dry" == yes ]]; then echo "would merge $next"; merged=$((merged + 1)); [[ -z "$g" ]] || merged_groups+="$g "; continue; fi
   out=$(orch_run pr-merge.sh "${merge_args[@]}" --pr "$next" --head "$head" 2>&1) && rc=0 || rc=$?
   first=$(head -n 1 <<<"$out")
   if ((rc == 0)); then
-    echo "merged $next"; merged=$((merged + 1))
+    echo "merged $next"; merged=$((merged + 1)); [[ -z "$g" ]] || merged_groups+="$g "
     list=$(rows) || { echo "merge-pass.sh: pr-ready.sh failed after a merge; pass ended" >&2; break; }
     continue
   fi

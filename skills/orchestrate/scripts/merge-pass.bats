@@ -61,6 +61,7 @@ case "$all" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   "api repos/o/r/actions/runs?"*) cat "$FX/green" 2>/dev/null ;;
   "api repos/o/r/compare/"*) cat "$FX/ahead" ;;
+  "pr list --repo o/r --state open"*) [ ! -f "$FX/titles-fail" ] || { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }; cat "$FX/titles" ;;
   *) echo "unexpected gh call: $all" >&2; exit 9 ;;
 esac
 STUB
@@ -150,6 +151,24 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
   [ "${lines[2]}" = "shipped-blocked #9 verdict=BLOCK reason=fail:build" ]
   [ "${lines[3]}" = "hold 7 device-recheck.sh exit 1" ]
   [ "${lines[4]}" = "merged 12" ]
+}
+
+@test "serial groups merge one PR per group per pass; the rest wait (#412)" {
+  printf '# layout files\nweb  prototype-web|prototype\\(web\\)\n' >"$STATE/serial-groups"
+  printf '7\tprototype-web: nav\n12\tProtoType-Web: header\n30\tfix crash\n' >"$FX/titles"
+  mp
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "merged 7" ]
+  [ "${lines[1]}" = "hold 12 serial:web (one merge per pass)" ]
+  [ "${lines[2]}" = "merged 30" ]
+  # The front cannot merge: the next of its group goes instead.
+  echo 7 >"$FX/merge-7"; echo "not ready: BLOCK threads=1" >"$FX/merge-7.out"
+  mp
+  [ "${lines[0]}" = "hold 7 exit=7 not ready: BLOCK threads=1" ]
+  [ "${lines[1]}" = "merged 12" ]
+  touch "$FX/titles-fail"
+  mp
+  [ "$status" -eq 3 ]
 }
 
 @test "an outage stops the pass (exit 5); pr-ready failing is exit 3; usage errors are exit 2" {
