@@ -112,14 +112,17 @@ for ((i = 0; i < ${#kids[@]}; i++)); do
   fi
   # A long-lived base (develop, release/*) can have merged PRs and an open one: the open one
   # carries what merged after the last merged one.
-  open_pn=$(jq -r '[.[] | select(.state == "open")] | first | .number // empty' <<<"$parents")
+  read -r open_pn open_ph <<<"$(jq -r '[.[] | select(.state == "open")] | first // {} | "\(.number // "") \(.head.sha // "")"' <<<"$parents")"
   if ! st=$(ghr api "repos/$repo/compare/$mc...$ph" --jq .status); then
     line unreadable "#$pn" "the compare of its merge commit with #$pn's head could not be read"; unread=1; continue
   fi
   if [[ "$st" == identical || "$st" == ahead ]]; then
     line OK "#$pn" "contained in the head #$pn merged with"; ok=$((ok + 1)); continue
   fi
-  if [[ -n "$open_pn" ]]; then
+  # PENDING only when the open PR's head really holds it (an abandoned PR, or a base deleted and
+  # made again, would hide a stranded child for good).
+  if [[ -n "$open_pn" ]] && ost=$(ghr api "repos/$repo/compare/$mc...$open_ph" --jq .status) &&
+    [[ "$ost" == identical || "$ost" == ahead ]]; then
     line PENDING "#$open_pn" "not in #$pn's merged head; the base's open PR #$open_pn carries it"; continue
   fi
   [[ -n "$tree" ]] || load_tree

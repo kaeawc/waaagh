@@ -131,9 +131,15 @@ sm() { run "$SCRIPTS/stranded-merges.sh" --repo o/r "$@"; }
   pr 91 develop 2026-11-17T05:00:00Z c91 | closed
   { pr 92 main 2026-11-10T00:00:00Z m92 p92; jq -n '{number: 93, state: "open", merged_at: null, head: {sha: "p93"}}'; } | jq -s . >"$FX/parent-develop.json"
   echo behind >"$FX/compare-c91...p92"
+  echo ahead >"$FX/compare-c91...p93"
   sm
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = $'91\tPENDING\tbase=develop\tparent=#93\tnot in #92'"'"'s merged head; the base'"'"'s open PR #93 carries it' ]
+  # An open PR whose head does not hold the child (abandoned, or the base made again) hides nothing.
+  echo diverged >"$FX/compare-c91...p93"
+  sm
+  [ "$status" -eq 3 ]
+  [[ "${lines[0]}" == $'91\tUNVERIFIED\tbase=develop\tparent=#92\t'* ]]
 }
 
 @test "review #417: a truncated tree with every checked file present is UNVERIFIED; paths are URL-encoded" {
