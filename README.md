@@ -18,6 +18,14 @@ on small, tested `gh` scripts, so the expensive model reads verdict lines instea
 
 Then ask for it (`/waaagh:orchestrate`, or "orchestrate the open bugs in this repo").
 
+### Update
+
+The plugin sets no `version`, so Claude Code versions an install by commit: every merge to `main`
+is an update. Pull it with `/plugin marketplace update waaagh` in a session, or
+`claude plugin update waaagh@waaagh` in a shell, then start a new session. Third-party
+marketplaces do not auto-update by default; turn it on under `/plugin` → Marketplaces, or with
+`autoUpdate` on the marketplace's `extraKnownMarketplaces` entry in your settings.
+
 ### Requirements
 
 - `gh` (authenticated), `jq`, `git`; `jj` is supported when the checkout is colocated
