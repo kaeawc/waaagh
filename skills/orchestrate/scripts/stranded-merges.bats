@@ -79,6 +79,7 @@ sm() { run "$SCRIPTS/stranded-merges.sh" --repo o/r "$@"; }
   pr 41 main 2026-11-17T04:00:00Z m41 p41 | jq -s . >"$FX/parent-stack-c.json"
   echo diverged >"$FX/compare-c31...p41"
   jq -n '[{number: 43, state: "open", merged_at: null, head: {sha: "p43"}}]' >"$FX/parent-stack-d.json"
+  echo ahead >"$FX/compare-c33...p43"
   sm
   [ "$status" -eq 3 ]
   [ "${lines[0]}" = $'31\tUNVERIFIED\tbase=stack-c\tparent=#41\tnot in #41'"'"'s merged head and it added no files: compare its diff with main by hand' ]
@@ -140,6 +141,21 @@ sm() { run "$SCRIPTS/stranded-merges.sh" --repo o/r "$@"; }
   sm
   [ "$status" -eq 3 ]
   [[ "${lines[0]}" == $'91\tUNVERIFIED\tbase=develop\tparent=#92\t'* ]]
+  # The open PR's compare cannot be read: unreadable (exit 4), never a guessed STRANDED.
+  rm "$FX/compare-c91...p93"
+  run --separate-stderr "$SCRIPTS/stranded-merges.sh" --repo o/r
+  [ "$status" -eq 4 ]
+  [[ "${lines[0]}" == $'91\tunreadable\tbase=develop\tparent=#93\t'* ]]
+}
+
+@test "delta review #417: an open-only parent whose head lacks the child is judged by its files" {
+  pr 95 remade 2026-11-17T05:00:00Z c95 | closed
+  jq -n '[{number: 96, state: "open", merged_at: null, head: {sha: "p96"}}]' >"$FX/parent-remade.json"
+  echo diverged >"$FX/compare-c95...p96"
+  printf 'x1\tnew/thing.go\n' >"$FX/files-95"
+  sm
+  [ "$status" -eq 3 ]
+  [[ "${lines[0]}" == $'95\tSTRANDED\tbase=remade\tparent=#96\tmissing on main: 1/1 added files (new/thing.go)'* ]]
 }
 
 @test "review #417: a truncated tree with every checked file present is UNVERIFIED; paths are URL-encoded" {

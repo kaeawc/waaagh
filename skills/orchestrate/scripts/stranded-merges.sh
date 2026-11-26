@@ -102,29 +102,36 @@ for ((i = 0; i < ${#kids[@]}; i++)); do
   if ! parents=$(ghj api "repos/$repo/pulls?head=$owner:$base&state=all&per_page=20"); then
     line unreadable - "the base's PRs could not be read"; unread=1; continue
   fi
-  read -r pn ph <<<"$(jq -r '([.[] | select(.merged_at != null)] | sort_by(.merged_at) | last)
-    // ([.[] | select(.state == "open")] | first) // {} | "\(.number // "") \(.head.sha // "")"' <<<"$parents")"
-  if [[ -z "$pn" ]]; then
+  # The latest merged PR from the base, and its open one (a long-lived base such as develop has
+  # both: the open one carries what merged after the last merged one).
+  read -r pn ph <<<"$(jq -r '[.[] | select(.merged_at != null)] | sort_by(.merged_at) | last // {}
+    | "\(.number // "") \(.head.sha // "")"' <<<"$parents")"
+  read -r open_pn open_ph <<<"$(jq -r '[.[] | select(.state == "open")] | first // {}
+    | "\(.number // "") \(.head.sha // "")"' <<<"$parents")"
+  if [[ -z "$pn" && -z "$open_pn" ]]; then
     line ORPHAN - "no PR from $base ever merged or is open: its changes are only on $base"; bad=1; continue
   fi
-  if jq -e --argjson p "$pn" '.[] | select(.number == $p) | .merged_at == null' <<<"$parents" >/dev/null; then
-    line PENDING "#$pn" "the base's PR is still open"; continue
+  if [[ -n "$pn" ]]; then
+    if ! st=$(ghr api "repos/$repo/compare/$mc...$ph" --jq .status); then
+      line unreadable "#$pn" "the compare of its merge commit with #$pn's head could not be read"; unread=1; continue
+    fi
+    if [[ "$st" == identical || "$st" == ahead ]]; then
+      line OK "#$pn" "contained in the head #$pn merged with"; ok=$((ok + 1)); continue
+    fi
   fi
-  # A long-lived base (develop, release/*) can have merged PRs and an open one: the open one
-  # carries what merged after the last merged one.
-  read -r open_pn open_ph <<<"$(jq -r '[.[] | select(.state == "open")] | first // {} | "\(.number // "") \(.head.sha // "")"' <<<"$parents")"
-  if ! st=$(ghr api "repos/$repo/compare/$mc...$ph" --jq .status); then
-    line unreadable "#$pn" "the compare of its merge commit with #$pn's head could not be read"; unread=1; continue
+  # PENDING only when the open PR's head really holds it: an abandoned PR, or a base deleted and
+  # made again, must not hide a stranded child.
+  if [[ -n "$open_pn" ]]; then
+    if ! ost=$(ghr api "repos/$repo/compare/$mc...$open_ph" --jq .status); then
+      line unreadable "#$open_pn" "the compare of its merge commit with open #$open_pn's head could not be read"; unread=1; continue
+    fi
+    if [[ "$ost" == identical || "$ost" == ahead ]]; then
+      if [[ -n "$pn" ]]; then line PENDING "#$open_pn" "not in #$pn's merged head; the base's open PR #$open_pn carries it"
+      else line PENDING "#$open_pn" "the base's PR is still open"; fi
+      continue
+    fi
   fi
-  if [[ "$st" == identical || "$st" == ahead ]]; then
-    line OK "#$pn" "contained in the head #$pn merged with"; ok=$((ok + 1)); continue
-  fi
-  # PENDING only when the open PR's head really holds it (an abandoned PR, or a base deleted and
-  # made again, would hide a stranded child for good).
-  if [[ -n "$open_pn" ]] && ost=$(ghr api "repos/$repo/compare/$mc...$open_ph" --jq .status) &&
-    [[ "$ost" == identical || "$ost" == ahead ]]; then
-    line PENDING "#$open_pn" "not in #$pn's merged head; the base's open PR #$open_pn carries it"; continue
-  fi
+  pn=${pn:-$open_pn}   # the PR named in the verdicts below
   [[ -n "$tree" ]] || load_tree
   if ! added=$(ghr api --paginate "repos/$repo/pulls/$n/files?per_page=100" --jq '.[] | select(.status == "added") | "\(.sha)\t\(.filename)"'); then
     line unreadable "#$pn" "the PR's files could not be read"; unread=1; continue
