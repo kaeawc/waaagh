@@ -131,7 +131,8 @@ for ((i = 0; i < ${#kids[@]}; i++)); do
       continue
     fi
   fi
-  pn=${pn:-$open_pn}   # the PR named in the verdicts below
+  # The PR named in the verdicts below, and how its head is described.
+  if [[ -n "$pn" ]]; then where="#$pn's merged head"; else pn=$open_pn where="open #$open_pn's head"; fi
   [[ -n "$tree" ]] || load_tree
   if ! added=$(ghr api --paginate "repos/$repo/pulls/$n/files?per_page=100" --jq '.[] | select(.status == "added") | "\(.sha)\t\(.filename)"'); then
     line unreadable "#$pn" "the PR's files could not be read"; unread=1; continue
@@ -155,17 +156,17 @@ for ((i = 0; i < ${#kids[@]}; i++)); do
     elif ((rc != 0)); then unread=1; missing+=("$f?"); fi
   done <<<"$added"
   if ((total == 0)); then
-    line UNVERIFIED "#$pn" "not in #$pn's merged head and it added no files: compare its diff with main by hand"
+    line UNVERIFIED "#$pn" "not in $where and it added no files: compare its diff with main by hand"
     unverified=$((unverified + 1)); bad=1
   elif ((${#missing[@]})); then
     line STRANDED "#$pn" "missing on main: ${#missing[@]}/$looked added files (${missing[*]}); retarget a new PR with its changes to main"
     stranded=$((stranded + 1)); bad=1
   elif ((looked < total)); then
-    line UNVERIFIED "#$pn" "not in #$pn's merged head; $looked of its $total added files checked (all on main), the rest were not: compare by hand"
+    line UNVERIFIED "#$pn" "not in $where; $looked of its $total added files checked (all on main), the rest were not: compare by hand"
     unverified=$((unverified + 1)); bad=1
   else
     note=""; ((moved == 0)) || note=" ($moved under another directory)"
-    line RELANDED "#$pn" "not in #$pn's merged head, but its $total added files are on main$note"; relanded=$((relanded + 1))
+    line RELANDED "#$pn" "not in $where, but its $total added files are on main$note"; relanded=$((relanded + 1))
   fi
 done
 echo "checked=$checked stranded=$stranded relanded=$relanded unverified=$unverified ok=$ok since=${cutoff:0:10}"
