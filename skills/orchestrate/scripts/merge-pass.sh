@@ -16,7 +16,7 @@
 #   --dry-run       print what it would merge; merge nothing
 # A pass:
 #   1. main-health.sh (with --workflow when given): red or unknown holds the whole pass.
-#   2. hold.sh check --release (met holds are released: `released #N ...`), then pr-ready.sh
+#   2. hold.sh check --release (met holds are released: hold.sh's `released: PR N ...` lines), then pr-ready.sh
 #      with --author, --ignore-check and --exclude-label (needs-device-recheck always), the
 #      priority file's PRs in PR_READY_EXTRA; a short page is reported (`note pr-ready ...`), and
 #      shipped-blocked.sh prints each approved PR that is not READY.
@@ -102,7 +102,8 @@ for a in ${authors[@]+"${authors[@]}"}; do merge_args+=(--author "$a"); done
 for c in ${ignores[@]+"${ignores[@]}"}; do merge_args+=(--ignore-check "$c"); done
 
 # Holds whose release condition is met are released first (merge-bot step 2).
-orch_run hold.sh check --repo "$repo" --release 2>/dev/null | grep -E '^#[0-9]+ met ' | sed 's/^/released /' || true
+# hold.sh prints `released: PR N ...` only once the hold file is rewritten.
+orch_run hold.sh check --repo "$repo" --release 2>/dev/null | grep -E '^released: PR [0-9]+' || true
 # Priority PRs are classified even when a full page leaves them out (PR_READY_EXTRA).
 extra=$(awk '/^[0-9]+/ { sub(/[^0-9].*/, ""); printf "%s ", $0 }' "$state/merge-priority" 2>/dev/null || true)
 # rows: "<n> <head>" for every READY row, in merge order. The full rows are kept in $rowfile for

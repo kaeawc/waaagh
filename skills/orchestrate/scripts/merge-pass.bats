@@ -140,12 +140,12 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
 
 @test "review #424: a device-recheck crash holds; met holds are released; a short page is reported" {
   touch "$FX/crash-7"
-  echo '#5 met until:main-green' >"$FX/holds"
+  printf '#5 met until:main-green\nreleased: PR 5 (until:main-green, held 2h)\n#6 met until:merged:4\n' >"$FX/holds"   # #6: the rewrite failed
   echo ' truncated=yes page=60' >"$FX/ready-sum"
   echo 'shipped-blocked #9 verdict=BLOCK reason=fail:build' >"$FX/shipped"
   mp --cap 1
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = "released #5 met until:main-green" ]
+  [ "${lines[0]}" = "released: PR 5 (until:main-green, held 2h)" ]
   [ "${lines[1]}" = "note pr-ready open=4 ready=3 truncated=yes page=60" ]
   [ "${lines[2]}" = "shipped-blocked #9 verdict=BLOCK reason=fail:build" ]
   [ "${lines[3]}" = "hold 7 device-recheck.sh exit 1" ]
