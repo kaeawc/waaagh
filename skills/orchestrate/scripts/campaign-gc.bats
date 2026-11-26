@@ -96,7 +96,7 @@ gc() { run "$SCRIPTS/campaign-gc.sh" --state-dir "$C" "$@"; }
   TZ=UTC touch -t 202611170000 "$C/fresh/new.apk"
   gc --apply --top 0
   [ "$status" -eq 0 ]
-  [[ "${lines[4]}" == "mode=apply entries=5 busy=0 recent=1 odd-names=2 remove="* ]]
+  [[ "${lines[4]}" == "mode=apply entries=5 busy=0 recent=1 odd-names=2 kept-generic=1 remove="* ]]
   [ -f "$C/evidence/src/com/acme/build/Main.kt" ]
   [ -f "$C/evidence/repo/.git/refs/heads/build/topic" ]
   [ -f "$C/evidence/repo/.git/x.tmp" ]
@@ -105,6 +105,22 @@ gc() { run "$SCRIPTS/campaign-gc.sh" --state-dir "$C" "$@"; }
   [ -f "$C/evidence/out"$'\t'"x/result.md" ]
   [ -d "$C/evidence/keep"$'\n'"y/build" ]
   [ ! -e "$C/verify/run1/checkout/node_modules" ]   # the real build output still goes
+}
+
+@test "delta review #419: a rejected generic directory is searched and counted; Flutter and Python builds count" {
+  mkdir -p "$C/evidence/src/build/sub" "$C/evidence/flutter/build" "$C/evidence/py/build"
+  : >"$C/evidence/src/build/sub/app.apk"; echo 'fun x() {}' >"$C/evidence/src/build/Keep.kt"
+  : >"$C/evidence/flutter/pubspec.yaml"; : >"$C/evidence/flutter/build/out.bin"
+  : >"$C/evidence/py/pyproject.toml"; : >"$C/evidence/py/build/lib.so"
+  find "$C" -exec env TZ=UTC touch -t 202601010000 {} +
+  TZ=UTC touch -t 202611170000 "$C/fresh/new.apk"
+  gc --apply --top 0
+  [ "$status" -eq 0 ]
+  [[ "${lines[4]}" == *" kept-generic=1 "* ]]
+  [ ! -e "$C/evidence/src/build/sub/app.apk" ]     # found inside the rejected source dir
+  [ -f "$C/evidence/src/build/Keep.kt" ]
+  [ ! -e "$C/evidence/flutter/build" ]
+  [ ! -e "$C/evidence/py/build" ]
 }
 
 @test "a candidate written to after the listing is skipped at apply time" {

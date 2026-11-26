@@ -14,7 +14,8 @@
 #   build    directories DerivedData and derived-data; node_modules, build, .gradle, target,
 #            .build, .kotlin and Pods only beside a build definition (package.json, build.gradle*,
 #            settings.gradle*, gradlew, Cargo.toml, Package.swift, Podfile, pom.xml, go.mod,
-#            CMakeLists.txt, Makefile, *.xcodeproj, *.xcworkspace)
+#            CMakeLists.txt, Makefile, pubspec.yaml, pyproject.toml, setup.py, meson.build,
+#            *.xcodeproj, *.xcworkspace); one elsewhere is searched, not taken (kept-generic)
 #   binary   *.apk, *.aab, *.ipa files; *.app, *.xcarchive bundles
 #   temp     *.tmp files
 #   capture  *.pcm, *.hprof files (gzipped, not removed: they are evidence)
@@ -25,7 +26,8 @@
 # a tab or newline in it (counted as odd-names). Symbolic links are not followed.
 # Output (TSV): one line per category, `<category> <count> <size>`, then the largest candidates,
 # `<size> <category> <path below the campaign>`, then one summary line:
-#   mode=dry-run|apply entries=<n> busy=<n> recent=<n> [odd-names=<n>] remove=<size> compress=<size>
+#   mode=dry-run|apply entries=<n> busy=<n> recent=<n> [odd-names=<n>] [kept-generic=<n>]
+#   remove=<size> compress=<size>
 #   [freed=<size>]
 #   (entries: top-level entries searched; busy: entries skipped; recent: candidates skipped)
 # Every --apply action is appended to <campaign>/campaign-gc.log.
@@ -94,40 +96,44 @@ if ((${#entries[@]})); then
 fi
 
 # Candidates. `.git` and `.jj` are never entered; a top-level entry is never a candidate itself.
-: >"$work/list" ; : >"$work/found"
-for e in ${entries[@]+"${entries[@]}"}; do
-  find "$e" -mindepth 1 \( -type d \( -name .git -o -name .jj \) -prune \) \
+# scan DIR...: append DIR's candidates (NUL-separated) to $work/next.
+scan() {
+  find "$@" -mindepth 1 \( -type d \( -name .git -o -name .jj \) -prune \) \
     -o \( -type d \( -name node_modules -o -name build -o -name .gradle -o -name DerivedData -o -name derived-data \
       -o -name target -o -name .build -o -name .kotlin -o -name Pods -o -name '*.app' -o -name '*.xcarchive' \) -prune -print0 \) \
     -o \( -type f \( -name '*.apk' -o -name '*.aab' -o -name '*.ipa' -o -name '*.tmp' -o -name '*.pcm' -o -name '*.hprof' \) -print0 \) \
-    2>/dev/null >>"$work/found" || true
-done
+    2>/dev/null >>"$work/next" || true
+}
 # has_build_file DIR: DIR holds a build definition, so a generic name below it (build, target,
 # node_modules, ...) is that build's output and not, say, a source package named `build`.
 has_build_file() {
   local f
   for f in package.json build.gradle build.gradle.kts settings.gradle settings.gradle.kts gradlew Cargo.toml \
-    Package.swift Podfile pom.xml go.mod CMakeLists.txt Makefile; do
+    Package.swift Podfile pom.xml go.mod CMakeLists.txt Makefile pubspec.yaml pyproject.toml setup.py \
+    meson.build; do
     [[ ! -e "$1/$f" ]] || return 0
   done
   for f in "$1"/*.xcodeproj "$1"/*.xcworkspace; do [[ ! -e "$f" ]] || return 0; done
   return 1
 }
 # Kept as candidates: paths with no tab or newline (the size listing below is one line per path),
-# generic build directory names only beside a build definition, and nothing newer than the cutoff
-# (in use or still wanted).
-recent=0 odd=0
-: >"$work/old"
-if [[ -s "$work/found" ]]; then
+# generic build directory names only beside a build definition (a rejected one is searched
+# instead, and counted as kept-generic), and nothing newer than the cutoff (in use or still wanted).
+recent=0 odd=0 generic=0
+: >"$work/old" ; : >"$work/next"
+((${#entries[@]} == 0)) || scan "${entries[@]}"
+while [[ -s "$work/next" ]]; do
+  mv "$work/next" "$work/batch"; : >"$work/next"
   while IFS= read -r -d '' p; do
     case "$p" in *$'\t'* | *$'\n'*) odd=$((odd + 1)); continue ;; esac
     case "${p##*/}" in
-      node_modules | build | .gradle | target | .build | .kotlin | Pods) has_build_file "${p%/*}" || continue ;;
+      node_modules | build | .gradle | target | .build | .kotlin | Pods)
+        has_build_file "${p%/*}" || { generic=$((generic + 1)); scan "$p"; continue; } ;;
     esac
     if [[ -n "$(find "$p" -newer "$work/cutoff" -print -quit 2>/dev/null)" ]]; then recent=$((recent + 1))
     else printf '%s\0' "$p" >>"$work/old"; fi
-  done <"$work/found"
-fi
+  done <"$work/batch"
+done
 [[ ! -s "$work/old" ]] || xargs -0 du -sk <"$work/old" 2>/dev/null >"$work/list" || true
 
 # Category of each candidate: "<kb>\t<category>\t<path>".
@@ -150,6 +156,7 @@ remove=$(awk -F'\t' '$2 != "capture" { s += $1 } END { print s + 0 }' "$work/can
 compress=$(awk -F'\t' '$2 == "capture" { s += $1 } END { print s + 0 }' "$work/cands")
 summary="mode=$([[ "$apply" == yes ]] && echo apply || echo dry-run) entries=${#entries[@]} busy=$busy recent=$recent"
 ((odd == 0)) || summary+=" odd-names=$odd"
+((generic == 0)) || summary+=" kept-generic=$generic"
 summary+=" remove=$(human "$remove") compress=$(human "$compress")"
 
 if [[ "$apply" == yes ]]; then
