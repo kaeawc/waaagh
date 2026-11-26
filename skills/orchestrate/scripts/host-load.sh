@@ -8,7 +8,8 @@
 # Usage: host-load.sh [--worktree-root DIR] [--top N] [--load-factor F] [--min-free-gb G]
 #                     [--backoff-gb G] [--third-slot-gb G]
 #   --worktree-root  where lane worktrees live (default $ORCHESTRATE_WORKTREE_ROOT, else
-#                    <main checkout>/.claude/worktrees when run inside a git checkout)
+#                    ~/worktrees.noindex/<repo> (wt-root.sh, #394), else the legacy
+#                    <main checkout>/.claude/worktrees, when run inside a git checkout)
 #   --top            processes listed per table (default 5; 0 lists none and skips attribution)
 #   admit only when the 1-min load is below F x CPUs (default 1.5) and free memory is at least
 #   --min-free-gb (default 8); below --backoff-gb (default 4) lanes should back off. A third device
@@ -111,7 +112,7 @@ cause_line=$(sed -n 1p <<<"$rows")
 kind=$(cut -f2 <<<"$cause_line")
 lead=$(sed -n 2p <<<"$rows" | cut -f2)
 case "$kind" in
-  indexing) hint="system indexing leads: remove finished worktrees (wt-cleanup.sh --apply), then ask the owner to exclude ${root:-the worktree root} from Spotlight (System Settings > Spotlight > Search Privacy) or plan a reboot; fseventsd keeps its memory until a restart" ;;
+  indexing) hint="system indexing leads: remove finished worktrees (wt-cleanup.sh --apply), move the rest under a .noindex root Spotlight skips (wt-root.sh migrate, dry run first), and only then ask the owner to exclude ${root:-the worktree root} from Spotlight (System Settings > Spotlight > Search Privacy) or plan a reboot; fseventsd keeps its memory until a restart" ;;
   lanes) hint="lane processes lead${lead:+ (worktree $lead)}: start no lane; check gate-slot.sh is used and that finished lanes stopped the PIDs they started" ;;
   ci-runner) hint="a CI runner on this host leads: lower the lane cap for its duration; do not look for a runaway lane" ;;
   idle) hint="nothing leads the CPU table: the load is falling or brief" ;;

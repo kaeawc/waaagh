@@ -33,7 +33,7 @@ HOLD or BACKOFF turns the `dispatch=<n>` reason into `host-hold`.
 
 | `cause` | What it means | What to do |
 |---|---|---|
-| `indexing` | `fseventsd` or Spotlight (`mds`, `mds_stores`, `mdworker`) leads, usually churning on many worktrees full of `node_modules` and build output | Shrink the worktree set first (`wt-cleanup.sh --apply`). Then raise an owner blocker: exclude the worktree root from Spotlight (System Settings > Spotlight > Search Privacy). `fseventsd` keeps its memory until a restart, so if its RSS stays high, ask the owner to plan a reboot. Waiting does not fix it. |
+| `indexing` | `fseventsd` or Spotlight (`mds`, `mds_stores`, `mdworker`) leads, usually churning on many worktrees full of `node_modules` and build output | Shrink the worktree set first (`wt-cleanup.sh --apply`). Then move the rest under a `.noindex` root Spotlight skips (`wt-root.sh migrate`, dry run first; see [Worktrees out of Spotlight](#worktrees-out-of-spotlight)). Only then raise an owner blocker: exclude the worktree root from Spotlight (System Settings > Spotlight > Search Privacy). `fseventsd` keeps its memory until a restart, so if its RSS stays high, ask the owner to plan a reboot. Waiting does not fix it. |
 | `lanes` | Processes whose working directory is in a lane worktree lead | Hold; check gates go through `gate-slot.sh` and that finished lanes stopped the PIDs they started. The worktree column names the lane. |
 | `ci-runner` | A self-hosted CI runner on this host leads (spectra names it since v0.1.0, kaeawc/spectra#603) | Lower the lane cap while it runs; do not look for a runaway lane. |
 | `other` | Something outside the lanes leads (a backup, a browser, an IDE) | Tell the owner what it is. Do not stop it. |
@@ -142,6 +142,39 @@ tests. Such a check names an exclusive class (#396):
 - **Gradle and Xcode commands** take their classes first, then run through `heavy-build-slot.sh`
   as usual, inside them.
 - The tick's `slot-stalled` line covers class slots too (`slot-stalled class-db pid=...`).
+
+## Worktrees out of Spotlight
+
+Spotlight does not index a directory whose name ends in `.noindex`, nor anything below it (#394).
+Lane worktrees under an indexed directory drive `mds`, `mdworker` and `fseventsd`: one 14-CPU host
+with about 60 worktrees showed `cause indexing` at load 20 with no lane running. So every worktree
+goes under one root per repository:
+
+- **The root** is `~/worktrees.noindex/<repo>` (`<repo>`: the main checkout's directory name).
+  `WAAAGH_WORKTREE_HOME` moves the `~/worktrees.noindex` part; `ORCHESTRATE_WORKTREE_ROOT` replaces
+  the whole per-repo root (then it is yours to keep out of Spotlight). `host-load.sh`,
+  `triage-tick.sh` and spectra's `--root` read the same root (`orch_worktree_root`), falling back to
+  the legacy `<main checkout>/.claude/worktrees` until the new root exists.
+- **Create lane worktrees there**:
+  `git worktree add "$("$SCRIPTS/wt-root.sh" path <lane>)" -b <branch> origin/<base>`, or in jj
+  `jj workspace add "$("$SCRIPTS/wt-root.sh" path <lane>)"`, never `../<repo>-<lane>` beside the
+  checkout. A scratch tree (a reviewer's detached checkout) goes in a temp dir (`mktemp -d`).
+- **The guard.** The plugin's PreToolUse(Bash) hook `worktree-guard.sh` denies `git worktree add` and
+  `jj workspace add` outside a `.noindex` directory, the root or a temp dir, and names the path to
+  use, as the lane-safety hook names the lane root. It is on for macOS. `WAAAGH_WORKTREE_GUARD=off`
+  turns it off and `=on` turns it on elsewhere. A Bash call that names neither `worktree` nor
+  `workspace` costs about 6 ms with no `jq`, of which a bare bash start is about 4 ms. A
+  matching call costs about 40-50 ms (Linux, bash 5 and 3.2, median of 40).
+- **Existing trees** move with `wt-root.sh migrate`. It is a dry run until `--apply`, and each idle
+  tree moves by `git worktree move` into the root. It never moves the main worktree, a locked tree,
+  a tree any process works in (spectra `owner --under`, read again before each move) or onto a name
+  already taken. For a whole directory of trees, `wt-root.sh migrate --dir DIR --apply` runs
+  `mv DIR DIR.noindex && ln -s DIR.noindex DIR` and then `git worktree repair`, so old paths keep
+  working through the link.
+- **Claude Code's `isolation: worktree`** creates `<repo>/.claude/worktrees/<name>`, which no Bash
+  hook sees. Run `wt-root.sh migrate --dir <main checkout>/.claude/worktrees --apply` once (it
+  creates the link pair when the directory does not exist yet). The trees then land in
+  `.claude/worktrees.noindex` through the link, and the guard accepts the path where the link lands.
 
 ## Lane-private build output
 
