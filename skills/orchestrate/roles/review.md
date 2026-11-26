@@ -11,7 +11,8 @@ Read any other ref without moving a checkout: `git -C <worktree> show <ref>:<pat
 branch in an existing worktree, the orchestrator's least of all: a reviewer that fetched a PR into
 a branch there, checked it out and deleted it left the orchestrator on a detached HEAD (#317). If
 your prompt does tell you to execute something, do it in a worktree of your own
-(`git -C <worktree> worktree add --detach <scratch dir> <sha>`) and remove it before you report.
+(`git -C <worktree> worktree add --detach "$(mktemp -d)/review" <sha>`: a temp dir, which Spotlight
+skips and the worktree-guard hook allows) and remove it before you report.
 
 Look for, in order: behaviour regressions against the change's own intent or in callers the diff
 did not update (see "Callers of changed functions" below); for refactors, any change in the order of side effects, in what runs inside
