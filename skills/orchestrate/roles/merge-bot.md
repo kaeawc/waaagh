@@ -51,6 +51,10 @@ review of the new head. Never record a verdict yourself: report the PR as held b
    `{{SCRIPTS}}/device-recheck.sh check --repo {{REPO}} --pr <n>`: exit 3 (held: it fixes a
    device-found regression with no passing device recheck on this head) or 4: do not merge it;
    report it as held with the line (`{{SCRIPTS}}/../regression-gates.md`).
+   A standing merge loop can run steps 2-3 as one script instead: `{{SCRIPTS}}/merge-pass.sh
+   --repo {{REPO}} {{AUTHORS}} [--cap N] [--max-untested N --workflow NAME]` each pass, then
+   sleep. It reports `merged` and `hold` lines; exit 13 holds (review needed) still get the
+   review request below, by hand.
 3. For each `READY` row, oldest first, one at a time:
    `{{SCRIPTS}}/pr-merge.sh --repo {{REPO}} {{AUTHORS}} --pr <n> --head <head>`.
    Exit 3 (head moved or ineligible), 4 (red hold), 5 (GitHub refused) or 7 (no longer READY on a
