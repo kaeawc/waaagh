@@ -123,7 +123,11 @@ review on every poll or push.
   worktree instead of writing around the edit hook. Paste its rules into every lane brief; the
   plugin's PreToolUse hook (`scripts/lane-safety.sh`) enforces them on Bash calls.
 - **Long lanes use named, persistent worktrees.** An isolated agent worktree may be removed
-  automatically if the agent returns before editing anything; create the lane's worktree yourself.
+  automatically if the agent returns before editing anything; create the lane's worktree yourself,
+  under the repository's `.noindex` root so Spotlight skips it:
+  `git worktree add "$("$SCRIPTS/wt-root.sh" path <lane>)" -b <branch> origin/<base>` (jj:
+  `jj workspace add "$("$SCRIPTS/wt-root.sh" path <lane>)"`). On macOS the plugin's
+  `worktree-guard.sh` hook refuses any other path; see `host-load.md` → Worktrees out of Spotlight.
 - **Never edit a running shell script in place.** Bash reads scripts incrementally, so an in-place
   edit corrupts the live run. Write the new version beside it and `mv` it into place.
 - **Check lane identity and artifacts, not the word "completed".** The lane's worktree must show
