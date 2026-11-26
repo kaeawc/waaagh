@@ -118,22 +118,34 @@ L() { "$SCRIPTS/learning.sh" "$1" --repo o/r "${@:2}"; }
   for x in a b; do printf -- '---\nname: dup-%s-20261101\ndescription: Same title\ntype: feedback\n---\nRule %s.\n\n**Why:** w.\n\n**How to apply:** h.\n' "$x" "$x" >"$N/f_$x.md"; done
   printf -- '---\nname: jp-20261102\ndescription: 日本語のルール\ntype: feedback\n---\nルール.\n\n**Why:** w.\n\n**How to apply:** h.\n' >"$N/f_jp.md"
   printf -- '---\r\nname: crlf-20261103\r\ndescription: Windows line ends\r\ntype: feedback\r\n---\r\nRule.\r\n\r\n**Why:** w.\r\n\r\n**How to apply:** h.\r\n' >"$N/f_crlf.md"
+  # Two long titles that share their first 60 characters on one date (the slug keeps 50).
+  for x in c d; do printf -- '---\nname: longdup-%s-20261105\ndescription: %s tail %s\ntype: feedback\n---\nR.\n\n**Why:** w.\n\n**How to apply:** h.\n' "$x" "$(printf 'same%.0s ' $(seq 1 15))" "$x" >"$N/g_$x.md"; done
   long=$(printf 'word%.0s ' $(seq 1 40))
   printf -- '---\nname: long-20261104\ndescription: %s\ntype: feedback\n---\nRule.\n\n```\n**Why:** inside a fence\n```\n\n**Why:** w.\n\n**How to apply:** h.\n' "$long" >"$N/f_long.md"
   run L import --memory-dir "$N"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = $'would add\t2026-11-01\tSame title' ]
-  [ "${lines[1]}" = $'would add\t2026-11-01\tSame title (dup-b-20261101)' ]
+  [ "${lines[1]}" = $'would add\t2026-11-01\tdup-b-20261101: Same title' ]
   [ "${lines[2]}" = $'would add\t2026-11-03\tWindows line ends' ]
-  [ "${lines[3]}" = $'would add\t2026-11-02\t日本語のルール (jp-20261102)' ]
+  [ "${lines[3]}" = $'would add\t2026-11-02\tjp-20261102: 日本語のルール' ]
   [[ "${lines[4]}" == $'would add\t2026-11-04\tword word '*"word" ]]
-  [ "${lines[5]}" = "memories=5 feedback=5 new=5 known=0 superseded=0 incomplete=0 failed=0" ]
+  [[ "${lines[5]}" == $'would add\t2026-11-05\tsame same '* ]]
+  [[ "${lines[6]}" == $'would add\t2026-11-05\tlongdup-d-20261105: same same '* ]]
+  [ "${lines[7]}" = "memories=7 feedback=7 new=7 known=0 superseded=0 incomplete=0 failed=0" ]
   run L import --memory-dir "$N" --apply
-  [ "${lines[5]}" = "memories=5 feedback=5 new=5 known=0 superseded=0 incomplete=0 failed=0" ]
+  [ "${lines[7]}" = "memories=7 feedback=7 new=7 known=0 superseded=0 incomplete=0 failed=0" ]
   f=$(ls "$STATE"/learnings/2026-11-04-*.md)
   grep -qxF '**Rule:** Rule.' "$f"
   grep -qxF '**Why:** inside a fence' "$f"     # inside the fence: part of the rule, not its Why
   grep -qxF '**Why:** w.' "$f"
+}
+
+@test "review #423: a title cut under a C locale keeps valid UTF-8" {
+  N="$BATS_TEST_TMPDIR/u"; mkdir -p "$N"
+  printf -- '---\nname: cjk-20261106\ndescription: %s\ntype: feedback\n---\nR.\n\n**Why:** w.\n\n**How to apply:** h.\n' "$(printf 'ルール%.0s' $(seq 1 50))" >"$N/f.md"
+  LC_ALL=C run L import --memory-dir "$N"
+  [ "$status" -eq 0 ]
+  printf '%s' "${lines[0]}" | iconv -f UTF-8 -t UTF-8 >/dev/null
 }
 
 @test "import needs an existing --memory-dir" {

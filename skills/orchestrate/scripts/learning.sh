@@ -222,7 +222,11 @@ EOF
       t=$(trim "${desc:-$name}")
       if [[ "$t" == \"*\" || "$t" == \'*\' ]]; then t=${t:1:${#t}-2}; fi   # a quoted YAML scalar
       # At most 120 characters, cut at a word boundary (never inside a multi-byte character).
-      if ((${#t} > 120)); then t=${t:0:120}; [[ "$t" != *" "* ]] || t=${t% *}; fi
+      if ((${#t} > 120)); then
+        t=${t:0:120}; [[ "$t" != *" "* ]] || t=${t% *}
+        # Under a C locale the cut counts bytes: drop a split character's leftover bytes.
+        t=$(printf '%s' "$t" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || printf '%s' "$t")
+      fi
       if [[ "$name" =~ (20[0-9]{2})([01][0-9])([0-3][0-9])$ ]]; then d="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
       elif [[ "$mod" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then d=${BASH_REMATCH[1]}
       else d=$(date -r "$m" +%Y-%m-%d); fi
@@ -230,7 +234,7 @@ EOF
       # run): the memory's name goes into the title to tell them apart.
       sl=$(slug_of "$t")
       if [[ -z "$sl" || -f "$dir/$d-$sl.md" || "$ids" == *" $d-$sl "* ]]; then
-        t="$t ($name)"; sl=$(slug_of "$t")
+        t="$name: $t"; sl=$(slug_of "$t")   # the name first: the slug keeps only 50 characters
       fi
       if [[ -z "$sl" || -f "$dir/$d-$sl.md" || "$ids" == *" $d-$sl "* ]]; then
         echo "not added: $name: no free id for its title"; failed=$((failed + 1)); continue
