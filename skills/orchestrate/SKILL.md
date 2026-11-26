@@ -123,7 +123,11 @@ review on every poll or push.
   worktree instead of writing around the edit hook. Paste its rules into every lane brief; the
   plugin's PreToolUse hook (`scripts/lane-safety.sh`) enforces them on Bash calls.
 - **Long lanes use named, persistent worktrees.** An isolated agent worktree may be removed
-  automatically if the agent returns before editing anything; create the lane's worktree yourself.
+  automatically if the agent returns before editing anything; create the lane's worktree yourself,
+  under the repository's `.noindex` root so Spotlight skips it:
+  `git worktree add "$("$SCRIPTS/wt-root.sh" path <lane>)" -b <branch> origin/<base>` (jj:
+  `jj workspace add "$("$SCRIPTS/wt-root.sh" path <lane>)"`). On macOS the plugin's
+  `worktree-guard.sh` hook refuses any other path; see `host-load.md` → Worktrees out of Spotlight.
 - **Never edit a running shell script in place.** Bash reads scripts incrementally, so an in-place
   edit corrupts the live run. Write the new version beside it and `mv` it into place.
 - **Check lane identity and artifacts, not the word "completed".** The lane's worktree must show
@@ -543,6 +547,9 @@ their wall caps, and lanes re-run them, which makes it worse.
   reconnects to it. Never `./gradlew --stop`; it stops other lanes' builds
   (`skills/orchestrate/host-load.md`).
 - Run the changed-files prepush check once per slice, not once per commit.
+- **Old campaign state** goes through `"$SCRIPTS/campaign-gc.sh" --repo OWNER/REPO` (dry run):
+  rebuildable output and binaries left in evidence directories, and raw captures to gzip. Show the
+  owner the summary and run `--apply` only after the owner agrees, as with worktrees.
 - **Finished worktrees** go through `"$SCRIPTS/wt-cleanup.sh"` (dry run; `--apply` to remove): only
   clean, idle, pushed, unlocked, unprotected worktrees nobody is working in, via `git worktree
   remove` without `--force`. A worktree that is any process's cwd is never removed; run it each

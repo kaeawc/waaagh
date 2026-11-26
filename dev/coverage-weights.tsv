@@ -5,6 +5,7 @@ blocked-candidates.bats	8
 brief-size.bats	5
 brief-versions.bats	5
 budget.bats	33
+campaign-gc.bats	6
 cancel-stale-runs.bats	3
 claude-lanes.bats	4
 cli-contract.bats	24
