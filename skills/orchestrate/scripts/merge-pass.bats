@@ -22,7 +22,9 @@ STUB
 echo "pr-ready $*" >>"$FX/calls"
 n=$(( $(cat "$FX/ready-n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$FX/ready-n"
 [ ! -f "$FX/ready-fail" ] || exit 3
+echo "extra=$PR_READY_EXTRA" >>"$FX/calls"
 if [ -f "$FX/rows-$n" ]; then cat "$FX/rows-$n"; else cat "$FX/rows"; fi
+echo "open=4 ready=3$(cat "$FX/ready-sum" 2>/dev/null)" >&2
 STUB
   cat >"$ST/pr-merge.sh" <<'STUB'
 #!/bin/sh
@@ -36,11 +38,20 @@ STUB
 echo "device-recheck $*" >>"$FX/calls"
 n=""; while [ $# -gt 0 ]; do [ "$1" = --pr ] && n=$2; shift; done
 if [ -f "$FX/held-$n" ]; then echo "held: #$n needs a device recheck"; exit 3; fi
+if [ -f "$FX/crash-$n" ]; then exit 1; fi
 echo "clear"
 STUB
   cat >"$ST/loops.sh" <<'STUB'
 #!/bin/sh
 echo "loops $*" >>"$FX/calls"
+STUB
+  cat >"$ST/hold.sh" <<'STUB'
+#!/bin/sh
+echo "hold $*" >>"$FX/calls"; cat "$FX/holds" 2>/dev/null || true
+STUB
+  cat >"$ST/shipped-blocked.sh" <<'STUB'
+#!/bin/sh
+echo "shipped-blocked $*" >>"$FX/calls"; cat "$FX/shipped" 2>/dev/null || true
 STUB
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -60,7 +71,7 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
 
 @test "READY rows merge oldest first, priority file first, rows read again after each merge" {
   printf '30\n# comment\n' >"$STATE/merge-priority"
-  mp --author me --ignore-check CodeRabbit --every 180
+  mp --author me --ignore-check CodeRabbit --every 180 --loop-pid 4242
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "merged 30" ]
   [ "${lines[1]}" = "merged 7" ]
@@ -69,7 +80,10 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
   grep -qx 'pr-merge --repo o/r --author me --ignore-check CodeRabbit --pr 30 --head aaa30' "$FX/calls"
   grep -qx 'pr-ready --repo o/r --author me --ignore-check CodeRabbit --exclude-label needs-device-recheck' "$FX/calls"
   [ "$(cat "$FX/ready-n")" -eq 4 ]   # once, then after each of the 3 merges
-  grep -qx 'loops heartbeat merge-pass --repo o/r --every 180' "$FX/calls"
+  grep -qx "loops heartbeat merge-pass --repo o/r --pid 4242 --every 180" "$FX/calls"   # the loop PID, not the pass
+  grep -qx 'extra= 30 ' "$FX/calls"                       # priority PRs classified off-page too
+  grep -q '^hold check --repo o/r --release$' "$FX/calls"
+  grep -q '^shipped-blocked --repo o/r --rows ' "$FX/calls"
 }
 
 @test "--cap stops the pass; a refused merge and a device hold are held, the pass goes on" {
@@ -102,7 +116,10 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
 }
 
 @test "--max-untested caps merges by commits past the last green run, and holds at the limit" {
-  echo deadbeef00 >"$FX/green"; echo 1 >"$FX/ahead"
+  jq -n '{workflow_runs: [{name: "Lint", head_sha: "lint000000", created_at: "2026-11-02"},
+    {name: "On Merge", head_sha: "older00000", created_at: "2026-11-01"},
+    {name: "On Merge", head_sha: "deadbeef00", created_at: "2026-11-03"}]}' >"$FX/green"
+  echo 1 >"$FX/ahead"
   mp --max-untested 3 --workflow "On Merge"
   [ "$status" -eq 0 ]
   [ "${lines[2]}" = "pass merged=2 held=0 ready=3 cap=2 untested=1" ]
@@ -111,10 +128,28 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
   mp --max-untested 3 --workflow "On Merge"
   [ "$status" -eq 4 ]
   [ "${lines[0]}" = "hold untested=3 since=deadbeef0" ]
-  : >"$FX/green"
+  grep -q '^gh api repos/o/r/compare/deadbeef00...main' "$FX/calls"   # the newest green run
+  echo '{"workflow_runs": []}' >"$FX/green"
+  mp --max-untested 3 --workflow 'On "Merge"'
+  [ "$status" -eq 4 ]
+  [[ "${lines[0]}" == 'hold untested=unknown since=- (no green On "Merge" run on main)' ]]
   mp --max-untested 3 --workflow "On Merge"
   [ "$status" -eq 4 ]
   [[ "${lines[0]}" == "hold untested=unknown since=- (no green On Merge run on main)" ]]
+}
+
+@test "review #424: a device-recheck crash holds; met holds are released; a short page is reported" {
+  touch "$FX/crash-7"
+  echo '#5 met until:main-green' >"$FX/holds"
+  echo ' truncated=yes page=60' >"$FX/ready-sum"
+  echo 'shipped-blocked #9 verdict=BLOCK reason=fail:build' >"$FX/shipped"
+  mp --cap 1
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "released #5 met until:main-green" ]
+  [ "${lines[1]}" = "note pr-ready open=4 ready=3 truncated=yes page=60" ]
+  [ "${lines[2]}" = "shipped-blocked #9 verdict=BLOCK reason=fail:build" ]
+  [ "${lines[3]}" = "hold 7 device-recheck.sh exit 1" ]
+  [ "${lines[4]}" = "merged 12" ]
 }
 
 @test "an outage stops the pass (exit 5); pr-ready failing is exit 3; usage errors are exit 2" {
