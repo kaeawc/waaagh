@@ -82,7 +82,7 @@ if ((${#entries[@]})); then
     done
     entries=(${kept[@]+"${kept[@]}"})
   elif [[ "$apply" == yes ]]; then
-    echo "campaign-gc.sh: who works in the campaign could not be told (spectra owner --under); nothing was changed" >&2
+    echo "campaign-gc.sh: who works in the campaign could not be told: spectra did not answer; nothing was changed" >&2
     exit 5
   else
     echo "campaign-gc.sh: spectra could not tell who works in the campaign; a busy entry may be listed" >&2
