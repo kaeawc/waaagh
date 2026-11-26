@@ -172,10 +172,10 @@ load selftest_pr_setup
   merge_fixture
   sim_fails
   mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"; echo sim >"$ORCHESTRATE_STATE_DIR/o__r/advisory-checks"
-  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --advisory-file
   [ "$status" -eq 6 ]
   [[ "$output" == "refused: sim failing on this head"* ]]
-  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --evidence "sim: classifier INFRA run 77"
+  run "$SCRIPTS/pr-merge.sh" --repo o/r --pr 1 --head abcdef0 --advisory-file --evidence "sim: classifier INFRA run 77"
   [ "$status" -eq 0 ]
 }
 

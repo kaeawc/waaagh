@@ -80,16 +80,18 @@ orch_author() {
 # The one place that default is spelled (#304).
 orch_state_root() { echo "${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}"; }
 
-# orch_state_dir OWNER/REPO -> the repo's durable campaign directory (created on demand).
 # orch_advisory_checks OWNER/REPO: the repository's advisory checks, one name per line from
-# <state dir>/advisory-checks (blank lines and # comments skipped; #412). pr-ready.sh and
-# pr-merge.sh add them to --ignore-check, so a campaign lists them once instead of in every call.
+# <state dir>/advisory-checks (#412). Blank lines and lines whose first non-blank character is #
+# are skipped; a name keeps any # inside it ("C# build"). Read only by callers that ask for it
+# (pr-ready.sh and pr-merge.sh --advisory-file), as --ignore-check names.
 orch_advisory_checks() {
   local f
   f="$(orch_state_root)/${1//\//__}/advisory-checks"
   [[ -f "$f" ]] || return 0
-  sed -e 's/[[:space:]]*#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$f" | grep -v '^$' || true
+  sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$f" | grep -v -e '^$' -e '^#' || true
 }
+
+# orch_state_dir OWNER/REPO -> the repo's durable campaign directory (created on demand).
 orch_state_dir() {
   local d
   d="$(orch_state_root)/${1//\//__}"

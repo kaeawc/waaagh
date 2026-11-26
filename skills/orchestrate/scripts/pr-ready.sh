@@ -4,7 +4,7 @@
 # Usage: pr-ready.sh [--repo OWNER/REPO] [--author LOGIN]... [--base BRANCH]
 #                    [--ignore-check NAME]... [--hold PR]... [--hold-label LABEL]
 #                    [--exclude-label LABEL]... [--head-match REGEX]
-#                    [--min-pass N] [--no-threads] [--delta] [--pr N] [--no-advisory-file]
+#                    [--min-pass N] [--no-threads] [--delta] [--pr N] [--advisory-file]
 # Output (TSV): number  verdict  head  mergeable  passed  detail
 #   READY  mergeable, no pending check, no failed check, every required check passed, and no
 #          unresolved review thread
@@ -44,8 +44,8 @@
 # by a newer run; a legacy status context, by its own newer status. Without a run id nothing is
 # superseded, so every instance counts. A cancelled check otherwise counts as failed.
 # --author defaults to the authenticated gh user; repeat it to add e.g. app/dependabot.
-# --ignore-check drops an advisory check from every count (repeatable); the names in
-# <state dir>/advisory-checks (one per line, # comments) are added unless --no-advisory-file (#412). --min-pass (default 1)
+# --ignore-check drops an advisory check from every count (repeatable); --advisory-file adds the
+# names in <state dir>/advisory-checks the same way (#412). Only callers that pass it are affected. --min-pass (default 1)
 # guards against a PR whose checks have not been reported yet. --pr limits the output to one PR.
 # Review threads of every READY or BLOCK PR are read in one batched GraphQL call (50 PRs per call), following every further page.
 # Required checks come from rulesets and classic branch protection; a failed or malformed read of
@@ -83,7 +83,7 @@ case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esa
 source "$here/_lib.sh"
 orch_gh_priority normal
 
-repo="" base="" hold_label="hold" head_match="" min_pass=1 threads=yes delta=no only_pr="" advisory=yes
+repo="" base="" hold_label="hold" head_match="" min_pass=1 threads=yes delta=no only_pr="" advisory=no
 all_args=("$@")
 authors=() ignores=() holds=() excludes=()
 while (($#)); do
@@ -92,7 +92,7 @@ while (($#)); do
     --author) authors+=("$2"); shift 2 ;;
     --base) base=$2; shift 2 ;;
     --ignore-check) ignores+=("$2"); shift 2 ;;
-    --no-advisory-file) advisory=no; shift ;;
+    --advisory-file) advisory=yes; shift ;;
     --hold) holds+=("$2"); shift 2 ;;
     --hold-label) hold_label=$2; shift 2 ;;
     --exclude-label) excludes+=("$2"); shift 2 ;;
@@ -109,7 +109,7 @@ api=$(orch_gh_api pr-ready.sh) || exit 2
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 [[ -n "$base" ]] || base=$(orch_default_branch "$repo")
-# The campaign's advisory checks (<state dir>/advisory-checks, #412) count as --ignore-check.
+# --advisory-file: the campaign's advisory checks (<state dir>/advisory-checks, #412) as --ignore-check.
 if [[ "$advisory" == yes ]]; then
   while IFS= read -r c; do [[ -z "$c" ]] || ignores+=("$c"); done < <(orch_advisory_checks "$repo")
 fi
