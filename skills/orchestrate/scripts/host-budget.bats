@@ -45,6 +45,7 @@ proc() { # PID CPU RSS_KIB COMMAND DIR
   [[ "$(row verdict)" == $'HOLD\t1-min load 120.5 >= 24.00 (1.5 x 16 CPUs)' ]]
   [[ "$(row cause)" == $'indexing\tindexing leads the CPU table (fseventsd, mds_stores)' ]]
   [[ "$(row hint)" == *"exclude $R from Spotlight (System Settings > Spotlight > Search Privacy) or plan a reboot"* ]]
+  [[ "$(row hint)" == *"move the rest under a .noindex root Spotlight skips (wt-root.sh migrate, dry run first), and only then ask the owner to exclude"* ]]
   # Top tables: by CPU and by RSS, each process tied to its worktree; then the process families.
   [[ "$(row top-cpu)" == $'310\t160\t18432\tfseventsd\t-' ]]
   [[ "$output" == *$'top-cpu\t400\t20\t512\tnode\tlane-a'* ]]

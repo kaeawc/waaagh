@@ -423,11 +423,28 @@ orch_spectra_require() {
     return 1
   fi
 }
-# orch_worktree_root: where this checkout's lane worktrees live (ORCHESTRATE_WORKTREE_ROOT, else
-# <main checkout>/.claude/worktrees when it exists), resolved; returns 1 when there is none.
+# orch_worktree_home [DIR]: where new lane worktrees of DIR's repository (default the working
+# directory's) belong (#394), whether or not it exists yet: ORCHESTRATE_WORKTREE_ROOT, else
+# <WAAAGH_WORKTREE_HOME, default ~/worktrees.noindex>/<repo>, <repo> being the main checkout's
+# directory name. Spotlight indexes no directory whose name ends in .noindex, nor anything below it.
+# Returns 1 when ORCHESTRATE_WORKTREE_ROOT is unset and DIR is outside a git checkout, or neither
+# WAAAGH_WORKTREE_HOME nor HOME is set (a hook or cron environment may lack HOME: no /worktrees.noindex).
+orch_worktree_home() {
+  local common name base=${WAAAGH_WORKTREE_HOME:-}
+  if [[ -n "${ORCHESTRATE_WORKTREE_ROOT:-}" ]]; then echo "$ORCHESTRATE_WORKTREE_ROOT"; return; fi
+  [[ -n "$base" ]] || { [[ -n "${HOME:-}" ]] && base=$HOME/worktrees.noindex; } || return 1
+  common=$(git -C "${1:-.}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  name=${common%/}; name=${name%/.git}; name=${name%.git}; name=${name##*/}
+  echo "$base/${name:-repo}"
+}
+# orch_worktree_root: where this checkout's lane worktrees live, resolved: orch_worktree_home when
+# it exists, else the legacy <main checkout>/.claude/worktrees when that exists (an
+# ORCHESTRATE_WORKTREE_ROOT that does not exist is not looked past); returns 1 when there is none.
 orch_worktree_root() {
-  local r=${ORCHESTRATE_WORKTREE_ROOT:-} common
-  if [[ -z "$r" ]] && common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  local r common
+  r=$(orch_worktree_home .) || r=""
+  if [[ -z "${ORCHESTRATE_WORKTREE_ROOT:-}" && ! -d "$r" ]] && common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    r=""
     [[ ! -d "$common/../.claude/worktrees" ]] || r="$common/../.claude/worktrees"
   fi
   [[ -n "$r" && -d "$r" ]] || return 1

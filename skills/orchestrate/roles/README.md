@@ -12,7 +12,10 @@ Each file is a complete brief for one single-pass agent. To launch a role:
    `learning.sh brief --role <role>` (`_common.md` rule 12): the index plus the entries tagged
    with that role, never the whole store.
 3. Lane worktrees are named and persistent, created by you; an auto-created isolated worktree can
-   be removed if the agent returns before editing.
+   be removed if the agent returns before editing. Create them under the `.noindex` lane root
+   Spotlight skips: `git worktree add "$("$SCRIPTS/wt-root.sh" path <lane>)" -b <branch>` (jj:
+   `jj workspace add "$("$SCRIPTS/wt-root.sh" path <lane>)"`); the worktree-guard hook refuses
+   other paths (`../host-load.md`, Worktrees out of Spotlight, #394).
 4. The agent's prompt is then short: the brief's path plus this pass's inputs (PR list, holds,
    issue numbers, lane worktree), as paths and excerpts, never transcripts.
 5. Every pass is a fresh agent. Do not resume an earlier role or lane agent to give it the next
