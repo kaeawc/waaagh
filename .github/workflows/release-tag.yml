@@ -4,7 +4,7 @@ name: Release tag
 # on main, or by hand (#359). Repositories pin the action as
 # `kaeawc/waaagh/actions/app-broker@<sha> # vX.Y.Z` (skills/orchestrate/scripts/app-broker.sh
 # workflow), so their Dependabot (github-actions) opens a PR bumping the pin to each new tag. The
-# tag logic is dev/release-tag.sh: the first tag is the plugin version, later ones bump the newest
+# tag logic is dev/release-tag.sh: the first tag is v0.1.0, later ones bump the newest
 # tag (patch on push; the bump is chosen on a manual run). A commit already tagged cuts nothing,
 # but still gets its release if an earlier run pushed the tag and failed before creating it. Tags
 # go only on main. The first tag (v0.1.0) is a manual run after this workflow lands: until then,

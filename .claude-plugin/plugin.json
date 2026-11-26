@@ -1,6 +1,5 @@
 {
   "name": "waaagh",
-  "version": "0.1.0",
   "description": "Run a repository's delivery loop with parallel agents: plan from the issue tracker, implement in isolated Claude subagent lanes (Sonnet for routine work, Opus for judgment), review with an independent Opus reviewer, merge through guarded scripts, and verify what merged.",
   "author": {
     "name": "Jason Pearson",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # Release tags for the App broker action (#359): dev/release-tag.sh cuts waaagh's next vX.Y.Z tag on
-# HEAD (the first is the plugin version), and .github/workflows/release-tag.yml runs it when
+# HEAD (the first is v0.1.0), and .github/workflows/release-tag.yml runs it when
 # actions/app-broker changes on main, then pushes the tag and creates its release. Consumers pin
 # `@<sha> # vX.Y.Z`, which their Dependabot bumps. Run: bats release-tag.bats
 
@@ -10,13 +10,13 @@ setup() {
   WF="$ROOT/.github/workflows/release-tag.yml"
   R="$BATS_TEST_TMPDIR/repo"; mkdir -p "$R/.claude-plugin"
   git -C "$R" init -q -b main
-  echo '{"name":"waaagh","version":"0.1.0"}' >"$R/.claude-plugin/plugin.json"
+  echo '{"name":"waaagh"}' >"$R/.claude-plugin/plugin.json"
   git -C "$R" add -A && git -C "$R" commit -qm one
 }
 rt() { (cd "$R" && "$ROOT/dev/release-tag.sh" "$@"); }
 commit() { echo "$1" >>"$R/f" && git -C "$R" add -A && git -C "$R" commit -qm "$1"; }
 
-@test "the first tag is the plugin version; a tagged HEAD cuts nothing" {
+@test "the first tag is v0.1.0; a tagged HEAD cuts nothing" {
   run rt
   [ "$status" -eq 0 ]
   [ "$output" = "tagged v0.1.0" ]
@@ -37,14 +37,14 @@ commit() { echo "$1" >>"$R/f" && git -C "$R" add -A && git -C "$R" commit -qm "$
   [ "$output" = "tagged v1.0.0" ]
 }
 
-@test "bad input: an unknown bump, or a first tag with no X.Y.Z plugin version, cuts nothing" {
+@test "bad input: an unknown bump cuts nothing; a version in plugin.json does not pick the first tag" {
   run rt --bump huge
   [ "$status" -eq 2 ]
-  echo '{"name":"waaagh"}' >"$R/.claude-plugin/plugin.json"; git -C "$R" commit -qam noversion
-  run rt
-  [ "$status" -eq 3 ]
-  [[ "$output" == *"is not vX.Y.Z"* ]]
   [ -z "$(git -C "$R" tag -l)" ]
+  echo '{"name":"waaagh","version":"9.9.9"}' >"$R/.claude-plugin/plugin.json"; git -C "$R" commit -qam pinned
+  run rt
+  [ "$status" -eq 0 ]
+  [ "$output" = "tagged v0.1.0" ]
 }
 
 @test "the workflow runs on broker changes to main and by hand, with contents write, pinned" {

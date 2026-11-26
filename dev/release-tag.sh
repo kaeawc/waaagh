@@ -5,10 +5,11 @@
 # actions/app-broker changes on main, then pushes the tag and creates its GitHub release.
 #
 # Usage: dev/release-tag.sh [--bump patch|minor|major]
-#   The first tag is the plugin version (.claude-plugin/plugin.json); later ones bump the newest
-#   vX.Y.Z tag (default patch). HEAD already carrying a vX.Y.Z tag cuts nothing.
+#   The first tag is v0.1.0; later ones bump the newest vX.Y.Z tag (default patch). HEAD already
+#   carrying a vX.Y.Z tag cuts nothing. The plugin manifest sets no version on purpose (#408):
+#   Claude Code then versions an install by commit, so every merge to main is an update.
 # Output: `tagged vX.Y.Z` (exit 0), or `already vX.Y.Z` (exit 0, nothing cut).
-# Exit: 0 | 2 usage | 3 the plugin version is not X.Y.Z, or the tag already exists elsewhere
+# Exit: 0 | 2 usage | 3 the tag already exists elsewhere
 set -euo pipefail
 bump="patch"
 while (($#)); do
@@ -26,7 +27,7 @@ if [[ -n "$here" ]]; then echo "already $here"; exit 0; fi
 
 last=$(git tag -l 'v*' | grep -E "$semver" | sort -V | tail -1 || true)
 if [[ -z "$last" ]]; then
-  next="v$(jq -r '.version // ""' .claude-plugin/plugin.json)"
+  next="v0.1.0"
 else
   IFS=. read -r ma mi pa <<<"${last#v}"
   case "$bump" in
@@ -35,6 +36,5 @@ else
     patch) next="v$ma.$mi.$((pa + 1))" ;;
   esac
 fi
-[[ "$next" =~ $semver ]] || { echo "release-tag.sh: $next is not vX.Y.Z (.claude-plugin/plugin.json version)" >&2; exit 3; }
 git tag -a "$next" -m "waaagh $next" HEAD 2>/dev/null || { echo "release-tag.sh: tag $next already exists" >&2; exit 3; }
 echo "tagged $next"
