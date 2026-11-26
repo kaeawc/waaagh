@@ -57,6 +57,7 @@ skills/orchestrate/scripts/push-verify.sh	80
 skills/orchestrate/scripts/regen-merge.sh	94
 skills/orchestrate/scripts/relay.sh	94
 skills/orchestrate/scripts/repair-writer.sh	94
+skills/orchestrate/scripts/reship.sh	80
 skills/orchestrate/scripts/review-followup.sh	96
 skills/orchestrate/scripts/review-gate.sh	96
 skills/orchestrate/scripts/review-ledger.sh	97
