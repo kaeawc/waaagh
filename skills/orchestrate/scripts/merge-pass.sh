@@ -124,13 +124,16 @@ rows() {
 # files land one at a time on a fresh base. The first READY row of a group in merge order goes;
 # when it merges, every group it is in waits for the next pass. Titles are read over REST (every
 # page; works where GraphQL is refused); a READY PR missing from that list is read on its own, and
-# held (`serial:unknown`) when that fails. An invalid REGEX is a usage error (exit 2).
+# held (`serial:unknown`) when that fails. An invalid REGEX, or a NAME that is not letters,
+# digits, . _ -, is a usage error (exit 2).
 groups_of() { :; }
 gfile="$state/serial-groups"
 if [[ -f "$gfile" ]]; then
   groups=$(sed -e 's/\r$//' -e 's/^[[:space:]]*//' "$gfile" | grep -v -e '^$' -e '^#' || true)
   while read -r name re; do
     [[ -n "$name" ]] || continue
+    # Names are words (they are split and matched unquoted below).
+    [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "merge-pass.sh: serial-groups: group name $name: use letters, digits, . _ -" >&2; exit 2; }
     grc=0; grep -qE -- "${re:-}" </dev/null 2>/dev/null || grc=$?
     if [[ -z "$re" ]] || ((grc == 2)); then echo "merge-pass.sh: serial-groups: no valid REGEX for group $name" >&2; exit 2; fi
   done <<<"$groups"

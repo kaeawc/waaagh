@@ -188,6 +188,10 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
   mp
   [ "$status" -eq 2 ]
   [[ "$output" == *"no valid REGEX for group web"* ]]
+  printf 'ui* proto\n' >"$STATE/serial-groups"
+  mp
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"group name ui*: use letters"* ]]
 }
 
 @test "an outage stops the pass (exit 5); pr-ready failing is exit 3; usage errors are exit 2" {
