@@ -39,6 +39,17 @@ load selftest_pr_setup
   [[ "$output" == *"open=12 ready=4"* ]]
 }
 
+@test "the campaign's advisory-checks file counts as --ignore-check unless --no-advisory-file (#412)" {
+  stub_gh_router
+  pr_row 11 me false false MERGEABLE '[{"name":"build","conclusion":"SUCCESS"},{"name":"sim","conclusion":"FAILURE"}]' | jq -s . >"$FX/prs.json"
+  mkdir -p "$ORCHESTRATE_STATE_DIR/o__r"
+  printf '# advisory on this repo\n  sim   # device farm, flaky\n\n' >"$ORCHESTRATE_STATE_DIR/o__r/advisory-checks"
+  run "$SCRIPTS/pr-ready.sh" --repo o/r
+  [[ "$output" == *$'11\tREADY'* ]]
+  run "$SCRIPTS/pr-ready.sh" --repo o/r --no-advisory-file
+  [[ "$output" == *$'11\tBLOCK'*"fail:sim"* ]]
+}
+
 @test "pr-ready supersedes only proven replacements of the same check" {
   stub_gh_router
   echo '[]' >"$FX/rules.json"

@@ -15,8 +15,9 @@
 #               must show no blocker other than failures of exactly those checks (no review
 #               thread, unknown thread or policy read, conflict, pending check, missing required
 #               check), or the merge is refused with exit 6.
-#   --ignore-check  advisory checks, passed to pr-ready.sh for that row. If one of them is failing
-#               on the head, --evidence is required too (and logged), as in direct mode.
+#   --ignore-check  advisory checks, passed to pr-ready.sh for that row (plus the names in
+#               <state dir>/advisory-checks, #412). If one of them is failing on the head,
+#               --evidence is required too (and logged), as in direct mode.
 # Without --admin the same fresh row must be READY for this exact head, or the merge is refused
 # with exit 7 (the row's verdict and reasons are printed), so the merge never depends on the
 # server's branch protection. Ungated merging is a deliberate mode: ORCHESTRATE_DIRECT_MERGE=1,
@@ -115,6 +116,9 @@ api=$(orch_gh_api pr-merge.sh) || exit 2
 repo=$(orch_repo "$repo")
 ((${#authors[@]})) || authors=("$(orch_author)")
 state=$(orch_state_dir "$repo")
+# The campaign's advisory checks (<state dir>/advisory-checks, #412) count as --ignore-check, and
+# so a failing one still needs --evidence (below).
+while IFS= read -r c; do [[ -z "$c" ]] || ignores+=("$c"); done < <(orch_advisory_checks "$repo")
 log() { printf '%s\tpr=%s\thead=%s\t%s\n' "$(orch_iso "$(orch_now)")" "$pr" "${head:0:9}" "$*" >>"$state/merges.log"; }
 
 # gql_read ARGS...: a bounded GraphQL read (gh-read.sh) into $got. Returns 0 on success; 1 when
@@ -295,7 +299,7 @@ fi
 # A check failing on this head may be bypassed (as advisory via --ignore-check, by --admin, or in
 # direct mode) only with --evidence naming why; a lane calling it "infra" is not evidence.
 if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" == 1 ]]; }; then
-  rflags=(--repo "$repo" --pr "$pr" --no-threads)
+  rflags=(--repo "$repo" --pr "$pr" --no-threads --no-advisory-file)   # the raw state: nothing waved off
   for a in "${authors[@]}"; do rflags+=(--author "$a"); done
   raw=$(orch_run pr-ready.sh "${rflags[@]}" 2>/dev/null | awk 'NR == 1') || raw=""
   if [[ -z "$raw" ]]; then
