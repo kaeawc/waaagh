@@ -13,8 +13,8 @@ setup() {
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH" ORCHESTRATE_READ_SLEEP=0
   export ORCHESTRATE_NOW=1795000000   # 2026-11-18T07:06:40Z
   # gh stub. Fixtures: closed.json (closed PRs, REST shape), parent-<branch>.json (PRs whose head is
-  # <branch>), compare-<base>...<head> (the status), files-<n> (added file names), tree (main's
-  # paths), tree-truncated (the tree read says truncated), have-<path with / as _> (the contents
+  # <branch>), compare-<base>...<head> (the status), files-<n> (added files, "<blob sha><TAB><path>"
+  # lines, as the script's --jq prints them), tree (main's files, "<path>[<TAB><blob sha>]"), tree-truncated (the tree read says truncated), have-<path with / as _> (the contents
   # read finds the path on main), fail-<n> (pulls/<n>/files answers 500).
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -32,7 +32,7 @@ case "$all" in
     cat "$FX/files-$n" 2>/dev/null || true ;;
   "api repos/o/r/git/trees/main?recursive=1")
     if [ -f "$FX/tree-truncated" ]; then echo '{"truncated":true,"tree":[]}'
-    else jq -Rn '{truncated: false, tree: [inputs | {path: ., type: "blob"}]}' <"$FX/tree" 2>/dev/null || echo '{"truncated":false,"tree":[]}'; fi ;;
+    else jq -Rn '{truncated: false, tree: [inputs | split("\t") | {path: .[0], sha: (.[1] // "x"), type: "blob"}]}' <"$FX/tree" 2>/dev/null || echo '{"truncated":false,"tree":[]}'; fi ;;
   "api repos/o/r/contents/"*"?ref=main --silent")
     p=${all#api repos/o/r/contents/}; p=${p%%\?*}
     [ -f "$FX/have-${p//\//_}" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; } ;;
@@ -52,7 +52,7 @@ sm() { run "$SCRIPTS/stranded-merges.sh" --repo o/r "$@"; }
   { pr 404 hint-395 2026-11-17T01:11:58Z c404; pr 403 main 2026-11-17T01:11:54Z m403; pr 9 main "" ""; } | closed
   pr 403 main 2026-11-17T01:11:54Z m403 p403head | jq -s . >"$FX/parent-hint-395.json"
   echo behind >"$FX/compare-c404...p403head"
-  printf 'scripts/wt-root.sh\nscripts/worktree-guard.sh\n' >"$FX/files-404"
+  printf 's1\tscripts/wt-root.sh\ns2\tscripts/worktree-guard.sh\n' >"$FX/files-404"
   sm
   [ "$status" -eq 3 ]
   [ "${lines[0]}" = $'404\tSTRANDED\tbase=hint-395\tparent=#403\tmissing on main: 2/2 added files (scripts/wt-root.sh scripts/worktree-guard.sh); retarget a new PR with its changes to main' ]
@@ -66,7 +66,7 @@ sm() { run "$SCRIPTS/stranded-merges.sh" --repo o/r "$@"; }
   pr 22 stack-a 2026-11-17T05:09:00Z m22 p22 | jq -s . >"$FX/parent-stack-b.json"
   echo ahead >"$FX/compare-c11...p21"
   echo behind >"$FX/compare-c12...p22"
-  printf 'src/a.go\napps/old/b.rs\n' >"$FX/files-12"; printf 'src/a.go\napps/new/b.rs\n' >"$FX/tree"
+  printf 'sa\tsrc/a.go\nsb\tapps/old/b.rs\n' >"$FX/files-12"; printf 'src/a.go\tsa\napps/new/b.rs\tzz\n' >"$FX/tree"
   sm
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = $'11\tOK\tbase=stack-a\tparent=#21\tcontained in the head #21 merged with' ]
@@ -103,12 +103,49 @@ sm() { run "$SCRIPTS/stranded-merges.sh" --repo o/r "$@"; }
   pr 72 main 2026-11-17T00:00:00Z m72 p72 | jq -s . >"$FX/parent-stack-g.json"
   echo behind >"$FX/compare-c71...p72"
   touch "$FX/tree-truncated" "$FX/have-f1"
-  for i in $(seq 1 25); do echo "f$i"; done >"$FX/files-71"
+  for i in $(seq 1 25); do printf 's%s\tf%s\n' "$i" "$i"; done >"$FX/files-71"
   sm
   [ "$status" -eq 3 ]
   [[ "${lines[0]}" == $'71\tSTRANDED\tbase=stack-g\tparent=#72\tmissing on main: 19/20 added files (f2 f3 '* ]]
   run grep -c '/contents/' "$FX/calls"
   [ "$output" = 20 ]
+}
+
+@test "review #417: a moved file is its blob or a unique name, never a generic one like SKILL.md" {
+  pr 81 stack-h 2026-11-17T00:00:00Z c81 | closed
+  pr 82 main 2026-11-17T00:00:00Z m82 p82 | jq -s . >"$FX/parent-stack-h.json"
+  echo behind >"$FX/compare-c81...p82"
+  printf 'k1\tskills/new/SKILL.md\nk2\tskills/new/index.ts\n' >"$FX/files-81"
+  printf 'skills/old/SKILL.md\tother1\nweb/index.ts\tother2\n' >"$FX/tree"
+  sm
+  [ "$status" -eq 3 ]
+  [ "${lines[0]}" = $'81\tSTRANDED\tbase=stack-h\tparent=#82\tmissing on main: 2/2 added files (skills/new/SKILL.md skills/new/index.ts); retarget a new PR with its changes to main' ]
+  # The same blob under another path, even with a generic name, is the file moved.
+  printf 'skills/moved/SKILL.md\tk1\nweb/index.ts\tk2\n' >"$FX/tree"
+  sm
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == $'81\tRELANDED\t'*"(2 under another directory)" ]]
+}
+
+@test "review #417: a base with an open PR besides merged ones is PENDING, not STRANDED" {
+  pr 91 develop 2026-11-17T05:00:00Z c91 | closed
+  { pr 92 main 2026-11-10T00:00:00Z m92 p92; jq -n '{number: 93, state: "open", merged_at: null, head: {sha: "p93"}}'; } | jq -s . >"$FX/parent-develop.json"
+  echo behind >"$FX/compare-c91...p92"
+  sm
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = $'91\tPENDING\tbase=develop\tparent=#93\tnot in #92'"'"'s merged head; the base'"'"'s open PR #93 carries it' ]
+}
+
+@test "review #417: a truncated tree with every checked file present is UNVERIFIED; paths are URL-encoded" {
+  pr 71 stack-g 2026-11-17T00:00:00Z c71 | closed
+  pr 72 main 2026-11-17T00:00:00Z m72 p72 | jq -s . >"$FX/parent-stack-g.json"
+  echo behind >"$FX/compare-c71...p72"
+  touch "$FX/tree-truncated"
+  for i in $(seq 1 25); do printf 's%s\tdocs/f#%s\n' "$i" "$i"; touch "$FX/have-docs_f%23$i"; done >"$FX/files-71"
+  sm
+  [ "$status" -eq 3 ]
+  [ "${lines[0]}" = $'71\tUNVERIFIED\tbase=stack-g\tparent=#72\tnot in #72'"'"'s merged head; 20 of its 25 added files checked (all on main), the rest were not: compare by hand' ]
+  grep -q '^api repos/o/r/contents/docs/f%231?ref=main --silent$' "$FX/calls"
 }
 
 @test "an unreadable read is reported, not guessed (exit 4); usage errors are exit 2" {

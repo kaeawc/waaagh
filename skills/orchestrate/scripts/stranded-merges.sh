@@ -13,15 +13,19 @@
 # merged PR whose head is that base (an open one when none merged). The child is carried when the
 # head the parent merged with contains the child's merge commit (compare status identical or
 # ahead). When it does not, the files the child added are looked up in the default branch's tree,
-# since a stack can be re-landed another way: a path there, or a file of the same name under
-# another directory (moved since), counts as landed.
+# since a stack can be re-landed another way: the same path, or the same file under another
+# directory (moved since: the same blob, or a file name that occurs once on main and is not a
+# generic one like README.md or index.ts), counts as landed. When the base also has an open PR, that
+# PR carries the child (PENDING).
 # Output (TSV), one line per checked PR, then a summary line:
 #   <n>  OK          base=<b>  parent=#<p>  contained in the head #<p> merged with
 #   <n>  STRANDED    ...  missing on main: <k>/<m> added files (<paths>); retarget a new PR ...
 #   <n>  RELANDED    ...  not in #<p>'s merged head, but its <m> added files are on main
-#   <n>  UNVERIFIED  ...  not in #<p>'s merged head and it added no files: compare by hand
+#   <n>  UNVERIFIED  ...  not in #<p>'s merged head and it added no files, or only some of them
+#                         could be checked (a truncated tree): compare by hand
 #   <n>  ORPHAN      base=<b>  parent=-  no PR from <b> ever merged or is open
-#   <n>  PENDING     ...  the base's PR is still open (it will carry the child when it merges)
+#   <n>  PENDING     ...  the base's PR is still open (it will carry the child when it merges),
+#                         or the base has an open PR besides merged ones
 #   <n>  unreadable  ...  <what could not be read>
 #   checked=<n> stranded=<n> relanded=<n> unverified=<n> ok=<n> since=<YYYY-MM-DD>
 # ("main" in the details is the repository's default branch.)
@@ -75,13 +79,17 @@ done
 work=$(mktemp -d "${TMPDIR:-/tmp}/stranded-merges.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 tree=""
+generic='(README|SKILL|CHANGELOG|LICENSE|CONTRIBUTING|AGENTS|CLAUDE)(\.[A-Za-z]+)?|index\.[a-z]+|main\.[a-z]+|__init__\.py|mod\.rs|lib\.rs|package\.json|Makefile|BUILD(\.bazel)?|build\.gradle(\.kts)?|Cargo\.toml|go\.mod|\.gitignore|\.gitkeep|Dockerfile|config\.[a-z]+|test_helper\.bash'
 load_tree() {
   local body
   tree=per-file
   body=$(ghj api "repos/$repo/git/trees/$default?recursive=1") || return 0
   [[ "$(jq -r '.truncated // false' <<<"$body")" == false ]] || return 0
   jq -r '.tree[] | select(.type == "blob") | .path' <<<"$body" >"$work/paths"
-  sed 's#.*/##' "$work/paths" | sort -u >"$work/names"
+  jq -r '.tree[] | select(.type == "blob") | .sha' <<<"$body" | sort -u >"$work/shas"
+  # File names that occur once on main and are not generic: a moved file is recognised by its name
+  # only when the name cannot belong to some other file.
+  sed 's#.*/##' "$work/paths" | sort | uniq -u | grep -vxE "$generic" >"$work/names" || true
   tree=ok
 }
 
@@ -102,30 +110,37 @@ for ((i = 0; i < ${#kids[@]}; i++)); do
   if jq -e --argjson p "$pn" '.[] | select(.number == $p) | .merged_at == null' <<<"$parents" >/dev/null; then
     line PENDING "#$pn" "the base's PR is still open"; continue
   fi
+  # A long-lived base (develop, release/*) can have merged PRs and an open one: the open one
+  # carries what merged after the last merged one.
+  open_pn=$(jq -r '[.[] | select(.state == "open")] | first | .number // empty' <<<"$parents")
   if ! st=$(ghr api "repos/$repo/compare/$mc...$ph" --jq .status); then
     line unreadable "#$pn" "the compare of its merge commit with #$pn's head could not be read"; unread=1; continue
   fi
   if [[ "$st" == identical || "$st" == ahead ]]; then
     line OK "#$pn" "contained in the head #$pn merged with"; ok=$((ok + 1)); continue
   fi
+  if [[ -n "$open_pn" ]]; then
+    line PENDING "#$open_pn" "not in #$pn's merged head; the base's open PR #$open_pn carries it"; continue
+  fi
   [[ -n "$tree" ]] || load_tree
-  if ! added=$(ghr api --paginate "repos/$repo/pulls/$n/files?per_page=100" --jq '.[] | select(.status == "added") | .filename'); then
+  if ! added=$(ghr api --paginate "repos/$repo/pulls/$n/files?per_page=100" --jq '.[] | select(.status == "added") | "\(.sha)\t\(.filename)"'); then
     line unreadable "#$pn" "the PR's files could not be read"; unread=1; continue
   fi
   total=0 looked=0 missing=() moved=0 rc=0
-  while IFS= read -r f; do
+  while IFS=$'\t' read -r sha f; do
     [[ -n "$f" ]] || continue
     total=$((total + 1))
     if [[ "$tree" == ok ]]; then
       looked=$((looked + 1))
       if grep -qxF -- "$f" "$work/paths"; then :
-      elif grep -qxF -- "${f##*/}" "$work/names"; then moved=$((moved + 1))
+      elif grep -qxF -- "$sha" "$work/shas" || grep -qxF -- "${f##*/}" "$work/names"; then moved=$((moved + 1))
       else missing+=("$f"); fi
       continue
     fi
     ((looked < 20)) || continue
     looked=$((looked + 1)) rc=0
-    ghr api "repos/$repo/contents/$f?ref=$default" --silent >/dev/null 2>&1 || rc=$?
+    enc=$(jq -rn --arg f "$f" '$f | @uri | gsub("%2F"; "/")')
+    ghr api "repos/$repo/contents/$enc?ref=$default" --silent >/dev/null 2>&1 || rc=$?
     if ((rc == 3)); then missing+=("$f")
     elif ((rc != 0)); then unread=1; missing+=("$f?"); fi
   done <<<"$added"
@@ -135,6 +150,9 @@ for ((i = 0; i < ${#kids[@]}; i++)); do
   elif ((${#missing[@]})); then
     line STRANDED "#$pn" "missing on main: ${#missing[@]}/$looked added files (${missing[*]}); retarget a new PR with its changes to main"
     stranded=$((stranded + 1)); bad=1
+  elif ((looked < total)); then
+    line UNVERIFIED "#$pn" "not in #$pn's merged head; $looked of its $total added files checked (all on main), the rest were not: compare by hand"
+    unverified=$((unverified + 1)); bad=1
   else
     note=""; ((moved == 0)) || note=" ($moved under another directory)"
     line RELANDED "#$pn" "not in #$pn's merged head, but its $total added files are on main$note"; relanded=$((relanded + 1))
