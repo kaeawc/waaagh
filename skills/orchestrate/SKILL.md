@@ -543,6 +543,9 @@ their wall caps, and lanes re-run them, which makes it worse.
   reconnects to it. Never `./gradlew --stop`; it stops other lanes' builds
   (`skills/orchestrate/host-load.md`).
 - Run the changed-files prepush check once per slice, not once per commit.
+- **Old campaign state** goes through `"$SCRIPTS/campaign-gc.sh" --repo OWNER/REPO` (dry run):
+  rebuildable output and binaries left in evidence directories, and raw captures to gzip. Show the
+  owner the summary and run `--apply` only after the owner agrees, as with worktrees.
 - **Finished worktrees** go through `"$SCRIPTS/wt-cleanup.sh"` (dry run; `--apply` to remove): only
   clean, idle, pushed, unlocked, unprotected worktrees nobody is working in, via `git worktree
   remove` without `--force`. A worktree that is any process's cwd is never removed; run it each
