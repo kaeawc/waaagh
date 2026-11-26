@@ -89,8 +89,12 @@ while read -r c p1 p2 rest; do
 done <<<"$after"
 
 if [[ "$dry" == yes ]]; then echo "would reship #$pr ${h:0:9} (from ${r:0:9})"; exit 0; fi
-now_latest=$(orch_run review-ledger.sh latest --repo "$repo" --pr "$pr" 2>/dev/null) || now_latest=""
+now_latest=$(orch_run review-ledger.sh latest --repo "$repo" --pr "$pr" 2>/dev/null) ||
+  { echo "reship.sh: the review ledger could not be read again; nothing recorded" >&2; exit 4; }
 [[ "$now_latest" == "$latest" ]] || refuse "the review ledger changed while checking (now: $(cut -f3 <<<"$now_latest"))"
+hrc=0; hold=$(orch_hold_of "$repo" "$pr") || hrc=$?   # a hold added while checking counts too
+((hrc != 2)) || { echo "reship.sh: the hold file could not be read again; nothing recorded" >&2; exit 4; }
+[[ "$hold" != *"until:review-ship "* ]] || refuse "a review-ship hold asks for a fresh review ($hold)"
 orch_run review-ledger.sh record --repo "$repo" --pr "$pr" --verdict ship --head "$h" \
   --note "reship: only clean merges of $base since ${r:0:9}" >/dev/null ||
   { echo "reship.sh: the ledger write failed" >&2; exit 5; }
