@@ -5,7 +5,8 @@
 #
 # Usage: merge-pass.sh [--repo OWNER/REPO] [--author LOGIN]... [--ignore-check NAME]...
 #                      [--exclude-label LABEL]... [--cap N] [--max-untested N --workflow NAME]
-#                      [--every SECONDS] [--loop-pid PID] [--dry-run]
+#                      [--every SECONDS] [--loop-pid PID] [--advisory-file] [--cancel-every N]
+#                      [--dry-run]
 #   --cap           merge at most N PRs this pass (default 8)
 #   --max-untested  merge only while fewer than N commits on the default branch are past the
 #                   newest one whose --workflow push run finished green; the cap this pass is
@@ -13,12 +14,14 @@
 #   --every         the loop's sleep, recorded with the heartbeat (loops.sh heartbeat merge-pass)
 #   --loop-pid      the loop's PID for the heartbeat (default the parent process: the loop that
 #                   runs this pass), so loops.sh status sees the loop alive between passes
+#   --advisory-file pass --advisory-file to pr-ready.sh and pr-merge.sh (<state dir>/advisory-checks)
+#   --cancel-every  after every N merges, cancel-stale-runs.sh --apply (default 0: never; #413)
 #   --dry-run       print what it would merge; merge nothing
 # A pass:
 #   1. main-health.sh (with --workflow when given): red or unknown holds the whole pass.
 #   2. hold.sh check --release (met holds are released: hold.sh's `released: PR N ...` lines), then pr-ready.sh
 #      with --author, --ignore-check and --exclude-label (needs-device-recheck always), the
-#      priority file's PRs in PR_READY_EXTRA; a short page is reported (`note pr-ready ...`), and
+#      priority file's PRs and every approved PR (review-ledger.sh shipped) in PR_READY_EXTRA; a short page is reported (`note pr-ready ...`), and
 #      shipped-blocked.sh prints each approved PR that is not READY.
 #   Serial groups: <state dir>/serial-groups, `NAME REGEX` per line; PRs whose title matches REGEX
 #      (extended, any case) merge one per pass (`hold <n> serial:NAME (one merge per pass)`).
@@ -41,7 +44,7 @@ case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esa
 source "$here/_lib.sh"
 orch_gh_priority high
 
-repo="" cap=8 untested_max="" workflow="" every="" dry=no loop_pid=$PPID
+repo="" cap=8 untested_max="" workflow="" every="" dry=no loop_pid=$PPID advisory=no cancel_every=0
 authors=() ignores=() excludes=(needs-device-recheck)
 while (($#)); do
   case "$1" in
@@ -54,16 +57,19 @@ while (($#)); do
     --workflow) workflow=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --every) every=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --loop-pid) loop_pid=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
+    --advisory-file) advisory=yes; shift ;;
+    --cancel-every) cancel_every=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
     --dry-run) dry=yes; shift ;;
     -h | --help) orch_usage; exit 0 ;;
     *) echo "merge-pass.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ "$cap" =~ ^[0-9]+$ ]] || { echo "merge-pass.sh: --cap needs a number" >&2; exit 2; }
+[[ "$cap" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "merge-pass.sh: --cap needs a number" >&2; exit 2; }
 [[ -z "$untested_max" || "$untested_max" =~ ^[0-9]+$ ]] || { echo "merge-pass.sh: --max-untested needs a number" >&2; exit 2; }
 [[ -z "$untested_max" || -n "$workflow" ]] || { echo "merge-pass.sh: --max-untested needs --workflow" >&2; exit 2; }
 [[ -z "$every" || "$every" =~ ^[0-9]+$ ]] || { echo "merge-pass.sh: --every needs seconds" >&2; exit 2; }
 [[ "$loop_pid" =~ ^[0-9]+$ ]] || { echo "merge-pass.sh: --loop-pid needs a PID" >&2; exit 2; }
+[[ "$cancel_every" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "merge-pass.sh: --cancel-every needs a number" >&2; exit 2; }
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 
@@ -103,12 +109,20 @@ for l in "${excludes[@]}"; do ready_args+=(--exclude-label "$l"); done
 merge_args=(--repo "$repo")
 for a in ${authors[@]+"${authors[@]}"}; do merge_args+=(--author "$a"); done
 for c in ${ignores[@]+"${ignores[@]}"}; do merge_args+=(--ignore-check "$c"); done
+if [[ "$advisory" == yes ]]; then ready_args+=(--advisory-file); merge_args+=(--advisory-file); fi
 
 # Holds whose release condition is met are released first (merge-bot step 2).
 # hold.sh prints `released: PR N ...` only once the hold file is rewritten.
 orch_run hold.sh check --repo "$repo" --release 2>/dev/null | grep -E '^released: PR [0-9]+' || true
 # Priority PRs are classified even when a full page leaves them out (PR_READY_EXTRA).
 extra=$(awk '/^[0-9]+/ { sub(/[^0-9].*/, ""); printf "%s ", $0 }' "$state/merge-priority" 2>/dev/null || true)
+# So are approved PRs that are still open (a ship verdict in the review ledger, #414): a short
+# page never hides them. The ledger keeps merged ones too, so only open PRs count; when the open
+# list cannot be read, none are added.
+shipped=$(orch_run review-ledger.sh shipped --repo "$repo" 2>/dev/null | awk '{ print $1 }' || true)
+if [[ -n "$shipped" ]] && open=$("$here/gh-read.sh" --tries 3 -- api --paginate "repos/$repo/pulls?state=open&per_page=100" --jq '.[].number' 2>/dev/null); then
+  extra+=$(awk 'NR == FNR { o[$1] = 1; next } ($1 in o) { printf "%s ", $1 }' <(printf '%s\n' "$open") <(printf '%s\n' "$shipped") || true)
+fi
 # rows: "<n> <head>" for every READY row, in merge order. The full rows are kept in $rowfile for
 # shipped-blocked.sh, and pr-ready's summary line in $sumfile.
 rowfile=$(mktemp "${TMPDIR:-/tmp}/merge-pass-rows.XXXXXX") sumfile=$(mktemp "${TMPDIR:-/tmp}/merge-pass-sum.XXXXXX")
@@ -185,6 +199,10 @@ while ((merged < cap)); do
   first=$(head -n 1 <<<"$out")
   if ((rc == 0)); then
     echo "merged $next"; merged=$((merged + 1)); merged_groups+="$gs"
+    # Stale runs hold runners current heads wait for (#413): cancel them every N merges.
+    if ((cancel_every > 0 && merged % cancel_every == 0)); then
+      orch_run cancel-stale-runs.sh --repo "$repo" --apply 2>/dev/null | tail -n 1 | sed 's/^/cancel-stale-runs /' || true
+    fi
     list=$(rows) || { echo "merge-pass.sh: pr-ready.sh failed after a merge; pass ended" >&2; break; }
     continue
   fi
