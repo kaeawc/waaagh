@@ -69,6 +69,7 @@ case "$all" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   "api repos/o/r/actions/runs?"*) cat "$FX/green" 2>/dev/null ;;
   "api repos/o/r/compare/"*) cat "$FX/ahead" ;;
+  "api --paginate repos/o/r/pulls?state=open&per_page=100 --jq .[].number") cat "$FX/open" 2>/dev/null || true ;;
   "api --paginate repos/o/r/pulls?state=open"*) [ ! -f "$FX/titles-fail" ] || { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }; cat "$FX/titles" ;;
   "api repos/o/r/pulls/"*" --jq .title") n=${all#api repos/o/r/pulls/}; n=${n%% *}; [ -f "$FX/title-$n" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; cat "$FX/title-$n" ;;
   *) echo "unexpected gh call: $all" >&2; exit 9 ;;
@@ -203,7 +204,7 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
 }
 
 @test "--advisory-file reaches pr-ready and pr-merge; approved PRs join PR_READY_EXTRA; --cancel-every N" {
-  printf '44\taaa44\n' >"$FX/shipped-ledger"
+  printf '44\taaa44\n45\taaa45\n' >"$FX/shipped-ledger"; printf '44\n7\n' >"$FX/open"   # 45 merged long ago
   mp --advisory-file --cancel-every 2
   [ "$status" -eq 0 ]
   grep -q '^pr-ready .* --advisory-file$' "$FX/calls"
@@ -213,6 +214,8 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
   [ "${lines[2]}" = "cancel-stale-runs stale=2 kept=5 cancelled=2 failed=0" ]   # after merge 2
   [ "$(grep -c '^cancel-stale-runs --repo o/r --apply$' "$FX/calls")" -eq 1 ]
   mp --cancel-every x
+  [ "$status" -eq 2 ]
+  mp --cancel-every 08
   [ "$status" -eq 2 ]
 }
 

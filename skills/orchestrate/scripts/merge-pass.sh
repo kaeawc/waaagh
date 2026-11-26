@@ -64,12 +64,12 @@ while (($#)); do
     *) echo "merge-pass.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ "$cap" =~ ^[0-9]+$ ]] || { echo "merge-pass.sh: --cap needs a number" >&2; exit 2; }
+[[ "$cap" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "merge-pass.sh: --cap needs a number" >&2; exit 2; }
 [[ -z "$untested_max" || "$untested_max" =~ ^[0-9]+$ ]] || { echo "merge-pass.sh: --max-untested needs a number" >&2; exit 2; }
 [[ -z "$untested_max" || -n "$workflow" ]] || { echo "merge-pass.sh: --max-untested needs --workflow" >&2; exit 2; }
 [[ -z "$every" || "$every" =~ ^[0-9]+$ ]] || { echo "merge-pass.sh: --every needs seconds" >&2; exit 2; }
 [[ "$loop_pid" =~ ^[0-9]+$ ]] || { echo "merge-pass.sh: --loop-pid needs a PID" >&2; exit 2; }
-[[ "$cancel_every" =~ ^[0-9]+$ ]] || { echo "merge-pass.sh: --cancel-every needs a number" >&2; exit 2; }
+[[ "$cancel_every" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "merge-pass.sh: --cancel-every needs a number" >&2; exit 2; }
 repo=$(orch_repo "$repo")
 state=$(orch_state_dir "$repo")
 
@@ -116,8 +116,13 @@ if [[ "$advisory" == yes ]]; then ready_args+=(--advisory-file); merge_args+=(--
 orch_run hold.sh check --repo "$repo" --release 2>/dev/null | grep -E '^released: PR [0-9]+' || true
 # Priority PRs are classified even when a full page leaves them out (PR_READY_EXTRA).
 extra=$(awk '/^[0-9]+/ { sub(/[^0-9].*/, ""); printf "%s ", $0 }' "$state/merge-priority" 2>/dev/null || true)
-# So are approved PRs (a ship verdict in the review ledger, #414): a short page never hides them.
-extra+=$(orch_run review-ledger.sh shipped --repo "$repo" 2>/dev/null | awk '{ printf "%s ", $1 }' || true)
+# So are approved PRs that are still open (a ship verdict in the review ledger, #414): a short
+# page never hides them. The ledger keeps merged ones too, so only open PRs count; when the open
+# list cannot be read, none are added.
+shipped=$(orch_run review-ledger.sh shipped --repo "$repo" 2>/dev/null | awk '{ print $1 }' || true)
+if [[ -n "$shipped" ]] && open=$("$here/gh-read.sh" --tries 3 -- api --paginate "repos/$repo/pulls?state=open&per_page=100" --jq '.[].number' 2>/dev/null); then
+  extra+=$(awk 'NR == FNR { o[$1] = 1; next } ($1 in o) { printf "%s ", $1 }' <(printf '%s\n' "$open") <(printf '%s\n' "$shipped") || true)
+fi
 # rows: "<n> <head>" for every READY row, in merge order. The full rows are kept in $rowfile for
 # shipped-blocked.sh, and pr-ready's summary line in $sumfile.
 rowfile=$(mktemp "${TMPDIR:-/tmp}/merge-pass-rows.XXXXXX") sumfile=$(mktemp "${TMPDIR:-/tmp}/merge-pass-sum.XXXXXX")
