@@ -37,6 +37,23 @@ cases), **How to apply**, its date and the source event. `--roles` tags who must
 template names (`merge-bot`, `implementation-lane`, `review`, ...), `orchestrator` for you, or
 `all`.
 
+## Rules already in memory
+
+A campaign that kept its owner rules in Claude Code's auto-memory (`~/.claude/projects/<project>/memory/`)
+before it had a learnings store can bring them over once. Feedback memories already have the shape
+of a learning: a rule, **Why:** and **How to apply:**.
+
+```bash
+"$SCRIPTS/learning.sh" import --memory-dir ~/.claude/projects/<project>/memory          # dry run
+"$SCRIPTS/learning.sh" import --memory-dir ~/.claude/projects/<project>/memory --apply  # write them
+```
+
+Superseded memories (SUPERSEDED in the description or body) and ones missing a part are skipped,
+and a memory already imported is never imported twice (its source is `memory:<name>`). Imported
+learnings are `--trigger owner --scope repo`, tagged `orchestrator` unless `--roles` says more.
+Run a consolidation pass afterwards: memory often holds an amended rule next to the one it
+replaced.
+
 ## Scope: local or upstream
 
 - `--scope repo`: true of this repository only (its CI, its devices, its owner's preferences).
