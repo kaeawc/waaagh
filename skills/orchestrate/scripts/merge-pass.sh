@@ -31,7 +31,8 @@
 #   | `hold main <main-health line>` | `hold untested=<k> since=<sha>` | `stop outage <line>`,
 #   then `pass merged=<n> held=<n> ready=<n> cap=<n> untested=<k|->`.
 # Env: ORCHESTRATE_SCRIPTS_DIR (tests stub the scripts it runs).
-# Exit: 0 the pass ran (even with nothing to merge) | 2 usage | 3 pr-ready.sh failed
+# Exit: 0 the pass ran (even with nothing to merge) | 2 usage (also an invalid serial-groups REGEX)
+#       | 3 pr-ready.sh failed, or the titles serial-groups needs could not be read
 #       | 4 held: main is red or unknown, or the untested cap is used up | 5 Pull Requests outage
 set -euo pipefail
 # This script's directory with no subshell or dirname process: every script start pays for it (#112).
@@ -121,22 +122,33 @@ rows() {
 # Serial groups (#412): <state dir>/serial-groups, one `NAME REGEX` per line (# comments): open
 # PRs whose title matches REGEX (extended, any case) merge one per pass, so PRs that edit the same
 # files land one at a time on a fresh base. The first READY row of a group in merge order goes;
-# when it merges, the group's other rows wait for the next pass.
-group_of() { :; }
+# when it merges, every group it is in waits for the next pass. Titles are read over REST (every
+# page; works where GraphQL is refused); a READY PR missing from that list is read on its own, and
+# held (`serial:unknown`) when that fails. An invalid REGEX is a usage error (exit 2).
+groups_of() { :; }
 gfile="$state/serial-groups"
 if [[ -f "$gfile" ]]; then
-  titles=$("$here/gh-read.sh" --tries 3 -- pr list --repo "$repo" --state open --limit 300 --json number,title \
+  groups=$(sed -e 's/\r$//' -e 's/^[[:space:]]*//' "$gfile" | grep -v -e '^$' -e '^#' || true)
+  while read -r name re; do
+    [[ -n "$name" ]] || continue
+    grc=0; grep -qE -- "${re:-}" </dev/null 2>/dev/null || grc=$?
+    if [[ -z "$re" ]] || ((grc == 2)); then echo "merge-pass.sh: serial-groups: no valid REGEX for group $name" >&2; exit 2; fi
+  done <<<"$groups"
+  titles=$("$here/gh-read.sh" --tries 3 -- api --paginate "repos/$repo/pulls?state=open&per_page=100" \
     --jq '.[] | "\(.number)\t\(.title)"' 2>/dev/null) ||
     { echo "merge-pass.sh: serial-groups is set but the PR titles could not be read; nothing merged" >&2; beat; summary; exit 3; }
-  groups=$(sed -e 's/\r$//' -e 's/^[[:space:]]*//' "$gfile" | grep -v -e '^$' -e '^#' || true)
-  # group_of N: the first group whose regex matches N's title, or nothing.
-  group_of() {
+  # groups_of N: every group whose regex matches N's title (one per line); `?` when the title
+  # cannot be read.
+  groups_of() {
     local t name re
     t=$(awk -F'\t' -v n="$1" '$1 == n { sub(/^[^\t]*\t/, ""); print; exit }' <<<"$titles")
-    [[ -n "$t" ]] || return 0
+    if [[ -z "$t" ]]; then
+      t=$("$here/gh-read.sh" --tries 3 -- api "repos/$repo/pulls/$1" --jq .title 2>/dev/null) || { echo "?"; return 0; }
+      titles+=$'\n'"$1"$'\t'"$t"
+    fi
     while read -r name re; do
       [[ -n "$re" ]] || continue
-      if grep -qiE -- "$re" <<<"$t" 2>/dev/null; then echo "$name"; return 0; fi
+      ! grep -qiE -- "$re" <<<"$t" || echo "$name"
     done <<<"$groups"
   }
 fi
@@ -157,18 +169,19 @@ while ((merged < cap)); do
   done <<<"$list"
   [[ -n "$next" ]] || break
   done_prs+="$next "
-  g=$(group_of "$next")
-  if [[ -n "$g" && "$merged_groups" == *" $g "* ]]; then
-    echo "hold $next serial:$g (one merge per pass)"; held=$((held + 1)); continue
-  fi
+  gs=$(groups_of "$next" | tr '\n' ' ')
+  if [[ "$gs" == "? " ]]; then echo "hold $next serial:unknown (its title could not be read)"; held=$((held + 1)); continue; fi
+  busy=""
+  for g in $gs; do [[ "$merged_groups" != *" $g "* ]] || { busy=$g; break; }; done
+  if [[ -n "$busy" ]]; then echo "hold $next serial:$busy (one merge per pass)"; held=$((held + 1)); continue; fi
   dl=$(orch_run device-recheck.sh check --repo "$repo" --pr "$next" 2>/dev/null) && drc=0 || drc=$?
   # Anything but a clear answer holds: a crash must not let a device-regression fix through.
   if ((drc != 0)); then echo "hold $next ${dl:-device-recheck.sh exit $drc}"; held=$((held + 1)); continue; fi
-  if [[ "$dry" == yes ]]; then echo "would merge $next"; merged=$((merged + 1)); [[ -z "$g" ]] || merged_groups+="$g "; continue; fi
+  if [[ "$dry" == yes ]]; then echo "would merge $next"; merged=$((merged + 1)); merged_groups+="$gs"; continue; fi
   out=$(orch_run pr-merge.sh "${merge_args[@]}" --pr "$next" --head "$head" 2>&1) && rc=0 || rc=$?
   first=$(head -n 1 <<<"$out")
   if ((rc == 0)); then
-    echo "merged $next"; merged=$((merged + 1)); [[ -z "$g" ]] || merged_groups+="$g "
+    echo "merged $next"; merged=$((merged + 1)); merged_groups+="$gs"
     list=$(rows) || { echo "merge-pass.sh: pr-ready.sh failed after a merge; pass ended" >&2; break; }
     continue
   fi

@@ -61,7 +61,8 @@ case "$all" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
   "api repos/o/r/actions/runs?"*) cat "$FX/green" 2>/dev/null ;;
   "api repos/o/r/compare/"*) cat "$FX/ahead" ;;
-  "pr list --repo o/r --state open"*) [ ! -f "$FX/titles-fail" ] || { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }; cat "$FX/titles" ;;
+  "api --paginate repos/o/r/pulls?state=open"*) [ ! -f "$FX/titles-fail" ] || { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }; cat "$FX/titles" ;;
+  "api repos/o/r/pulls/"*" --jq .title") n=${all#api repos/o/r/pulls/}; n=${n%% *}; [ -f "$FX/title-$n" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; cat "$FX/title-$n" ;;
   *) echo "unexpected gh call: $all" >&2; exit 9 ;;
 esac
 STUB
@@ -169,6 +170,24 @@ mp() { run "$SCRIPTS/merge-pass.sh" --repo o/r "$@"; }
   touch "$FX/titles-fail"
   mp
   [ "$status" -eq 3 ]
+}
+
+@test "review #430: titles off the list are read on their own; two groups both wait; a bad regex is exit 2" {
+  printf 'a alpha\nb beta\n' >"$STATE/serial-groups"
+  printf '12\tbeta two\n30\tfix crash\n' >"$FX/titles"      # 7 is past the list
+  echo "alpha beta" >"$FX/title-7"
+  mp
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "merged 7" ]
+  [ "${lines[1]}" = "hold 12 serial:b (one merge per pass)" ]   # 7 was in a and b
+  [ "${lines[2]}" = "merged 30" ]
+  rm "$FX/title-7"
+  mp
+  [ "${lines[0]}" = "hold 7 serial:unknown (its title could not be read)" ]
+  printf 'web proto(\n' >"$STATE/serial-groups"
+  mp
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no valid REGEX for group web"* ]]
 }
 
 @test "an outage stops the pass (exit 5); pr-ready failing is exit 3; usage errors are exit 2" {
