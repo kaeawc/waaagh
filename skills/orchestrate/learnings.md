@@ -37,6 +37,26 @@ cases), **How to apply**, its date and the source event. `--roles` tags who must
 template names (`merge-bot`, `implementation-lane`, `review`, ...), `orchestrator` for you, or
 `all`.
 
+## Rules already in memory
+
+A campaign that kept its owner rules in Claude Code's auto-memory (`~/.claude/projects/<project>/memory/`)
+before it had a learnings store can bring them over once. Feedback memories already have the shape
+of a learning: a rule, **Why:** and **How to apply:**.
+
+```bash
+"$SCRIPTS/learning.sh" import --memory-dir ~/.claude/projects/<project>/memory          # dry run
+"$SCRIPTS/learning.sh" import --memory-dir ~/.claude/projects/<project>/memory --apply  # write them
+```
+
+Superseded memories (SUPERSEDED in the description or body) and ones missing a part are skipped,
+and a memory already imported is never imported twice (its source is `memory:<name>`). Imported
+learnings are `--trigger owner --scope repo`, tagged `orchestrator` unless `--roles` says more.
+Everything after **How to apply:** comes along, because memories often amend their rule there
+("**Update 2026-11-08:** 12 lanes, not 16"): read each imported learning's How part, and supersede
+or rewrite a learning whose Rule line an amendment overrides. Then run a consolidation pass:
+memory often holds an amended rule next to the one it replaced. A retired or superseded import is
+never imported again (`learnings/imported.log`).
+
 ## Scope: local or upstream
 
 - `--scope repo`: true of this repository only (its CI, its devices, its owner's preferences).

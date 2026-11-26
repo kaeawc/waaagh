@@ -25,6 +25,16 @@
 #   upstream  --id ID [--create]    a global learning as a waaagh doctrine issue: print the title
 #             and body, or with --create open it on ORCHESTRATE_UPSTREAM_REPO (default
 #             kaeawc/waaagh) and record its URL in the learning. Already upstreamed: print the URL.
+#   import    --memory-dir DIR [--roles R] [--apply]   Claude Code feedback memories as learnings
+#             (#421): every DIR/*.md with `type: feedback` and its rule, **Why:** and **How to
+#             apply:** parts, except MEMORY.md and superseded ones (SUPERSEDED in its description
+#             or body). Title: the description; date: a -YYYYMMDD name suffix, else the memory's
+#             modified date, else the file's; source: memory:<name>; --trigger owner --scope repo,
+#             roles default orchestrator. A memory imported before is skipped, even after its
+#             learning was retired or superseded (learnings/imported.log). A title whose id is
+#             taken gets the memory's name added. A dry run (`would add<TAB>date<TAB>title`)
+#             unless --apply (`added<TAB>path`, `not added: <name>: <why>`); then one summary line:
+#             `memories=<n> feedback=<n> new=<n> known=<n> superseded=<n> incomplete=<n> failed=<n>`
 # Env: ORCHESTRATE_LEARNINGS_CONSOLIDATE_EVERY (default 10) learnings added between passes.
 # Exit: 0 ok | 2 usage | 3 refused (id exists, unknown id, repo-scope upstream) | 9 the upstream
 #       issue was sent but its URL is unknown (see <state dir>/ops/upstream-<id>.json)
@@ -38,12 +48,12 @@ orch_gh_priority low
 usage() { orch_usage >&2; exit 2; }
 cmd=${1:-}
 case "$cmd" in
-  add | index | list | show | brief | status | consolidate | supersede | retire | upstream) shift ;;
+  add | index | list | show | brief | status | consolidate | supersede | retire | upstream | import) shift ;;
   -h | --help) orch_usage; exit 0 ;;
   *) usage ;;
 esac
 repo="" title="" rule="" why="" how="" source_ev="" trigger="" scope="" roles="" date=""
-id="" by="" note="" role="" all=no done=no create=no
+id="" by="" note="" role="" all=no done=no create=no memdir="" apply=no
 while (($#)); do
   case "$1" in
     --repo) repo=$2; shift 2 ;;
@@ -63,17 +73,21 @@ while (($#)); do
     --all) all=yes; shift ;;
     --done) done=yes; shift ;;
     --create) create=yes; shift ;;
+    --memory-dir) memdir=$2; shift 2 ;;
+    --apply) apply=yes; shift ;;
     *) echo "learning.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 refuse() { echo "refused: $*"; exit 3; }
 
 repo=$(orch_repo "$repo")
-state=$(orch_state_dir "$repo")
+# A dry-run import writes nothing, not even the state directory.
+if [[ "$cmd" == import && "$apply" != yes ]]; then state="$(orch_state_root)/${repo//\//__}"
+else state=$(orch_state_dir "$repo"); fi
 dir="$state/learnings"
 ledger="$state/campaign.json"
 today=$(jq -rn --argjson t "$(orch_now)" '$t | strftime("%Y-%m-%d")')
-mkdir -p "$dir"
+[[ "$cmd" == import && "$apply" != yes ]] || mkdir -p "$dir"
 
 # fm FILE KEY: one front-matter value.
 fm() { awk -v k="$2" 'NR == 1 && $0 == "---" { inside = 1; next } inside && $0 == "---" { exit }
@@ -162,6 +176,83 @@ EOF
     echo "$f"
     ;;
   index) reindex; echo "$dir/INDEX.md" ;;
+  import)
+    [[ -n "$memdir" && -d "$memdir" ]] || usage
+    roles=${roles:-orchestrator}
+    [[ "$roles" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || usage
+    trim() { local t=$1; t=${t#"${t%%[![:space:]]*}"}; t=${t%"${t##*[![:space:]]}"}; printf '%s' "$t"; }
+    # The slug add derives from a title (same steps), to see an id clash before add refuses it.
+    slug_of() { norm "$1" | tr ' ' '-' | cut -c1-50 | sed 's/-*$//'; }
+    # Every memory ever imported, kept apart from the entries: a retired or superseded import
+    # must not come back on the next run.
+    imported="$dir/imported.log"
+    memories=0 feedback=0 new=0 known=0 superseded=0 incomplete=0 failed=0 ids=" "
+    for m in "$memdir"/*.md; do
+      [[ -f "$m" && "${m##*/}" != MEMORY.md ]] || continue
+      memories=$((memories + 1))
+      # Front matter (name, description, type, modified), then the body split at **Why:** and
+      # **How to apply:** outside code fences; everything after **How to apply:** is kept (later
+      # amendments live there). CR line ends are dropped. Fields: lines, then \036-separated parts.
+      parsed=$(awk '{ sub(/\r$/, "") }
+        NR == 1 && $0 == "---" { fm = 1; next }
+        fm && $0 == "---" { fm = 0; sec = "rule"; next }
+        fm { if (sub(/^name: */, "")) name = $0; else if (sub(/^description: */, "")) desc = $0
+             else if ($0 ~ /^ *type: *feedback *$/) type = "feedback"; else if (sub(/^ *modified: */, "")) mod = $0
+             next }
+        sec == "" { sec = "rule" }
+        /SUPERSEDED/ { sup = 1 }
+        /^ *```/ { fence = !fence }
+        !fence && sec == "rule" && /^\*\*Why:\*\*/ { sec = "why"; sub(/^\*\*Why:\*\* */, "") }
+        !fence && sec == "why" && /^\*\*How to apply:\*\*/ { sec = "how"; sub(/^\*\*How to apply:\*\* */, "") }
+        { part[sec] = part[sec] $0 "\n" }
+        END { if (desc ~ /SUPERSEDED/) sup = 1
+          printf "%s\n%s\n%s\n%s\n%s\n\036%s\036%s\036%s", name, desc, type, sup ? "yes" : "no", mod,
+            part["rule"], part["why"], part["how"] }' "$m")
+      head=${parsed%%$'\036'*} rest=${parsed#*$'\036'}
+      { read -r name; read -r desc; read -r type; read -r sup; read -r mod; } <<<"$head"
+      r=$(trim "${rest%%$'\036'*}") rest=${rest#*$'\036'}
+      w=$(trim "${rest%%$'\036'*}") h=$(trim "${rest#*$'\036'}")
+      [[ "$type" == feedback ]] || continue
+      feedback=$((feedback + 1))
+      name=${name:-$(basename "$m" .md)}
+      if [[ "$sup" == yes ]]; then superseded=$((superseded + 1)); continue; fi
+      if [[ -z "$r" || -z "$w" || -z "$h" ]]; then incomplete=$((incomplete + 1)); continue; fi
+      if grep -qxF "memory:$name" "$imported" 2>/dev/null ||
+        grep -qxF "source: memory:$name" "$dir"/[0-9]*.md 2>/dev/null; then known=$((known + 1)); continue; fi
+      t=$(trim "${desc:-$name}")
+      if [[ "$t" == \"*\" || "$t" == \'*\' ]]; then t=${t:1:${#t}-2}; fi   # a quoted YAML scalar
+      # At most 120 characters, cut at a word boundary (never inside a multi-byte character).
+      if ((${#t} > 120)); then
+        t=${t:0:120}; [[ "$t" != *" "* ]] || t=${t% *}
+        # Under a C locale the cut counts bytes: drop a split character's leftover bytes.
+        # (iconv -c prints the cleaned text but exits 1 on an incomplete last character.)
+        clean=$(printf '%s' "$t" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)
+        [[ -z "$clean" ]] || t=$clean
+      fi
+      if [[ "$name" =~ (20[0-9]{2})([01][0-9])([0-3][0-9])$ ]]; then d="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
+      elif [[ "$mod" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then d=${BASH_REMATCH[1]}
+      else d=$(date -r "$m" +%Y-%m-%d); fi
+      # An empty slug (no ASCII letters or digits) or an id taken (by an entry or earlier in this
+      # run): the memory's name goes into the title to tell them apart.
+      sl=$(slug_of "$t")
+      if [[ -z "$sl" || -f "$dir/$d-$sl.md" || "$ids" == *" $d-$sl "* ]]; then
+        t="$name: $t"; sl=$(slug_of "$t")   # the name first: the slug keeps only 50 characters
+      fi
+      if [[ -z "$sl" || -f "$dir/$d-$sl.md" || "$ids" == *" $d-$sl "* ]]; then
+        echo "not added: $name: no free id for its title"; failed=$((failed + 1)); continue
+      fi
+      ids+="$d-$sl "
+      if [[ "$apply" != yes ]]; then printf 'would add\t%s\t%s\n' "$d" "$t"; new=$((new + 1)); continue; fi
+      if out=$("$here/learning.sh" add --repo "$repo" --title "$t" --rule "$r" --why "$w" --how "$h" \
+        --source "memory:$name" --trigger owner --scope repo --roles "$roles" --date "$d" 2>&1); then
+        echo "memory:$name" >>"$imported"
+        printf 'added\t%s\n' "$out"; new=$((new + 1))
+      else
+        echo "not added: $name: $(head -n 1 <<<"$out")"; failed=$((failed + 1))
+      fi
+    done
+    echo "memories=$memories feedback=$feedback new=$new known=$known superseded=$superseded incomplete=$incomplete failed=$failed"
+    ;;
   list)
     while IFS= read -r f; do
       [[ -n "$f" ]] || continue
