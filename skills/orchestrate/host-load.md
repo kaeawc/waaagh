@@ -90,6 +90,18 @@ worktrees (12 GB) took the load from about 120 to 32 within minutes.
   `origin/<default>` as last fetched. Exit 3 means the budget is still exceeded after
   collection: start no new worktree until it is back under, and report the budget row.
 - Over budget is not a reason to remove an unfinished tree. Finish or close its PR first.
+- **Outside a campaign, the session start says so** (#395). The plugin's SessionStart hook
+  (`scripts/wt-session-hint.sh`) prints one line when the session's repository has finished
+  worktrees: `waaagh: N merged, M likely merged worktrees in <repo> - review with wt-cleanup.sh
+  --repo-dir <main checkout>`. It reads a cached dry-run report,
+  `<state root>/wt-reports/<repo>-<cksum of the git common dir>.tsv`, and trusts it for 12 hours
+  (`ORCHESTRATE_WT_REPORT_TTL`). A missing or stale report is refreshed by a detached background
+  process: `git fetch origin` (`ORCHESTRATE_WT_REPORT_FETCH=0` skips it), then
+  `wt-cleanup.sh --pr-closed`, falling back to the local proofs when the GitHub repository cannot
+  be told. One refresh runs at a time per report. The hook itself never waits on `gh` or a fetch,
+  and nothing it starts removes a tree: removal stays `wt-cleanup.sh --apply`, after the owner
+  agrees. Measured cost of the hook (median of 50 starts, Linux): about 19 ms on bash 5 and 26 ms
+  on bash 3.2 with a fresh report, and 24-28 ms when it starts a refresh.
 
 ## Exclusive classes
 
