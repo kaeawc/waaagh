@@ -60,6 +60,7 @@ skills/orchestrate/scripts/review-ledger.sh	97
 skills/orchestrate/scripts/routines.sh	85
 skills/orchestrate/scripts/shared-build.sh	99
 skills/orchestrate/scripts/shipped-blocked.sh	99
+skills/orchestrate/scripts/stranded-merges.sh	80
 skills/orchestrate/scripts/supersede-check.sh	90
 skills/orchestrate/scripts/thread-resolve.sh	97
 skills/orchestrate/scripts/thread-sweep.sh	94

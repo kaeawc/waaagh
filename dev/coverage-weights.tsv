@@ -107,6 +107,7 @@ snapshot-readers.bats	8
 spectra-lib.bats	3
 stalled-threads.bats	7
 stated-defaults.bats	4
+stranded-merges.bats	8
 stub-gh-args.bats	5
 stub-gh-routes.bats	6
 subagent-hygiene.bats	3

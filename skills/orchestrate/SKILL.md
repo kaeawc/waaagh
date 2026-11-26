@@ -498,6 +498,11 @@ against its PR's own changes.
   commits unrelated to main, so replay only the branch's own commits onto the new main
   (`git rebase --onto origin/<base> <old-base> <branch>`), then verify `git diff origin/<base>`
   contains only that branch's change.
+- **Never merge into a finished base.** A PR merged into a stacked base after the base's own PR
+  merged is stranded: it shows MERGED, but its commits never reach the default branch (#404, #410).
+  Retarget it first (`gh pr edit N --base <default>`); repositories with "Automatically delete head
+  branches" on get that from GitHub. `"$SCRIPTS/stranded-merges.sh" --repo OWNER/REPO` lists
+  stranded merges (exit 3), ones re-landed another way, and ones it cannot judge.
 - **A mechanical merge can leave duplicate imports** (or duplicated registrations). Lint the merged
   tree before pushing it.
 - **Host sleep corrupts timings.** Failures that straddle a sleep (lid closed) are noise, but

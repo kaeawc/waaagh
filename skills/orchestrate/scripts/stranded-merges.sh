@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# Stranded merges (#410): PRs merged into a stacked base after the base's own PR had already
+# merged, so their changes never reach the default branch. GitHub retargets a stacked PR to the
+# default branch only when its base branch is deleted on merge (the repository's "Automatically
+# delete head branches" setting); without that, a child merged into a finished base looks MERGED
+# while its commits sit on a branch nothing will merge again (#404 into wt-session-hint-395 after
+# #403 was squash-merged). Read-only; every read goes through gh-read.sh.
+#
+# Usage: stranded-merges.sh [--repo OWNER/REPO] [--since DAYS] [--limit N]
+#   --since  only PRs merged in the last DAYS days (default 30)
+#   --limit  read at most N closed PRs, newest first by update (default 300)
+# Checked: every PR merged into a base other than the default branch. Its parent is the latest
+# merged PR whose head is that base (an open one when none merged). The child is carried when the
+# head the parent merged with contains the child's merge commit (compare status identical or
+# ahead). When it does not, the files the child added are looked up in the default branch's tree,
+# since a stack can be re-landed another way: a path there, or a file of the same name under
+# another directory (moved since), counts as landed.
+# Output (TSV), one line per checked PR, then a summary line:
+#   <n>  OK          base=<b>  parent=#<p>  contained in the head #<p> merged with
+#   <n>  STRANDED    ...  missing on main: <k>/<m> added files (<paths>); retarget a new PR ...
+#   <n>  RELANDED    ...  not in #<p>'s merged head, but its <m> added files are on main
+#   <n>  UNVERIFIED  ...  not in #<p>'s merged head and it added no files: compare by hand
+#   <n>  ORPHAN      base=<b>  parent=-  no PR from <b> ever merged or is open
+#   <n>  PENDING     ...  the base's PR is still open (it will carry the child when it merges)
+#   <n>  unreadable  ...  <what could not be read>
+#   checked=<n> stranded=<n> relanded=<n> unverified=<n> ok=<n> since=<YYYY-MM-DD>
+# ("main" in the details is the repository's default branch.)
+# Exit: 0 nothing stranded | 2 usage | 3 a STRANDED, UNVERIFIED or ORPHAN row | 4 a read failed
+set -euo pipefail
+# This script's directory with no subshell or dirname process: every script start pays for it (#112).
+case "$0" in /*/*) here=${0%/*} ;; */*) here=$PWD/${0%/*} ;; *) here=$PWD ;; esac
+# shellcheck source=_lib.sh
+source "$here/_lib.sh"
+orch_gh_priority low
+
+repo="" since=30 limit=300
+while (($#)); do
+  case "$1" in
+    --repo) repo=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
+    --since) since=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
+    --limit) limit=${2:-}; shift $(($# > 1 ? 2 : 1)) ;;
+    -h | --help) orch_usage; exit 0 ;;
+    *) echo "stranded-merges.sh: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+[[ "$since" =~ ^[0-9]+$ ]] || { echo "stranded-merges.sh: --since needs a number of days" >&2; exit 2; }
+[[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "stranded-merges.sh: --limit needs a positive number" >&2; exit 2; }
+repo=$(orch_repo "$repo")
+owner=${repo%%/*}
+
+ghr() { "$here/gh-read.sh" --tries 3 -- "$@"; }   # bounded, typed, read-only
+ghj() { "$here/gh-read.sh" --tries 3 --json -- "$@"; }
+
+cutoff=$(jq -rn --argjson t "$(($(orch_now) - since * 86400))" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")')
+default=$(ghj api "repos/$repo" | jq -r '.default_branch // empty') || default=""
+[[ -n "$default" ]] || { echo "stranded-merges.sh: the default branch of $repo could not be read" >&2; exit 4; }
+
+# Closed PRs, newest update first, until the limit or an empty page: "<n> <base> <merge sha>" for
+# each one merged into another base since the cutoff.
+kids=() page=1 seen=0
+while ((seen < limit)); do
+  body=$(ghj api "repos/$repo/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=$page") ||
+    { echo "stranded-merges.sh: the closed PRs of $repo could not be read" >&2; exit 4; }
+  n=$(jq length <<<"$body")
+  ((n > 0)) || break
+  while IFS= read -r row; do [[ -z "$row" ]] || kids+=("$row"); done < <(jq -r --arg d "$default" --arg c "$cutoff" \
+    '.[] | select(.merged_at != null and .merged_at >= $c and .base.ref != $d)
+     | "\(.number) \(.base.ref) \(.merge_commit_sha)"' <<<"$body")
+  seen=$((seen + n)); page=$((page + 1))
+done
+
+# The default branch's file list, read once when a PR needs it: every path, and every file name
+# (a file a later commit moved counts as landed). A truncated tree (a very large repository) falls
+# back to one contents read per added file, at most 20 per PR.
+work=$(mktemp -d "${TMPDIR:-/tmp}/stranded-merges.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+tree=""
+load_tree() {
+  local body
+  tree=per-file
+  body=$(ghj api "repos/$repo/git/trees/$default?recursive=1") || return 0
+  [[ "$(jq -r '.truncated // false' <<<"$body")" == false ]] || return 0
+  jq -r '.tree[] | select(.type == "blob") | .path' <<<"$body" >"$work/paths"
+  sed 's#.*/##' "$work/paths" | sort -u >"$work/names"
+  tree=ok
+}
+
+# line VERDICT PARENT DETAIL: one output row for the PR in $n, merged into $base.
+line() { printf '%s\t%s\tbase=%s\tparent=%s\t%s\n' "$n" "$1" "$base" "$2" "$3"; }
+checked=0 stranded=0 relanded=0 unverified=0 ok=0 bad=0 unread=0
+for ((i = 0; i < ${#kids[@]}; i++)); do
+  read -r n base mc <<<"${kids[$i]}"
+  checked=$((checked + 1))
+  if ! parents=$(ghj api "repos/$repo/pulls?head=$owner:$base&state=all&per_page=20"); then
+    line unreadable - "the base's PRs could not be read"; unread=1; continue
+  fi
+  read -r pn ph <<<"$(jq -r '([.[] | select(.merged_at != null)] | sort_by(.merged_at) | last)
+    // ([.[] | select(.state == "open")] | first) // {} | "\(.number // "") \(.head.sha // "")"' <<<"$parents")"
+  if [[ -z "$pn" ]]; then
+    line ORPHAN - "no PR from $base ever merged or is open: its changes are only on $base"; bad=1; continue
+  fi
+  if jq -e --argjson p "$pn" '.[] | select(.number == $p) | .merged_at == null' <<<"$parents" >/dev/null; then
+    line PENDING "#$pn" "the base's PR is still open"; continue
+  fi
+  if ! st=$(ghr api "repos/$repo/compare/$mc...$ph" --jq .status); then
+    line unreadable "#$pn" "the compare of its merge commit with #$pn's head could not be read"; unread=1; continue
+  fi
+  if [[ "$st" == identical || "$st" == ahead ]]; then
+    line OK "#$pn" "contained in the head #$pn merged with"; ok=$((ok + 1)); continue
+  fi
+  [[ -n "$tree" ]] || load_tree
+  if ! added=$(ghr api --paginate "repos/$repo/pulls/$n/files?per_page=100" --jq '.[] | select(.status == "added") | .filename'); then
+    line unreadable "#$pn" "the PR's files could not be read"; unread=1; continue
+  fi
+  total=0 looked=0 missing=() moved=0 rc=0
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    total=$((total + 1))
+    if [[ "$tree" == ok ]]; then
+      looked=$((looked + 1))
+      if grep -qxF -- "$f" "$work/paths"; then :
+      elif grep -qxF -- "${f##*/}" "$work/names"; then moved=$((moved + 1))
+      else missing+=("$f"); fi
+      continue
+    fi
+    ((looked < 20)) || continue
+    looked=$((looked + 1)) rc=0
+    ghr api "repos/$repo/contents/$f?ref=$default" --silent >/dev/null 2>&1 || rc=$?
+    if ((rc == 3)); then missing+=("$f")
+    elif ((rc != 0)); then unread=1; missing+=("$f?"); fi
+  done <<<"$added"
+  if ((total == 0)); then
+    line UNVERIFIED "#$pn" "not in #$pn's merged head and it added no files: compare its diff with main by hand"
+    unverified=$((unverified + 1)); bad=1
+  elif ((${#missing[@]})); then
+    line STRANDED "#$pn" "missing on main: ${#missing[@]}/$looked added files (${missing[*]}); retarget a new PR with its changes to main"
+    stranded=$((stranded + 1)); bad=1
+  else
+    note=""; ((moved == 0)) || note=" ($moved under another directory)"
+    line RELANDED "#$pn" "not in #$pn's merged head, but its $total added files are on main$note"; relanded=$((relanded + 1))
+  fi
+done
+echo "checked=$checked stranded=$stranded relanded=$relanded unverified=$unverified ok=$ok since=${cutoff:0:10}"
+((unread == 0)) || exit 4
+((bad == 0)) || exit 3
+exit 0
