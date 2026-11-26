@@ -296,7 +296,10 @@ the index plus their role's entries. Rules: `learnings.md`.
 Start by reading memory and `"$SCRIPTS/campaign.sh" status`, then `"$SCRIPTS/loops.sh" status`:
 how long ago each campaign loop last passed. A loop left by an earlier session that is `stale`,
 `dead` or `ended` (exit 3) is restarted in this session from `<state dir>/bin/`; `script=missing`
-(exit 4) means it ran from a scratchpad, so `loops.sh install` it first. Then repeat this tick
+(exit 4) means it ran from a scratchpad, so `loops.sh install` it first. On macOS, once per
+checkout, keep Claude Code's isolated worktrees out of Spotlight:
+`"$SCRIPTS/wt-root.sh" migrate --dir <main checkout>/.claude/worktrees` (a dry run; `--apply`
+makes `.claude/worktrees.noindex` with a link at the old path, #406). Then repeat this tick
 whenever an agent reports or a PR changes. Do not tick on a timer.
 
 1. **Stop check.** `paused=yes` (an open issue labelled `orchestrate-pause` or `fleet-pause`):
