@@ -604,7 +604,9 @@ is the bounded timeout case under Merge queue lessons, not this one.
 **Failing checks are never waved through by assertion.** `pr-merge.sh` refuses to merge past a
 check that is failing on the head (marked advisory with `--ignore-check`, in an admin merge, or in
 direct mode) unless `--evidence` names the classifier verdict or flake entry; the evidence goes to
-`merges.log`. A lane saying "infra" is not evidence.
+`merges.log`. A lane saying "infra" is not evidence. On a gated merge with `--ignore-check` or
+`--advisory-file`, an advisory check that is still pending or required but missing, or a head
+whose checks cannot be read, needs `--evidence` too (#428).
 
 ### Interrupts — when to come back to the user
 

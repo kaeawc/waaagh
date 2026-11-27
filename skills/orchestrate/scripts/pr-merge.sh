@@ -17,7 +17,9 @@
 #               thread, unknown thread or policy read, conflict, pending check, missing required
 #               check), or the merge is refused with exit 6.
 #   --ignore-check  advisory checks, passed to pr-ready.sh for that row. If one of them is failing
-#               on the head, --evidence is required too (and logged), as in direct mode.
+#               on the head, --evidence is required too (and logged), as in direct mode. Outside
+#               direct mode the same holds when one is pending or required but missing, or the
+#               head's checks cannot be read as passing (#428).
 #   --advisory-file  add the names in <state dir>/advisory-checks as --ignore-check (#412)
 # Without --admin the same fresh row must be READY for this exact head, or the merge is refused
 # with exit 7 (the row's verdict and reasons are printed), so the merge never depends on the
@@ -301,7 +303,11 @@ if [[ "$admin" == yes || "${ORCHESTRATE_DIRECT_MERGE:-0}" != 1 ]]; then
 fi
 
 # A check failing on this head may be bypassed (as advisory via --ignore-check, by --admin, or in
-# direct mode) only with --evidence naming why; a lane calling it "infra" is not evidence.
+# direct mode) only with --evidence naming why; a lane calling it "infra" is not evidence. Outside
+# direct mode the same holds for a check still pending or required but missing, and for a head
+# whose checks cannot be read: without --evidence the raw row (no --ignore-check) must prove every
+# check read and passing (#428). Non-check blockers (conflict, mergeable=, behind, skip reasons) are the readiness gate's
+# business, or deliberately ungated in direct mode; a token or verdict not known here fails closed.
 if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" == 1 ]]; }; then
   rflags=(--repo "$repo" --pr "$pr" --no-threads)
   for a in "${authors[@]}"; do rflags+=(--author "$a"); done
@@ -310,10 +316,49 @@ if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERG
     log "refused: check state unreadable and no --evidence"
     echo "refused: the head's checks could not be read; a merge past them needs --evidence"; exit 6
   fi
-  failing=$(cut -f6 <<<"$raw" | tr ' ' '\n' | sed -n 's/^fail://p' | tr '\n' ',' | sed 's/,$//')
+  IFS=$'\t' read -r _ rverdict _ _ _ rdetail <<<"$raw"
+  read -r -a rtokens <<<"$rdetail"
+  failing="" pend="" missing="" unread="" unproven=""
+  case "$rverdict" in
+    READY | BEHIND) ;;
+    WAIT | BLOCK | SKIP)
+      # A SKIP row shows its exclusion, not its checks, unless it would otherwise be READY.
+      [[ "$rverdict" != SKIP || " $rdetail " == *" ready-but-skipped "* ]] || unproven+=" SKIP $rdetail"
+      for token in ${rtokens[@]+"${rtokens[@]}"}; do
+        case "$token" in
+          fail:*) failing+=",${token#fail:}" ;;
+          pending:*) pend+=",${token#pending:}" ;;
+          missing-required:*) missing+=",${token#missing-required:}" ;;
+          checks=unknown | policy=unknown) unread+=" $token" ;;
+          conflict | mergeable=* | behind | threads=* | ready-but-skipped | draft | fork | hold | review:* | label:* | branch | -) ;;
+          *) unproven+=" $token" ;;   # few-checks=<n>, and anything this probe does not know
+        esac
+      done ;;
+    *) unproven+=" verdict ${rverdict:-?}" ;;
+  esac
+  failing=${failing#,} pend=${pend#,} missing=${missing#,} unread=${unread# } unproven=${unproven# }
+  # Direct mode deliberately merges without waiting for CI: only a failing check needs evidence
+  # there. The pending, missing and unreadable rules guard --ignore-check on a gated merge.
+  if [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" == 1 ]]; then pend="" missing="" unread="" unproven=""; fi
   if [[ -n "$failing" ]]; then
     log "refused: failing on the head without --evidence: $failing"
     echo "refused: $failing failing on this head; bypassing a failing check needs --evidence (the classifier verdict or flake entry)"
+    exit 6
+  elif [[ -n "$pend" ]]; then
+    log "refused: pending on the head without --evidence: $pend"
+    echo "refused: $pend pending on this head; merging before it reports needs --evidence (or wait for it)"
+    exit 6
+  elif [[ -n "$missing" ]]; then
+    log "refused: missing on the head without --evidence: $missing"
+    echo "refused: required $missing missing on this head; merging without it needs --evidence"
+    exit 6
+  elif [[ -n "$unread" ]]; then
+    log "refused: check state unreadable and no --evidence: $unread"
+    echo "refused: the head's checks could not be read ($unread); a merge past them needs --evidence"
+    exit 6
+  elif [[ -n "$unproven" ]]; then
+    log "refused: check state unproven and no --evidence: $unproven"
+    echo "refused: the head's checks are not proven passing ($unproven); a merge past them needs --evidence"
     exit 6
   fi
 fi
