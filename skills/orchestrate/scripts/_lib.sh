@@ -5,7 +5,10 @@
 # (pace every gh call through gh-budget.sh; see orch_gh_priority below), ORCHESTRATE_GH_API
 # (auto|rest|graphql; see orch_gh_api below), SPECTRA (the spectra binary; see orch_spectra_require below).
 
-orch_now() { echo "${ORCHESTRATE_NOW:-${EPOCHSECONDS:-$(date +%s)}}"; }   # EPOCHSECONDS: bash 5
+orch_now() { local _orch_t; orch_now_into _orch_t; echo "$_orch_t"; }
+# orch_now_into VAR: VAR=$(orch_now) with no subshell. The *_into helpers here set a variable instead
+# of printing: a script start or a hot loop pays one fork per $(...) of a helper that needs none (#112).
+orch_now_into() { printf -v "$1" '%s' "${ORCHESTRATE_NOW:-${EPOCHSECONDS:-$(date +%s)}}"; }   # EPOCHSECONDS: bash 5
 
 # orch_usage -> the running script's header, its -h text: the comment block after the shebang, up to
 # the first line that is not a comment (the rule cli-contract.bats checks). No line range to bump
@@ -44,6 +47,15 @@ orch_repo() {
   fi
   gh repo view --json nameWithOwner | jq -r .nameWithOwner
 }
+# orch_repo_into VAR [OWNER/REPO]: VAR=$(orch_repo OWNER/REPO), with no subshell when OWNER/REPO is
+# given and echo would print it unchanged (no leading -, no trailing newline). Returns orch_repo's
+# status when it has to run it.
+orch_repo_into() {
+  case "${2:-}" in
+    "" | -* | *$'\n') local _orch_r; _orch_r=$(orch_repo "${2:-}") || return; printf -v "$1" '%s' "$_orch_r" ;;
+    *) printf -v "$1" '%s' "$2" ;;
+  esac
+}
 
 # orch_author -> the login whose PRs this orchestrator may drive: ORCHESTRATE_AUTHOR, else the
 # authenticated gh user. The `gh api user` answer is cached in <state root>/.author (one line:
@@ -56,13 +68,16 @@ orch_repo() {
 orch_author() {
   if [[ -n "${ORCHESTRATE_AUTHOR:-}" ]]; then echo "$ORCHESTRATE_AUTHOR"; return; fi
   local root host="${GH_HOST:-github.com}"
-  root=$(orch_state_root)
-  local ttl="${ORCHESTRATE_AUTHOR_TTL:-3600}" now key login t h k l
+  orch_state_root_into root
+  local ttl="${ORCHESTRATE_AUTHOR_TTL:-3600}" now key login t h k l sum
   local cache="$root/.author" hosts="${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml"
-  now=$(orch_now)
+  orch_now_into now
   key=$(awk -v h="$host:" '$0 == h { in_host = 1; next } /^[^ ]/ { in_host = 0 }
     in_host && $1 == "user:" { print $2 }' "$hosts" 2>/dev/null) || key=""
-  key="${key:--}/$(printf '%s' "${GH_TOKEN:-${GITHUB_TOKEN:-}}" | cksum | tr ' ' .)"
+  # No token: the checksum of empty input is a constant (POSIX cksum: "4294967295 0"), so no pipeline.
+  sum=4294967295.0
+  [[ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]] || sum=$(printf '%s' "${GH_TOKEN:-${GITHUB_TOKEN:-}}" | cksum | tr ' ' .)
+  key="${key:--}/$sum"
   if [[ "$ttl" =~ ^[0-9]+$ ]] && ((ttl > 0)) && read -r t h k l 2>/dev/null <"$cache" &&
     [[ "$t" =~ ^[0-9]+$ && "$h" == "$host" && "$k" == "$key" && -n "$l" ]] && ((now - t < ttl)); then
     echo "$l"
@@ -78,7 +93,8 @@ orch_author() {
 
 # orch_state_root -> the root of all durable campaign state: ORCHESTRATE_STATE_DIR, default ~/.claude/orchestrate.
 # The one place that default is spelled (#304).
-orch_state_root() { echo "${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}"; }
+orch_state_root() { local _orch_sr; orch_state_root_into _orch_sr; echo "$_orch_sr"; }
+orch_state_root_into() { printf -v "$1" '%s' "${ORCHESTRATE_STATE_DIR:-$HOME/.claude/orchestrate}"; }   # VAR=$(orch_state_root)
 
 # orch_advisory_checks OWNER/REPO: the repository's advisory checks, one name per line from
 # <state dir>/advisory-checks (#412). Blank lines and lines whose first non-blank character is #
@@ -92,11 +108,14 @@ orch_advisory_checks() {
 }
 
 # orch_state_dir OWNER/REPO -> the repo's durable campaign directory (created on demand).
-orch_state_dir() {
-  local d
-  d="$(orch_state_root)/${1//\//__}"
-  [[ -d "$d" ]] || mkdir -p "$d"
-  echo "$d"
+orch_state_dir() { local _orch_sd; orch_state_dir_into _orch_sd "$1"; echo "$_orch_sd"; }
+# orch_state_dir_into VAR OWNER/REPO: VAR=$(orch_state_dir OWNER/REPO) with no subshell. Like it, a
+# failed mkdir is reported on stderr and is not an error.
+orch_state_dir_into() {
+  local _orch_sdr
+  orch_state_root_into _orch_sdr
+  printf -v "$1" '%s' "$_orch_sdr/${2//\//__}"
+  if [[ ! -d "$_orch_sdr/${2//\//__}" ]]; then mkdir -p "$_orch_sdr/${2//\//__}" || true; fi
 }
 
 # GraphQL or REST (#108, #109, #123). Claude Code cloud sessions answer every GraphQL call
@@ -115,7 +134,8 @@ orch_gh_api() {
     auto) ;;
     *) echo "$1: ORCHESTRATE_GH_API must be auto, rest or graphql" >&2; return 2 ;;
   esac
-  memo="$(orch_state_root)/gh-no-graphql"
+  orch_state_root_into memo
+  memo+=/gh-no-graphql
   if read -r at 2>/dev/null <"$memo" && [[ "$at" =~ ^[0-9]+$ ]] && (($(orch_now) - at < 43200)); then
     echo rest
   else
@@ -149,8 +169,10 @@ orch_default_branch() { gh api "repos/$1" | jq -r .default_branch; }
 orch_hold_of() {
   local rows since why f
   rows=$(orch_run hold.sh list --repo "$1" 2>/dev/null) || return 2
-  rows=$(awk -F'\t' -v pr="${2#\#}" '$1 == pr { printf "#%s until:%s since:%s %s\n", $1, $2, $3, $5 }' <<<"$rows")
-  f="$(orch_state_root)/${1//\//__}/FREEZE"
+  # No holds: awk would print nothing for a PR number, so it is not started (#112).
+  [[ -z "$rows" && -n "${2#\#}" ]] || rows=$(awk -F'\t' -v pr="${2#\#}" '$1 == pr { printf "#%s until:%s since:%s %s\n", $1, $2, $3, $5 }' <<<"$rows")
+  orch_state_root_into f
+  f+="/${1//\//__}/FREEZE"
   if [[ -z "$rows" && -f "$f" ]]; then
     IFS=$'\t' read -r since why <"$f" || true
     rows="#${2#\#} until:freeze-end since:${since:-unknown} release freeze: ${why:--}"
@@ -271,6 +293,15 @@ orch_iso() {
     TZ=UTC0 printf '%(%Y-%m-%dT%H:%M:%SZ)T\n' "$1"
   else
     jq -rn --argjson t "$1" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")'
+  fi
+}
+# orch_iso_into VAR EPOCH: VAR=$(orch_iso EPOCH) with no subshell on the printf path; orch_iso's
+# status when jq has to format it.
+orch_iso_into() {
+  if [[ "$2" =~ ^(0|[1-9][0-9]{0,14})$ ]] && ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 2))); then
+    TZ=UTC0 printf -v "$1" '%(%Y-%m-%dT%H:%M:%SZ)T' "$2"
+  else
+    local _orch_iso; _orch_iso=$(orch_iso "$2") || return; printf -v "$1" '%s' "$_orch_iso"
   fi
 }
 
