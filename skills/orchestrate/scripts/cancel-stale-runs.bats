@@ -15,7 +15,7 @@ all="$*"; set -- ${all% --include}   # gh-read.sh adds --include to api reads
 echo "$*" >>"$FX/calls"
 case "$1 $2" in
   "api --paginate") case "$3" in repos/o/r/issues/*/events*) n=${3#repos/o/r/issues/}; n=${n%%/*}; echo "events $n" >>"$FX/order"
-      [ ! -f "$FX/events-fail" ] || { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }; cat "$FX/events-$n" 2>/dev/null; exit 0 ;; esac
+      [ ! -f "$FX/events-fail" ] || { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }; cat "$FX/events-$n" 2>/dev/null || true; exit 0 ;; esac
     [ ! -f "$FX/prs-fail" ] || { echo "gh: Server Error (HTTP 502)" >&2; exit 1; }
     echo "heads-read" >>"$FX/order"; cat "$FX/heads" ;;
   "api repos/o/r/pulls?state=closed"*) pg=${2##*page=}
