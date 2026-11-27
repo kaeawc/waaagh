@@ -54,10 +54,12 @@ owner=${repo%%/*}
 
 ghr() { "$here/gh-read.sh" --tries 3 -- "$@"; }   # bounded, typed, read-only
 ghj() { "$here/gh-read.sh" --tries 3 --json -- "$@"; }
+uri() { jq -rn --arg f "$1" '$f | @uri | gsub("%2F"; "/")'; }   # a path or branch name for a URL
 
 cutoff=$(jq -rn --argjson t "$(($(orch_now) - since * 86400))" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")')
 default=$(ghj api "repos/$repo" | jq -r '.default_branch // empty') || default=""
 [[ -n "$default" ]] || { echo "stranded-merges.sh: the default branch of $repo could not be read" >&2; exit 4; }
+default_enc=$(uri "$default")
 
 # Closed PRs, newest update first, until the limit or an empty page: "<n> <base> <merge sha>" for
 # each one merged into another base since the cutoff.
@@ -83,13 +85,16 @@ generic='(README|SKILL|CHANGELOG|LICENSE|CONTRIBUTING|AGENTS|CLAUDE)(\.[A-Za-z]+
 load_tree() {
   local body
   tree=per-file
-  body=$(ghj api "repos/$repo/git/trees/$default?recursive=1") || return 0
+  body=$(ghj api "repos/$repo/git/trees/$default_enc?recursive=1") || return 0
   [[ "$(jq -r '.truncated // false' <<<"$body")" == false ]] || return 0
   jq -r '.tree[] | select(.type == "blob") | .path' <<<"$body" >"$work/paths"
-  jq -r '.tree[] | select(.type == "blob") | .sha' <<<"$body" | sort -u >"$work/shas"
+  # Blob shas that vouch for a moved file: those that occur exactly once on main and are not the
+  # empty blob (an empty file or a boilerplate LICENSE copy matches any other one).
+  jq -r '.tree[] | select(.type == "blob") | .sha' <<<"$body" | sort | uniq -u |
+    grep -vx 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391' >"$work/shas" || true
   # File names that occur once on main and are not generic: a moved file is recognised by its name
   # only when the name cannot belong to some other file.
-  sed 's#.*/##' "$work/paths" | sort | uniq -u | grep -vxE "$generic" >"$work/names" || true
+  sed 's#.*/##' "$work/paths" | sort | uniq -u | grep -vixE "$generic" >"$work/names" || true
   tree=ok
 }
 
@@ -99,7 +104,7 @@ checked=0 stranded=0 relanded=0 unverified=0 ok=0 bad=0 unread=0
 for ((i = 0; i < ${#kids[@]}; i++)); do
   read -r n base mc <<<"${kids[$i]}"
   checked=$((checked + 1))
-  if ! parents=$(ghj api "repos/$repo/pulls?head=$owner:$base&state=all&per_page=20"); then
+  if ! parents=$(ghj api "repos/$repo/pulls?head=$owner:$(uri "$base")&state=all&per_page=20"); then
     line unreadable - "the base's PRs could not be read"; unread=1; continue
   fi
   # The latest merged PR from the base, and its open one (a long-lived base such as develop has
@@ -150,8 +155,7 @@ for ((i = 0; i < ${#kids[@]}; i++)); do
     fi
     ((looked < 20)) || continue
     looked=$((looked + 1)) rc=0
-    enc=$(jq -rn --arg f "$f" '$f | @uri | gsub("%2F"; "/")')
-    ghr api "repos/$repo/contents/$enc?ref=$default" --silent >/dev/null 2>&1 || rc=$?
+    ghr api "repos/$repo/contents/$(uri "$f")?ref=$default_enc" --silent >/dev/null 2>&1 || rc=$?
     if ((rc == 3)); then missing+=("$f")
     elif ((rc != 0)); then unread=1; missing+=("$f?"); fi
   done <<<"$added"
