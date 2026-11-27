@@ -182,9 +182,18 @@ gh_stub_args() {
     a="${a:+$a }$x"
   done
 }
+# gh_stub_header [fast]: with `fast`, the shebang is stub_shebang's (the stub must then run on bash 3.2).
 gh_stub_header() {
-  echo '#!/usr/bin/env bash'
+  if [[ "${1:-}" == fast ]]; then stub_shebang; else echo '#!/usr/bin/env bash'; fi
   declare -f gh_stub_args
+}
+# stub_shebang: the shebang for a stub a suite calls hundreds of times (#112): /bin/bash where it
+# exists, which on macOS is the system bash 3.2 and starts in about a quarter of the time of a
+# Homebrew bash found through env. Under bashcov (xtrace in SHELLOPTS) it stays `/usr/bin/env bash`:
+# bash 3.2 has no BASH_XTRACEFD, so its trace would land on the stub's stderr. A stub written with it
+# must run on bash 3.2 (no associative arrays, mapfile, ${x,,} or [[ -v ]]).
+stub_shebang() {
+  if [[ -x /bin/bash && ":${SHELLOPTS:-}:" != *:xtrace:* ]]; then echo '#!/bin/bash'; else echo '#!/usr/bin/env bash'; fi
 }
 stub_gh_routes() {
   FX="$BATS_TEST_TMPDIR/fx"

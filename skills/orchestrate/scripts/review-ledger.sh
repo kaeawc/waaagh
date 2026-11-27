@@ -134,8 +134,10 @@ if [[ -n "$findings" && "$verdict" == ship ]]; then
   [[ -z "$why" ]] || verdict=incomplete note="incomplete ship: $why${note:+; $note}"
 fi
 
-repo=$(orch_repo "$repo")
-file="$(orch_state_dir "$repo")/reviews.tsv"
+# Into variables, not $(...): every merge-path review check starts this script (#112).
+orch_repo_into repo "$repo"
+orch_state_dir_into file "$repo"
+file+=/reviews.tsv
 if [[ -e "$file" && ! ( -f "$file" && -r "$file" ) ]]; then
   echo "error: could not read $file" >&2; exit 4
 fi
@@ -206,12 +208,18 @@ post_review() {
 
 case "$cmd" in
   latest)
-    row=$(rows "$pr" | awk 'END { if (NR) print }')
+    # One awk: rows' filter and the last row (#112); no ledger, no row.
+    row=""
+    [[ ! -f "$file" ]] || row=$(awk -F'\t' -v pr="$pr" 'NF >= 5 && $2 ~ /^[0-9]+$/ && (pr == "" || $2 == pr) { l = $0; n++ }
+      END { if (n) print l }' "$file")
     [[ -n "$row" ]] || { echo "no verdict: PR $pr has no internal review recorded"; exit 3; }
     printf '%s\n' "$row"
     ;;
-  blocked) rows | awk -F'\t' '{ v[$2] = $3 } END { for (p in v) if (v[p] != "ship") print p "\t" v[p] }' | sort -n ;;
-  shipped) rows | awk -F'\t' '{ v[$2] = $3; h[$2] = $4 } END { for (p in v) if (v[p] == "ship" && h[p] != "-") print p "\t" h[p] }' | sort -n ;;
+  # rows' filter in the same awk (#112); no ledger, nothing to print.
+  blocked) [[ ! -f "$file" ]] || awk -F'\t' 'NF >= 5 && $2 ~ /^[0-9]+$/ { v[$2] = $3 }
+      END { for (p in v) if (v[p] != "ship") print p "\t" v[p] }' "$file" | sort -n ;;
+  shipped) [[ ! -f "$file" ]] || awk -F'\t' 'NF >= 5 && $2 ~ /^[0-9]+$/ { v[$2] = $3; h[$2] = $4 }
+      END { for (p in v) if (v[p] == "ship" && h[p] != "-") print p "\t" h[p] }' "$file" | sort -n ;;
   list) rows "$pr" ;;
   rounds)
     rows "$pr" | awk -F'\t' -v min="$min" '

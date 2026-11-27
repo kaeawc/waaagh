@@ -73,9 +73,11 @@ cooldown="$state_root/gh-cooldown"
 fake=${GH_READ_FAKE_SLEEP:-0}
 clock_base=${ORCHESTRATE_NOW:-${EPOCHSECONDS:-$(date +%s)}}
 waited=0
-# EPOCHSECONDS (bash 5) saves a date process per read; bash 3.2 falls back to date.
-now() { if [[ "$fake" == 1 ]]; then echo $((clock_base + waited)); elif [[ -n "${EPOCHSECONDS:-}" ]]; then echo "$EPOCHSECONDS"; else date +%s; fi; }
-start=$(now)
+# EPOCHSECONDS (bash 5) saves a date process per read; bash 3.2 falls back to date. now_into sets
+# $t with no subshell, so the success path forks nothing for the clock (#112).
+now_into() { if [[ "$fake" == 1 ]]; then t=$((clock_base + waited)); elif [[ -n "${EPOCHSECONDS:-}" ]]; then t=$EPOCHSECONDS; else t=$(date +%s); fi; }
+now() { local t; now_into; echo "$t"; }
+now_into; start=$t
 elapsed() { echo $(($(now) - start)); }
 iso() { jq -rn --argjson t "$1" '$t | strftime("%Y-%m-%dT%H:%M:%SZ")'; }
 wait_for() { # seconds
@@ -122,8 +124,9 @@ while :; do
   # where they would interleave with the pages).
   [[ "$is_api" == no || " $* " == *" --paginate "* ]] || args+=(--include)
   rc=0
-  # In a subshell with its own stderr, so the shell's "Alarm clock" notice stays out of the output.
-  (perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$timeout" gh "${args[@]}" >"$work/out" 2>"$work/err"; exit $?) 2>/dev/null || rc=$?
+  # In a group with its own stderr, so the shell's "Alarm clock" notice stays out of the output: the
+  # shell prints it while the group's redirection holds, with no subshell to fork (#112).
+  { perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$timeout" gh "${args[@]}" >"$work/out" 2>"$work/err"; } 2>/dev/null || rc=$?
 
   # Split headers (api --include) from the body in one pass. Every read of every helper comes
   # through here, so the success path spawns as few processes as it can (#112). perl copies the

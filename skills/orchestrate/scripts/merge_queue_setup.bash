@@ -19,8 +19,8 @@ setup() {
   export FX PATH="$BATS_TEST_TMPDIR/bin:$PATH"
   # An unprotected server: it accepts any merge whose --match-head-commit matches. The PR head
   # is the SHA really pushed to the local origin (or $FX/stale-head while GitHub lags).
-  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
-#!/usr/bin/env bash
+  # Every run-once calls it about 25 times: stub_shebang's fast shebang, so bash 3.2 code (#112).
+  { stub_shebang; cat <<'STUB'; } >"$BATS_TEST_TMPDIR/bin/gh"
 all="$*"
 echo "$all" >>"$FX/calls"
 head_of() {
@@ -34,8 +34,9 @@ case "$all" in
   *graphql*) printf '{"data":{"repository":{"p5":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":%s}}}}}\n' "$(<"$FX/threads.json")" ;;
   "api repos/o/r/actions/runs?"*) jq '{workflow_runs: map({name: .workflowName, status, conclusion, head_sha: .headSha, id: .databaseId, created_at: .createdAt})}' "$FX/runs.json" ;;
   "pr list"*"--state merged"*) cat "$FX/merged-prs.json" 2>/dev/null || echo '[]' ;;
-  "pr list"*--head*) [ ! -f "$FX/list-fails-$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/')" ] || { echo "HTTP 502" >&2; exit 1; }
-    rm -f "$FX/merged"; b=$(echo "$all" | sed 's/.*--head \([^ ]*\).*/\1/'); echo "$b" >>"$FX/order"; echo "$b" >"$FX/branch"
+  "pr list"*--head*) b=${all##*--head }; b=${b%% *}   # the branch after --head, with no sed process (#112)
+    [ ! -f "$FX/list-fails-$b" ] || { echo "HTTP 502" >&2; exit 1; }
+    rm -f "$FX/merged"; echo "$b" >>"$FX/order"; echo "$b" >"$FX/branch"
     printf '[{"number":5,"headRefOid":"%s"}]\n' "$(head_of)" ;;
   "pr list"*) printf '[{"number":5,"author":{"login":"me"},"isDraft":false,"isCrossRepository":false,"baseRefName":"main","headRefOid":"%s","mergeable":"%s","labels":[],"statusCheckRollup":%s}]\n' \
     "$(head_of)" "$(<"$FX/mergeable")" "$(<"$FX/checks.json")" ;;

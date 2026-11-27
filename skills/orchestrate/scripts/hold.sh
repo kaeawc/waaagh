@@ -80,12 +80,14 @@ if [[ "$cmd" == add ]]; then
     { echo "hold.sh: --until must be device-recheck, main-green, review-ship, owner, merged:N, closed:N or at:ISO" >&2; exit 2; }
 fi
 
-repo=$(orch_repo "$repo")
-state=$(orch_state_dir "$repo")
+# Into variables, not $(...): every merge-path hold check starts this script (#112).
+state="" now="" now_iso=""
+orch_repo_into repo "$repo"
+orch_state_dir_into state "$repo"
 file="$state/holds"
 logf="$state/holds.log"
-now=$(orch_now)
-now_iso=$(orch_iso "$now")
+orch_now_into now
+orch_iso_into now_iso "$now"
 
 # parsed: the hold file as TSV rows `pr  until  since  reason`; unknown fields read "unknown",
 # an empty reason "-". The last line for a PR wins.
@@ -178,7 +180,7 @@ case "$cmd" in
       printf '%s\t%s\t%s\t%s\t%s\n' "$p" "$u" "$s" "$(age_h "$s")" "$r"
     done
     ;;
-  prs) parsed | cut -f1 ;;
+  prs) [[ ! -f "$file" ]] || parsed | cut -f1 ;;   # no hold file: nothing to print, no pipeline
   stale)
     found=0
     while IFS=$'\t' read -r p u s r; do

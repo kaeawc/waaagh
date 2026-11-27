@@ -229,11 +229,10 @@ wt_repo() {
   echo x >"$M/f"; git -C "$M" add f; git -C "$M" commit -qm init; git -C "$M" push -q origin HEAD:main
   old=$(date -d '-3 days' +%Y%m%d%H%M 2>/dev/null || date -v-3d +%Y%m%d%H%M)
 }
-mkwt() { # name [push]
+mkwt() { # name [push]: the test fetches into $M once after the last one (#112), not once per worktree
   git -C "$M" worktree add -q -b "$1" "$BATS_TEST_TMPDIR/$1"
   echo "$1" >"$BATS_TEST_TMPDIR/$1/$1.txt"; git -C "$BATS_TEST_TMPDIR/$1" add -A; git -C "$BATS_TEST_TMPDIR/$1" commit -qm "$1"
   [ "${2:-push}" = nopush ] || git -C "$BATS_TEST_TMPDIR/$1" push -q origin "$1"
-  git -C "$M" fetch -q origin
 }
 age() { touch -t "$old" "$BATS_TEST_TMPDIR/$1" "$(git -C "$BATS_TEST_TMPDIR/$1" rev-parse --path-format=absolute --git-path index)"; }
 verdict() { printf '%s\n' "$output" | awk -F'\t' -v p="$BATS_TEST_TMPDIR/$1" '$2 == p { print $1 "\t" $3 }'; }
@@ -246,6 +245,7 @@ verdict() { printf '%s\n' "$output" | awk -F'\t' -v p="$BATS_TEST_TMPDIR/$1" '$2
   mkwt recent
   mkwt busy;       age busy
   mkwt locked;     age locked; git -C "$M" worktree lock "$BATS_TEST_TMPDIR/locked"
+  git -C "$M" fetch -q origin   # the state the old per-worktree fetches left: every branch above pushed
   git -C "$M" worktree add -q -b release/1.0 "$BATS_TEST_TMPDIR/rel"; git -C "$BATS_TEST_TMPDIR/rel" push -q origin release/1.0; age rel
   (cd "$BATS_TEST_TMPDIR/busy" && exec sleep 30) & busy_pid=$!
   run "$SCRIPTS/wt-cleanup.sh" --repo-dir "$M"

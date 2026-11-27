@@ -41,7 +41,7 @@ JSON
 stub_gh_router() {
   FX="$BATS_TEST_TMPDIR/fx"; mkdir -p "$FX" "$BATS_TEST_TMPDIR/bin"
   {
-    gh_stub_header
+    gh_stub_header fast   # called hundreds of times per suite: the fast shebang (#112)
     cat <<'STUB'
 gh_stub_args "$@"
 echo "$a" >>"$FX/calls"
