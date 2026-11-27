@@ -21,7 +21,7 @@ setup() {
 all="$*"; all=${all% --include}   # gh-read.sh adds --include to api reads
 echo "$all" >>"$FX/calls"
 case "$all" in
-  "api repos/o/r") echo '{"default_branch":"main"}' ;;
+  "api repos/o/r") echo "{\"default_branch\":\"${DEF:-main}\"}" ;;
   "api repos/o/r/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=1") cat "$FX/closed.json" ;;
   "api repos/o/r/pulls?state=closed&sort=updated&direction=desc&per_page=100&page="*) echo '[]' ;;
   "api repos/o/r/pulls?head=o:"*) b=${all#*head=o:}; b=${b%%&*}; cat "$FX/parent-${b//\//_}.json" 2>/dev/null || echo '[]' ;;
@@ -30,10 +30,10 @@ case "$all" in
     n=${all#api --paginate repos/o/r/pulls/}; n=${n%%/*}
     [ ! -f "$FX/fail-$n" ] || { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }
     cat "$FX/files-$n" 2>/dev/null || true ;;
-  "api repos/o/r/git/trees/main?recursive=1")
+  "api repos/o/r/git/trees/${DEFENC:-main}?recursive=1")
     if [ -f "$FX/tree-truncated" ]; then echo '{"truncated":true,"tree":[]}'
     else jq -Rn '{truncated: false, tree: [inputs | split("\t") | {path: .[0], sha: (.[1] // "x"), type: "blob"}]}' <"$FX/tree" 2>/dev/null || echo '{"truncated":false,"tree":[]}'; fi ;;
-  "api repos/o/r/contents/"*"?ref=main --silent")
+  "api repos/o/r/contents/"*"?ref=${DEFENC:-main} --silent")
     p=${all#api repos/o/r/contents/}; p=${p%%\?*}
     [ -f "$FX/have-${p//\//_}" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; } ;;
   *) echo "unexpected gh call: $all" >&2; exit 9 ;;
@@ -182,4 +182,55 @@ sm() { run "$SCRIPTS/stranded-merges.sh" --repo o/r "$@"; }
   [ "$status" -eq 2 ]
   run "$SCRIPTS/stranded-merges.sh" --bogus
   [ "$status" -eq 2 ]
+}
+
+@test "review #417 nits (#422): an empty blob and a boilerplate blob seen twice on main vouch for nothing" {
+  pr 101 stack-i 2026-11-17T00:00:00Z c101 | closed
+  pr 102 main 2026-11-17T00:00:00Z m102 p102 | jq -s . >"$FX/parent-stack-i.json"
+  echo behind >"$FX/compare-c101...p102"
+  printf 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391\tnew/py.typed\nlic1\tnew/COPYING.txt\n' >"$FX/files-101"
+  # The empty blob occurs once on main (still no evidence); the LICENSE blob occurs twice.
+  printf 'old/empty.txt\te69de29bb2d1d6434b8b29ae775ad8c2e48c5391\na/LICENSE\tlic1\nb/LICENSE\tlic1\n' >"$FX/tree"
+  sm
+  [ "$status" -eq 3 ]
+  [ "${lines[0]}" = $'101\tSTRANDED\tbase=stack-i\tparent=#102\tmissing on main: 2/2 added files (new/py.typed new/COPYING.txt); retarget a new PR with its changes to main' ]
+}
+
+@test "review #417 nits (#422): a blob that occurs exactly once on main still vouches (RELANDED)" {
+  pr 101 stack-i 2026-11-17T00:00:00Z c101 | closed
+  pr 102 main 2026-11-17T00:00:00Z m102 p102 | jq -s . >"$FX/parent-stack-i.json"
+  echo behind >"$FX/compare-c101...p102"
+  printf 'uniq1\tnew/thing.txt\n' >"$FX/files-101"
+  printf 'old/other.txt\tuniq1\na/LICENSE\tlic1\nb/LICENSE\tlic1\n' >"$FX/tree"
+  sm
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == $'101\tRELANDED\t'*"(1 under another directory)" ]]
+}
+
+@test "review #417 nits (#422): generic names match case-insensitively (Readme.md, readme.rst do not vouch)" {
+  pr 111 stack-j 2026-11-17T00:00:00Z c111 | closed
+  pr 112 main 2026-11-17T00:00:00Z m112 p112 | jq -s . >"$FX/parent-stack-j.json"
+  echo behind >"$FX/compare-c111...p112"
+  printf 'r1\tx/Readme.md\nr2\ty/readme.rst\n' >"$FX/files-111"
+  printf 'a/Readme.md\tz1\nb/readme.rst\tz2\n' >"$FX/tree"
+  sm
+  [ "$status" -eq 3 ]
+  [ "${lines[0]}" = $'111\tSTRANDED\tbase=stack-j\tparent=#112\tmissing on main: 2/2 added files (x/Readme.md y/readme.rst); retarget a new PR with its changes to main' ]
+}
+
+@test "review #417 nits (#422): branch names with + # & are URL-encoded in head=, ref= and the tree read" {
+  export DEF='rel+1#a&b' DEFENC='rel%2B1%23a%26b'
+  pr 121 'feat+x#1&y' 2026-11-17T00:00:00Z c121 | closed
+  pr 122 'rel+1#a&b' 2026-11-17T00:00:00Z m122 p122 | jq -s . >"$FX/parent-feat%2Bx%231%26y.json"
+  echo behind >"$FX/compare-c121...p122"
+  printf 'q1\tnew/q.go\n' >"$FX/files-121"
+  sm
+  [ "$status" -eq 3 ]
+  [[ "${lines[0]}" == $'121\tSTRANDED\tbase=feat+x#1&y\tparent=#122\t'* ]]
+  grep -qxF 'api repos/o/r/pulls?head=o:feat%2Bx%231%26y&state=all&per_page=20' "$FX/calls"
+  grep -qxF 'api repos/o/r/git/trees/rel%2B1%23a%26b?recursive=1' "$FX/calls"
+  # Truncated tree: the contents read carries the encoded ref.
+  touch "$FX/tree-truncated"
+  sm
+  grep -qxF 'api repos/o/r/contents/new/q.go?ref=rel%2B1%23a%26b --silent' "$FX/calls"
 }
