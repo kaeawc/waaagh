@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 # pr-merge.sh refusal paths the other suites do not reach: a missing or stale readiness row (exit 7),
-# unreadable check state without --evidence (exit 6), an unreadable review state (exit 9), the
-# merge-sensitive refusals (exit 9) and lock loop, a superseded journal, and --method.
+# unreadable, unproven, pending or missing check state without --evidence (exit 6, #428), an
+# unreadable review state (exit 9), the merge-sensitive refusals (exit 9) and lock loop, a
+# superseded journal, and --method.
 # Stubbed gh. Run: bats scripts/pr-merge-gaps.bats
 
 setup() {
@@ -14,14 +15,15 @@ setup() {
   STATE="$ORCHESTRATE_STATE_DIR/o__r"
   HEAD=abcdef0123456789abcdef0123456789abcdef01
   # Fixture switches in $FX: list-forbidden (PR list answers HTTP 403), list-head (the head the PR
-  # list shows), view-state (state `pr view` reports), reviews-fail, files-fail, base-fail, behind.
+  # list shows), view-state (state `pr view` reports), reviews-fail, files-fail, base-fail, behind,
+  # rollup (JSON checks added to the passing "build"), rules (the rulesets answer).
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >>"$FX/calls"
 HEAD=abcdef0123456789abcdef0123456789abcdef01
 case "$*" in
   "api repos/o/r") echo '{"default_branch":"main"}' ;;
-  *rules/branches*) echo '[]' ;;
+  *rules/branches*) cat "$FX/rules" 2>/dev/null || echo '[]' ;;
   "api repos/o/r/branches/"*) echo '{"protected":false}' ;;
   *graphql*) echo '{"data":{"repository":{"p1":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}}' ;;
   "api --paginate repos/o/r/pulls/1/files"*) [ ! -f "$FX/files-fail" ] || { echo "HTTP 404" >&2; exit 1; }; printf 'gradle/libs.versions.toml\nsrc/a.kt\n' ;;
@@ -33,7 +35,8 @@ case "$*" in
   "pr list"*) [ ! -f "$FX/list-forbidden" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
     jq -n --arg h "$(cat "$FX/list-head" 2>/dev/null || echo "$HEAD")" '[{number: 1, author: {login: "me"}, isDraft: false,
       isCrossRepository: false, baseRefName: "main", headRefOid: $h, mergeable: "MERGEABLE", labels: [],
-      statusCheckRollup: [{name: "build", conclusion: "SUCCESS"}]}]' ;;
+      statusCheckRollup: [{name: "build", conclusion: "SUCCESS"}]} | .statusCheckRollup += ($x | fromjson)]' \
+      --arg x "$(cat "$FX/rollup" 2>/dev/null || echo '[]')" ;;
   "pr merge"*) echo MERGED >"$FX/merged" ;;
   "pr view"*) if [ -f "$FX/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}'
     else jq -n --arg h "$HEAD" --arg s "$(cat "$FX/view-state" 2>/dev/null || echo OPEN)" '{state: $s, isDraft: false,
@@ -128,4 +131,98 @@ merges() { grep -c '^pr merge' "$FX/calls" || true; }
   [[ "$output" == "ineligible: "*'"state":"CLOSED"'* ]]
   [ "$(jq -r .state "$STATE/ops/merge-pr1.json")" = superseded ]
   [ "$(merges)" -eq 0 ]
+}
+
+# A pr-ready.sh stand-in (ORCHESTRATE_SCRIPTS_DIR) for rows the stubbed gh cannot produce: it prints
+# $FX/gated-row for a call with --ignore-check and $FX/raw-row for one without (the probe's call).
+stub_ready() {
+  mkdir -p "$BATS_TEST_TMPDIR/scripts"
+  cat >"$BATS_TEST_TMPDIR/scripts/pr-ready.sh" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in *" --ignore-check "*) cat "$FX/gated-row" ;; *) cat "$FX/raw-row" ;; esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/scripts/pr-ready.sh"
+  export ORCHESTRATE_SCRIPTS_DIR="$BATS_TEST_TMPDIR/scripts"
+  printf '1\tREADY\tabcdef012\tMERGEABLE\t1\t-\n' >"$FX/gated-row"
+}
+
+@test "an advisory check still pending on the head needs --evidence (#428)" {
+  echo '[{"name": "sim", "status": "IN_PROGRESS"}]' >"$FX/rollup"
+  pm --ignore-check sim
+  [ "$status" -eq 6 ]
+  [ "$output" = "refused: sim pending on this head; merging before it reports needs --evidence (or wait for it)" ]
+  grep -q $'\trefused: pending on the head without --evidence: sim' "$STATE/merges.log"
+  [ "$(merges)" -eq 0 ]
+}
+
+@test "an advisory check that is required but absent on the head needs --evidence (#428)" {
+  echo '[{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "sim"}]}}]' >"$FX/rules"
+  pm --ignore-check sim
+  [ "$status" -eq 6 ]
+  [ "$output" = "refused: required sim missing on this head; merging without it needs --evidence" ]
+  grep -q $'\trefused: missing on the head without --evidence: sim' "$STATE/merges.log"
+  [ "$(merges)" -eq 0 ]
+}
+
+@test "an unreadable or unproven check state in the probe's row needs --evidence (#428)" {
+  stub_ready
+  printf '1\tBLOCK\tabcdef012\tUNKNOWN\t0\tchecks=unknown\n' >"$FX/raw-row"
+  pm --ignore-check sim
+  [ "$status" -eq 6 ]
+  [ "$output" = "refused: the head's checks could not be read (checks=unknown); a merge past them needs --evidence" ]
+  grep -q $'\trefused: check state unreadable and no --evidence: checks=unknown' "$STATE/merges.log"
+  # A SKIP row proves nothing about checks unless it is ready-but-skipped; an unknown token or
+  # verdict fails closed.
+  printf '1\tSKIP\tabcdef012\tMERGEABLE\t1\tlabel:hold\n' >"$FX/raw-row"
+  pm --ignore-check sim
+  [ "$status" -eq 6 ]
+  [ "$output" = "refused: the head's checks are not proven passing (SKIP label:hold); a merge past them needs --evidence" ]
+  printf '1\tBLOCK\tabcdef012\tMERGEABLE\t1\tnew-token=1\n' >"$FX/raw-row"
+  pm --ignore-check sim
+  [ "$status" -eq 6 ]
+  [ "$output" = "refused: the head's checks are not proven passing (new-token=1); a merge past them needs --evidence" ]
+  printf '1\tLATER\tabcdef012\tMERGEABLE\t1\t-\n' >"$FX/raw-row"
+  pm --ignore-check sim
+  [ "$status" -eq 6 ]
+  [ "$output" = "refused: the head's checks are not proven passing (verdict LATER); a merge past them needs --evidence" ]
+  [ "$(merges)" -eq 0 ]
+  printf '1\tSKIP\tabcdef012\tMERGEABLE\t1\tlabel:hold ready-but-skipped\n' >"$FX/raw-row"
+  pm --ignore-check sim
+  [ "$status" -eq 0 ]
+}
+
+@test "direct mode: only a failing check needs --evidence; pending or unread checks do not (pin)" {
+  stub_ready
+  for row in 'WAIT\tabcdef012\tMERGEABLE\t0\tpending:build' 'BLOCK\tabcdef012\tUNKNOWN\t0\tchecks=unknown' \
+             'SKIP\tabcdef012\tMERGEABLE\t1\tlabel:hold'; do
+    printf "1\t$row\n" >"$FX/raw-row"
+    ORCHESTRATE_DIRECT_MERGE=1 pm
+    [ "$status" -eq 0 ]
+    rm "$FX/merged"
+  done
+  printf '1\tBLOCK\tabcdef012\tMERGEABLE\t1\tfail:build\n' >"$FX/raw-row"
+  ORCHESTRATE_DIRECT_MERGE=1 pm
+  [ "$status" -eq 6 ]
+  [[ "$output" == "refused: build failing on this head"* ]]
+}
+
+@test "direct mode: a raw row blocked only by non-check reasons still merges without --evidence (pin)" {
+  stub_ready
+  printf '1\tBLOCK\tabcdef012\tCONFLICTING\t1\tconflict\n' >"$FX/raw-row"
+  ORCHESTRATE_DIRECT_MERGE=1 pm
+  [ "$status" -eq 0 ]
+  [ "$(merges)" -eq 1 ]
+}
+
+@test "an advisory check that passes merges without --evidence, and --evidence skips the probe (pin)" {
+  echo '[{"name": "sim", "conclusion": "SUCCESS"}]' >"$FX/rollup"
+  pm --ignore-check sim
+  [ "$status" -eq 0 ]
+  [ "$(merges)" -eq 1 ]
+  rm "$FX/merged"
+  echo '[{"name": "sim", "status": "IN_PROGRESS"}]' >"$FX/rollup"
+  pm --ignore-check sim --evidence "sim: owner waived the pending run"
+  [ "$status" -eq 0 ]
+  grep -q 'evidence=sim: owner waived the pending run' "$STATE/merges.log"
+  [ "$(merges)" -eq 2 ]
 }
