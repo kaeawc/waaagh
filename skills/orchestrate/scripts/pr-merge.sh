@@ -306,10 +306,14 @@ fi
 # direct mode) only with --evidence naming why; a lane calling it "infra" is not evidence. Outside
 # direct mode the same holds for a check still pending or required but missing, and for a head
 # whose checks cannot be read: without --evidence the raw row (no --ignore-check) must prove every
-# check read and passing (#428). Non-check blockers (conflict, mergeable=, behind, skip reasons) are the readiness gate's
-# business, or deliberately ungated in direct mode; a token or verdict not known here fails closed.
+# check read and passing (#428). The raw row is read with --hold-label '' so a hold label cannot
+# turn it into a SKIP row that hides the checks; a SKIP row left (a source pr-ready.sh lets no
+# caller turn off: the hold file, a review verdict, a draft or fork, each refused above unless it
+# changed since) is unproven in every mode unless ready-but-skipped (#435). Non-check blockers
+# (conflict, mergeable=, behind, skip reasons) are the readiness gate's business, or deliberately
+# ungated in direct mode; a token or verdict not known here fails closed.
 if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" == 1 ]]; }; then
-  rflags=(--repo "$repo" --pr "$pr" --no-threads)
+  rflags=(--repo "$repo" --pr "$pr" --no-threads --hold-label '')
   for a in "${authors[@]}"; do rflags+=(--author "$a"); done
   raw=$(orch_run pr-ready.sh "${rflags[@]}" 2>/dev/null | awk 'NR == 1') || raw=""
   if [[ -z "$raw" ]]; then
@@ -318,12 +322,12 @@ if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERG
   fi
   IFS=$'\t' read -r _ rverdict _ _ _ rdetail <<<"$raw"
   read -r -a rtokens <<<"$rdetail"
-  failing="" pend="" missing="" unread="" unproven=""
+  failing="" pend="" missing="" unread="" unproven="" hidden=""
   case "$rverdict" in
     READY | BEHIND) ;;
     WAIT | BLOCK | SKIP)
       # A SKIP row shows its exclusion, not its checks, unless it would otherwise be READY.
-      [[ "$rverdict" != SKIP || " $rdetail " == *" ready-but-skipped "* ]] || unproven+=" SKIP $rdetail"
+      [[ "$rverdict" != SKIP || " $rdetail " == *" ready-but-skipped "* ]] || hidden=" SKIP $rdetail"
       for token in ${rtokens[@]+"${rtokens[@]}"}; do
         case "$token" in
           fail:*) failing+=",${token#fail:}" ;;
@@ -334,12 +338,14 @@ if [[ -z "$evidence" ]] && { ((${#ignores[@]})) || [[ "${ORCHESTRATE_DIRECT_MERG
           *) unproven+=" $token" ;;   # few-checks=<n>, and anything this probe does not know
         esac
       done ;;
-    *) unproven+=" verdict ${rverdict:-?}" ;;
+    *) hidden=" verdict ${rverdict:-?}" ;;   # an unknown verdict says nothing about checks (#435)
   esac
-  failing=${failing#,} pend=${pend#,} missing=${missing#,} unread=${unread# } unproven=${unproven# }
-  # Direct mode deliberately merges without waiting for CI: only a failing check needs evidence
-  # there. The pending, missing and unreadable rules guard --ignore-check on a gated merge.
+  failing=${failing#,} pend=${pend#,} missing=${missing#,} unread=${unread# } unproven=${unproven# } hidden=${hidden# }
+  # Direct mode deliberately merges without waiting for CI: only a failing check, or a SKIP row
+  # that hides whether one fails, needs evidence there. The pending, missing and unreadable rules
+  # guard --ignore-check on a gated merge.
   if [[ "${ORCHESTRATE_DIRECT_MERGE:-0}" == 1 ]]; then pend="" missing="" unread="" unproven=""; fi
+  unproven="$hidden${hidden:+${unproven:+ }}$unproven"
   if [[ -n "$failing" ]]; then
     log "refused: failing on the head without --evidence: $failing"
     echo "refused: $failing failing on this head; bypassing a failing check needs --evidence (the classifier verdict or flake entry)"

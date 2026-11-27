@@ -606,7 +606,9 @@ check that is failing on the head (marked advisory with `--ignore-check`, in an 
 direct mode) unless `--evidence` names the classifier verdict or flake entry; the evidence goes to
 `merges.log`. A lane saying "infra" is not evidence. On a gated merge with `--ignore-check` or
 `--advisory-file`, an advisory check that is still pending or required but missing, or a head
-whose checks cannot be read, needs `--evidence` too (#428).
+whose checks cannot be read, needs `--evidence` too (#428). A hold label never hides the head's
+checks from that probe, and a skipped row that does hide them needs `--evidence` in every mode
+(#435).
 
 ### Interrupts — when to come back to the user
 

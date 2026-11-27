@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # pr-merge.sh refusal paths the other suites do not reach: a missing or stale readiness row (exit 7),
-# unreadable, unproven, pending or missing check state without --evidence (exit 6, #428), an
+# unreadable, unproven, pending or missing check state without --evidence (exit 6, #428), a
+# failing check hidden by a SKIP row in direct mode (exit 6, #435), an
 # unreadable review state (exit 9), the merge-sensitive refusals (exit 9) and lock loop, a
 # superseded journal, and --method.
 # Stubbed gh. Run: bats scripts/pr-merge-gaps.bats
@@ -16,7 +17,8 @@ setup() {
   HEAD=abcdef0123456789abcdef0123456789abcdef01
   # Fixture switches in $FX: list-forbidden (PR list answers HTTP 403), list-head (the head the PR
   # list shows), view-state (state `pr view` reports), reviews-fail, files-fail, base-fail, behind,
-  # rollup (JSON checks added to the passing "build"), rules (the rulesets answer).
+  # rollup (JSON checks added to the passing "build"), labels (JSON labels of the PR), rules (the
+# rulesets answer).
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >>"$FX/calls"
@@ -34,9 +36,9 @@ case "$*" in
   "api repos/o/r/compare/"*) cat "$FX/behind" 2>/dev/null || echo 0 ;;
   "pr list"*) [ ! -f "$FX/list-forbidden" ] || { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
     jq -n --arg h "$(cat "$FX/list-head" 2>/dev/null || echo "$HEAD")" '[{number: 1, author: {login: "me"}, isDraft: false,
-      isCrossRepository: false, baseRefName: "main", headRefOid: $h, mergeable: "MERGEABLE", labels: [],
+      isCrossRepository: false, baseRefName: "main", headRefOid: $h, mergeable: "MERGEABLE", labels: ($l | fromjson),
       statusCheckRollup: [{name: "build", conclusion: "SUCCESS"}]} | .statusCheckRollup += ($x | fromjson)]' \
-      --arg x "$(cat "$FX/rollup" 2>/dev/null || echo '[]')" ;;
+      --arg x "$(cat "$FX/rollup" 2>/dev/null || echo '[]')" --arg l "$(cat "$FX/labels" 2>/dev/null || echo '[]')" ;;
   "pr merge"*) echo MERGED >"$FX/merged" ;;
   "pr view"*) if [ -f "$FX/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"feedface"}}'
     else jq -n --arg h "$HEAD" --arg s "$(cat "$FX/view-state" 2>/dev/null || echo OPEN)" '{state: $s, isDraft: false,
@@ -193,8 +195,9 @@ STUB
 
 @test "direct mode: only a failing check needs --evidence; pending or unread checks do not (pin)" {
   stub_ready
+  # A SKIP row that is ready-but-skipped proved its checks passing, so it merges too.
   for row in 'WAIT\tabcdef012\tMERGEABLE\t0\tpending:build' 'BLOCK\tabcdef012\tUNKNOWN\t0\tchecks=unknown' \
-             'SKIP\tabcdef012\tMERGEABLE\t1\tlabel:hold'; do
+             'SKIP\tabcdef012\tMERGEABLE\t1\tlabel:hold ready-but-skipped'; do
     printf "1\t$row\n" >"$FX/raw-row"
     ORCHESTRATE_DIRECT_MERGE=1 pm
     [ "$status" -eq 0 ]
@@ -204,6 +207,55 @@ STUB
   ORCHESTRATE_DIRECT_MERGE=1 pm
   [ "$status" -eq 6 ]
   [[ "$output" == "refused: build failing on this head"* ]]
+  # An unknown verdict hides the checks in direct mode too (#435).
+  printf '1\tLATER\tabcdef012\tMERGEABLE\t1\t-\n' >"$FX/raw-row"
+  ORCHESTRATE_DIRECT_MERGE=1 pm
+  [ "$status" -eq 6 ]
+  [ "$output" = "refused: the head's checks are not proven passing (verdict LATER); a merge past them needs --evidence" ]
+}
+
+@test "direct mode: a SKIP row the probe cannot turn off hides the checks, so it needs --evidence (#435)" {
+  # The probe passes --hold-label '', so a SKIP row left is from a source a caller cannot turn
+  # off (a hold or review verdict that appeared after refuse_if_held, a draft, a fork): its
+  # detail is the skip reason, not the checks, so a failing check could hide behind it.
+  stub_ready
+  for reason in 'label:hold' 'review:stale' 'hold' 'draft'; do
+    printf '1\tSKIP\tabcdef012\tMERGEABLE\t1\t%s\n' "$reason" >"$FX/raw-row"
+    ORCHESTRATE_DIRECT_MERGE=1 pm
+    [ "$status" -eq 6 ]
+    [ "$output" = "refused: the head's checks are not proven passing (SKIP $reason); a merge past them needs --evidence" ]
+  done
+  grep -q $'\trefused: check state unproven and no --evidence: SKIP review:stale' "$STATE/merges.log"
+  [ "$(merges)" -eq 0 ]
+  ORCHESTRATE_DIRECT_MERGE=1 pm --evidence "owner: merge it"
+  [ "$status" -eq 0 ]
+}
+
+@test "direct mode: a hold-labelled PR's failing check is not hidden by its SKIP row (#435)" {
+  echo '[{"name": "hold"}]' >"$FX/labels"
+  echo '[{"name": "lint", "conclusion": "FAILURE"}]' >"$FX/rollup"
+  ORCHESTRATE_DIRECT_MERGE=1 pm
+  [ "$status" -eq 6 ]
+  [ "$output" = "refused: lint failing on this head; bypassing a failing check needs --evidence (the classifier verdict or flake entry)" ]
+  grep -q $'\trefused: failing on the head without --evidence: lint' "$STATE/merges.log"
+  [ "$(merges)" -eq 0 ]
+}
+
+@test "direct mode: a hold-labelled PR whose checks pass or are pending merges without --evidence (pin)" {
+  # pr-merge.sh has no hold-label gate of its own; the gated path refuses it at the readiness row.
+  echo '[{"name": "hold"}]' >"$FX/labels"
+  ORCHESTRATE_DIRECT_MERGE=1 pm
+  [ "$status" -eq 0 ]
+  rm "$FX/merged"
+  echo '[{"name": "sim", "status": "IN_PROGRESS"}]' >"$FX/rollup"
+  ORCHESTRATE_DIRECT_MERGE=1 pm
+  [ "$status" -eq 0 ]
+  [ "$(merges)" -eq 2 ]
+  # Gated, the same PR is still refused at the readiness gate.
+  rm "$FX/merged" "$FX/rollup"
+  pm
+  [ "$status" -eq 7 ]
+  [[ "$output" == "not ready: SKIP hold"* ]]
 }
 
 @test "direct mode: a raw row blocked only by non-check reasons still merges without --evidence (pin)" {
